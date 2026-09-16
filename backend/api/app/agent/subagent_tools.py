@@ -5,6 +5,8 @@ from __future__ import annotations
 from app.harness.execution.policy import ToolPermissionPolicy
 from app.harness.execution.registry import ToolDef, ToolRegistry
 
+from .preparation import reference_tool_schema
+
 
 def _unwired(*_args, **_kwargs):
     """防御性占位；agent.* 必须经 PlatformToolBridge 的协作回调。"""
@@ -43,6 +45,8 @@ def register_subagent_tools(registry: ToolRegistry) -> None:
             "goal": {"type": "string", "minLength": 1, "maxLength": 12000},
             "output_contract": {"type": "string", "minLength": 1, "maxLength": 4000},
             "profile_id": {"type": "string", "minLength": 1, "maxLength": 128},
+            "input_refs": {"type": "array", "maxItems": 4,
+                           "items": reference_tool_schema()},
         },
         "required": ["expert_id", "goal", "output_contract"],
     }, risk="modify"))

@@ -1170,10 +1170,36 @@ export interface UserWorkspaceFileContent {
 export type AgentRunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled'
 export type AgentCollaborationStatus = 'running' | 'succeeded' | 'failed' | 'cancelled'
 
+// 准备成果是草稿；校验通过不等同于发布、批准或正式评分。
+export interface ExpertDeliverableRef {
+  kind: 'expert_deliverable'
+  id: string
+  version: '1'
+  hash: string
+}
+
+export interface ExpertDeliverableValidation {
+  status: 'validated' | 'rejected'
+  validator_version: string
+  issues: { path: string; code: string }[]
+}
+
+export interface ExpertDeliverable {
+  schema_id: 'expert_deliverable.v1'
+  deliverable_id: string
+  revision: number
+  kind: 'benchmark_blueprint' | 'data_manifest_candidate' | 'scoring_policy_draft'
+  producer: { collaboration_id: string; run_id: string; expert_id: string }
+  scope: { evaluation_mode: 'model'; scenario_ids: string[] }
+  based_on_refs: ExpertDeliverableRef[]
+  content_ref: { kind: 'expert_deliverable_body'; id: string; version: '1'; hash: string }
+  validation: ExpertDeliverableValidation
+}
+
 export interface AgentRunSummary {
   run_id: string
   instance_id: string
-  expert: { id: string; name: string; description?: string; badge?: string }
+  expert: { id: string; name: string; description?: string; badge?: string; deliverable_kind?: string; prompt_version?: string }
   model?: string | null
   goal: string
   output_contract: string
@@ -1181,7 +1207,15 @@ export interface AgentRunSummary {
   error_code?: string | null
   result_available: boolean
   cancel_requested: boolean
-  result?: { content?: string; finish_reason?: string } | null
+  result?: {
+    content?: string
+    finish_reason?: string
+    complete?: boolean
+    deliverable?: ExpertDeliverable
+    body?: Record<string, unknown>
+    reference?: ExpertDeliverableRef
+    validation?: ExpertDeliverableValidation
+  } | null
   created_at?: string | null
   started_at?: string | null
   finished_at?: string | null

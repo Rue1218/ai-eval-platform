@@ -38,6 +38,7 @@ class ExpertDef:
     prompt_file: str | None = None
     allowed_tools: tuple[str, ...] = ()
     default: bool = False
+    deliverable_kind: str | None = None
 
     @property
     def system_prompt(self) -> str:
@@ -65,6 +66,27 @@ EXPERTS: tuple[ExpertDef, ...] = (
         badge="用例设计",
         prompt_file="testcase_agent.md",
         allowed_tools=("read", "write", "edit", "bash", "ask_user_question"),
+    ),
+    ExpertDef(
+        expert_id="benchmark-designer", name="基准设计专家", badge="基准设计",
+        description="起草文本模型评测蓝图：测量目标、场景、能力、指标和预算。",
+        prompt_file="benchmark_designer.md",
+        allowed_tools=("read", "glob", "grep"),
+        deliverable_kind="benchmark_blueprint",
+    ),
+    ExpertDef(
+        expert_id="benchmark-data-curator", name="基准数据专家", badge="数据候选",
+        description="依据已校验蓝图起草数据候选、来源和独立验证计划，不发布数据。",
+        prompt_file="benchmark_data_curator.md",
+        allowed_tools=("read", "glob", "grep", "web_search", "web_fetch"),
+        deliverable_kind="data_manifest_candidate",
+    ),
+    ExpertDef(
+        expert_id="benchmark-scoring-designer", name="基准评分设计专家", badge="评分草案",
+        description="依据已校验蓝图起草评分维度、锚点、缺失处理、校准和复核策略。",
+        prompt_file="benchmark_scoring_designer.md",
+        allowed_tools=("read", "glob", "grep"),
+        deliverable_kind="scoring_policy_draft",
     ),
 )
 _BY_ID = {expert.expert_id: expert for expert in EXPERTS}
@@ -122,6 +144,7 @@ def list_experts() -> list[dict]:
             "description": expert.description,
             "badge": expert.badge,
             "default": expert.default,
+            **({"deliverable_kind": expert.deliverable_kind} if expert.deliverable_kind else {}),
         }
         for expert in EXPERTS
     ]

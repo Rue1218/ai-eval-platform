@@ -19,11 +19,24 @@
           </header>
           <p class="run-goal">{{ run.goal }}</p>
           <p class="run-contract">交付：{{ run.output_contract }}</p>
+          <p v-if="run.result?.deliverable" class="run-contract">
+            结构校验通过（草稿） · {{ deliverableLabel(run.result.deliverable.kind) }}
+          </p>
+          <p v-else-if="run.result?.validation?.status === 'rejected'" class="panel-error">交付校验失败，不能交给下一阶段使用。</p>
           <footer>
             <button v-if="run.result_available" type="button" @click="toggleResult(run.run_id)">{{ expanded.has(run.run_id) ? '收起成果' : '查看成果' }}</button>
             <button v-if="canControl && ['queued','running'].includes(run.status)" type="button" class="stop-run" :disabled="stopping === run.run_id" @click="cancelRun(run.run_id)">停止</button>
           </footer>
           <div v-if="expanded.has(run.run_id)" class="run-result">
+            <template v-if="run.result?.deliverable">
+              <p>交付 ID：{{ run.result.deliverable.deliverable_id }} · 第 {{ run.result.deliverable.revision }} 版</p>
+              <p>场景：{{ run.result.deliverable.scope.scenario_ids.join('、') }} · 上游引用 {{ run.result.deliverable.based_on_refs.length }} 份</p>
+              <p>校验仅覆盖结构与内部引用，来源、许可、答案与评分规则仍需审核。</p>
+              <details v-if="run.result.reference"><summary>查看精确引用</summary><pre>{{ JSON.stringify(run.result.reference, null, 2) }}</pre></details>
+            </template>
+            <ul v-if="run.result?.validation?.issues.length">
+              <li v-for="(issue, index) in run.result.validation.issues" :key="index">{{ issue.path }}：{{ issue.code }}</li>
+            </ul>
             <p v-if="run.result?.content">{{ run.result.content }}</p>
             <p v-else class="muted">{{ run.error_code ? `运行失败：${run.error_code}` : '没有可展示的成果正文。' }}</p>
           </div>
@@ -38,7 +51,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, ref, watch } from 'vue'
 import { api } from '../../../api/http'
-import type { AgentCollaborationDetail, AgentCollaborationStatus, AgentRunStatus } from '../../../api/types'
+import type { AgentCollaborationDetail, AgentCollaborationStatus, AgentRunStatus, ExpertDeliverable } from '../../../api/types'
 
 const props = defineProps<{ sessionId: string; canControl: boolean }>()
 const current = ref<AgentCollaborationDetail | null>(null)
@@ -52,6 +65,11 @@ let generation = 0
 // 将持久运行状态转换为界面文案。
 function statusLabel(status: AgentCollaborationStatus | AgentRunStatus): string {
   return { queued: '排队中', running: '执行中', succeeded: '已完成', failed: '失败', cancelled: '已停止' }[status]
+}
+
+// 明确成果属于评测准备阶段，避免把评分草案误认为正式结果。
+function deliverableLabel(kind: ExpertDeliverable['kind']): string {
+  return { benchmark_blueprint: '评测蓝图', data_manifest_candidate: '数据候选', scoring_policy_draft: '评分草案' }[kind]
 }
 
 // 后台页跳过请求但保留下一次调度，返回页面后自动恢复刷新。

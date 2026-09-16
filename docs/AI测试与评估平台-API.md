@@ -4,7 +4,7 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V2.8 |
+| 文档版本 | V2.9 |
 | WS v2 修订日期 | 2026-09-13（§4A，模型错误安全摘要） |
 | 对应 PRD | V1.30（功能唯一权威） |
 | 对应设计规范 | V1.12（错误码文案、确认卡字段名、调度中心规范） |
@@ -12,7 +12,7 @@
 | 对应前端计划 | AgentLoop 前端计划 V0.5 |
 | 对应后端计划 | V1.5 |
 | 撰写日期 | 2026-08-18 |
-| 本轮修订 | 2026-09-16：V2.8 登记专家交付与评测计划的拟议内部契约及确认/入队语义，未新增可调用端点、模型工具参数或数据库字段。已实现能力仍以 V2.7 及之前登记为准。 |
+| 本轮修订 | 2026-09-16：V2.9 落地准备阶段三类专家、固定版本成果引用、正文校验及前端成果投影。J1 完整修订链、正式资产/报告引用和 J2/J3 仍未实现。 |
 | 最近修订 | 2026-09-03：V1.67 混合引擎执行落地（H2 Workflow DAG / H3 Agent TAOR）：恢复持久事件 `tool_call` / `tool_result`（payload 见 §4.3，ToolCard 只渲染脱敏摘要，观察全文不进任何事件）；`response.completed` 的 `engine` 从「分流结论」升级为「真实执行引擎」——`workflow`（H2，W0–W7 硬编码 DAG）与 `agent`（H3，plan→discover→orchestrator⇄tools 单图内 TAOR）均已真实执行，`agent_id` 审计随 Worker 目录（§3.6.3）供归属核验；`thought` / `tool_progress` / `tool_output_delta` / `confirm` / `clarify` 仍不产生。历史 `ws_events` 中的旧工具事件仍不重放。 |2026-09-03：V1.66 混合引擎 H1 Router 审计契约：`response.completed` payload 新增可选 `engine` / `router_confidence` / `router_reason`（仅 `hybrid_engine_enabled=true` 时出现，旧客户端忽略未知字段即可）；新增 `GET /api/agents` Worker 只读目录（§3.6.3）。本版不新增 WS 事件名、不恢复 `thought` / `tool_*`；`workflow` / `agent` 引擎在 H1 阶段降级按 `chat` 执行，`engine` 如实记录分流结论并经 `router_reason` 标注降级。2026-09-02：V1.65 工具契约加固（T1–T3）：JSON Schema 子集新增 `minItems`/`maxItems` 并为 8 处数组参数补上限；`output_schema` 从装饰字段升级为强制契约（注册期拒绝未声明，运行期按声明比对展示投影）；`platform.tasks` 三工具补全 `output_schema`；移除 `/api/mcp/tools/{name}/code` 端点与 `code_snippet` 字段。2026-08-28：V1.53 `web_fetch` 直抓路径接入 trafilatura 正文提取：可读性算法识别文章主体，保留标题层级/链接/图片/表格，未安装或提取失败降级回内置 `_TextExtractor`；提取真实产出 Markdown 时才声明 `format=markdown`（§4.3.1）。V1.52 优化 `web_fetch` 长文完整性与卡片预览：模型正文预算 8,000→60,000 字符，卡片预览与 `read` 同源对齐 `TOOL_PREVIEW_MAX_CHARS` 并随 `web.preview_limit_chars` 下发，直接抓取字节窗口 256KB→1MB（§4.3.1）。2026-08-27：V1.51 新增持久事件 `session_title`（§4.3）与会话标题 AI 生成契约（§4.3.2）：默认标题会话首条消息后由 Agent 协议档弱结构化生成标题并落库广播，修复标题不持久化问题。V1.50 统一 Agent 文本附件 staging 与 `read` 的 20MB 边界；`read` 模型窗口为 2,000 行 / 600,000 字符。V1.49 协议档新增 `max_output_tokens`（256–131072，默认 8192），创建/更新/列表/详情均支持；Agent 模型调用从协议档读取输出上限，长文档总结/导出类任务可调大避免回答被截断。2026-08-26：V1.48 同轮多调用默认串行，灰度开启后仅 `read`/`web_search`/`web_fetch` 可并行，回填按原始 `call_id`。V1.47 新增 `GET /api/agent/metrics`，不含正文/参数，不新增 WS 事件。V1.46 明确 native 一次 ToolCall 结束当前上游响应，结果回填后再请求，不新增事件名。V1.45 思考链只下发可展示摘要，隐藏 CoT（`Here's a thinking process` / `Analyze User Input`）由服务端替换，不原样推给前端。V1.44 ToolCall 在执行前持久化，新增瞬态 `tool_progress` / `tool_output_delta`，并冻结原生工具的输出 Schema、权限边界和失败恢复字段。V1.43 思考增量允许合并下发；有思考链时 `think_final` 在 `response.completed` 之前。V1.42 Direct `/help`、未知斜杠与图内防御提示在业务事件后必须再发 `response.completed`（成功 `stop`，校验/防御 `error`），结束整轮生成态。V1.41 确认卡预填与 `confirm_ack` 入队前丢掉已删除的协议档/数据集/知识库 ID，避免 Worker 再报「协议档不存在或已删除」。V1.40 `/cancel` 与 `/stress` 按 §4.4 解禁（仍走 `user_message`）：`/cancel` 取消本会话非终态任务，`/stress` 发出质量任务确认卡且 `with_stress=true`，禁止 `kind=stress`。V1.39 原生工具卡片收起态副标题统一为 `ToolCall`，不在卡片摘要区回显文件路径、命令或写入内容；详细参数仍在展开区展示。V1.38 明确原生基础 ToolCall 卡片使用英文工具名，展开区统一显示 `ToolCall` 与 `输出`，文件、命令和代码/文档结果使用行号展示；MCP/平台短工具仍按下方中文名映射。2026-08-24：V1.24 修复 Agent 附件上下文链路：服务端校验文件归属并在模型窗口解析文本、PDF、DOCX、XLSX，图片按三协议图文内容块发送；历史消息附件补齐安全元数据，前端可在刷新后继续预览。同步调整输入框内附件按钮与用户消息附件位序。V1.23 扩展 Agent 附件契约，支持图片、Word 文档与多附件拖拽上传；保留 `POST /api/files` 后再以既有 `file_id` 引用的消息链路，补充图片缩略图、PDF/文本预览与 Office 文件打开/下载说明。V1.22 修复 V1.21 遗留：§4.4 标题「仅此三条」改「仅此四条」、§9 禁止清单「第四种」改「第五种」并补四类上行事件枚举、§4.3 `tool_result.source` 语义对齐 M7 `Observation.source`（溯源标识字符串，非 short\|long 枚举）、§4.3 共享流规则补 clarify/plan/confirm 持久化广播说明、§4.4 clarify 多副本限制注明、§9 Ask/Plan 补注非 Harness plan 事件；V1.20 及更早版本沿用历史修订记录。 |
 | 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
 
@@ -3401,3 +3401,48 @@ Worker 事实覆盖一次调用快照，不新增浏览器 WS 字段。
 ### V2.8 修改代码文件与作用清单
 
 本次只修改说明文档：本文件登记拟议语义，PRD 登记目标范围，专家协作方案说明调度/隔离/交付，基准方案说明执行/统计/验收。未修改代码、请求 schema、数据库、运行提示词或既有报告口径。
+
+## V2.9 评测准备专家与受控成果（2026-09-16）
+
+本节落实 V2.8 的准备阶段子集：新增 `benchmark-designer`（`benchmark_blueprint`）、`benchmark-data-curator`（`data_manifest_candidate`）、`benchmark-scoring-designer`（`scoring_policy_draft`）。只起草 `evaluation_mode=model` 的文本评测；不发布数据，不批准计划，不执行评分。报告专家、报告版本引用和计划入队仍待 J2/J3。
+
+### V2.9.1 调用与持久化
+
+- 保留六个 `agent.*` 工具。`agent.spawn` 增量可选 `input_refs`（默认 `[]`，最多 4 个，不可重复），每项严格为 `{kind:"expert_deliverable",id,version:"1",hash}`；`id` 长度 1–128，hash 格式 `sha256:` 加 64 位小写十六进制。其余参数仍按 V2.7。普通专家不接受非空引用；数据、评分专家至少需要一份蓝图。
+- 只读取**当前父会话**内 `succeeded` 且交付 `validated` 的成果；跨会话或不可见统一 `NOT_FOUND`。派发、实际消费和成果终态落库前复验会话访问、引用种类、版本、摘要与用途。不接受文件路径、URL、数据集、隐藏答案、正式报告引用；这些类型为 `VALIDATION`，不是静默忽略。
+- `AgentRunEvent` 内部 `preparation/contract` 事件在创建 run/回执的同一事务写入服务端交付 ID、角色、引用和有效专家提示词快照。事件详情接口不投影快照正文。子运行通过服务器构造的独立用户消息读取完整材料，不读取父/兄弟工作目录。有效专家提示词的 SHA-256 在 `expert.prompt_version` 可见，实际运行使用冻结的同一文本；协议档 overlay 仍遵循现有运行时解析。
+- 不新增表或列。每次准备运行最多生成一个独立交付，独立 UUID 存于既有 `AgentRun.result`。本批 `revision=1`；返工生成新运行、新交付 ID，可引用旧成果但不覆盖旧正文。**稳定 ID 下的递增修订链尚未实现**，不对外接受其他版本。
+- 主 Agent 从 `agent.result` 取得 `result.reference` 后传入下一位专家。不得自行拼装 hash。只接受阶段为准备、模式为 model 的这三种交付；输入总量最多 64 KiB（规范化 UTF-8），超限明确拒绝，不截断。用户消息中的原始文本不获得“已校验引用”的身份。
+
+### V2.9.2 模型提交与服务端验收
+
+准备专家最终回复必须是单个 JSON 对象 `{scope,body}`，不得带代码围栏或额外字段。输入/输出正文均以 Pydantic 严格 schema 校验（类型不转换，所有对象 `extra=forbid`）；精确 JSON Schema 由 `agent.list` 返回的 `submission_schema` 和子运行的系统约束提供，唯一来源 `agent/preparation.py`。通用限制：文本去除首尾空白后非空、短文本不超过 2,000 字、长文本不超过 8,000 字、列表不超过 32 项（候选最多 100 项），最终回复最多 64 KiB；拒绝重复 JSON 键、非有限数、重复身份和未知字段。
+
+| 对象 | 必需正文与语义校验 |
+| --- | --- |
+| scope | `evaluation_mode="model"`，`scenario_ids` 为 1–16 个唯一场景 ID（字母/数字/下划线/短横线，1–64 字符）；后续交付场景须被输入蓝图覆盖 |
+| blueprint body | `measurement_goal,capabilities,metrics,budget,exclusions,assumptions`；指标包含唯一 `id,description,direction(higher/lower)`；预算包含 `max_samples(1–10000),max_target_calls(1–100000),max_judge_calls(0–100000),cost_limit_usd(非负有限数或null)`；未知成本使用 null，目标调用额度不得小于样本数 |
+| data body | `sources,candidates,coverage_gaps`；来源包含唯一 `source_id,uri,license,provenance,intended_use(development/candidate)`；候选包含唯一 `case_id,source_id,group_id,scenario_id,input,evidence_locator,verification_plan`，来源/场景必须能匹配；URI 只记录 http(s) 来源，不自动下载、不证明许可有效；不接受标准答案、已审核或已发布字段 |
+| scoring body | `scorer(exact_match/regex/llm_rubric),dimensions,normalization,evidence_requirements,missing_policy(zero/review),review_triggers,calibration_plan`；每个维度 `id,weight,anchors`，权重为 (0,1] 且总和为 1，锚点必须恰好覆盖 `score=0,0.5,1` 及非空 description；这是草案，不能据此声称 Worker 已支持该评分策略 |
+
+`validated` 只表示结构、内部引用和声明的证据定位字段完整；不代表来源真伪、许可审核、答案正确、rubric 已校准、用户批准或入榜合格。主 Agent 不得把该标记解释为事实审核结论。
+
+### V2.9.3 结果投影与错误
+
+旧 `result.content/finish_reason/complete` 保留。准备专家在模型正常结束且结构验收通过时追加：
+
+- `deliverable`：V2.8 `expert_deliverable.v1` 信封；`producer` 和 `based_on_refs` 来自派发快照，`scope` 经过校验，`validation={status:"validated",validator_version:"preparation.v1",issues:[]}`。
+- `body`：校验后的正文；`deliverable.content_ref={kind:"expert_deliverable_body",id:deliverable_id,version:"1",hash}`，仅由结果一并读取，不能作为 `input_refs` 类型。
+- `reference`：`{kind:"expert_deliverable",id:deliverable_id,version:"1",hash}`。正文 hash 覆盖 body；交付 hash 覆盖 `{deliverable,body}`。算法为 `preparation-json.v1`：Python JSON `sort_keys=True,ensure_ascii=False,separators=(",",":"),allow_nan=False` 后编码 UTF-8 再 SHA-256，无时间戳参与。该算法不是跨语言 RFC 8785 声明。
+
+验收失败：run 为 `failed`、`error_code=VALIDATION`、`complete=false`；`result.validation={status:"rejected",validator_version:"preparation.v1",issues:[{path,code}]}`，最多 20 项，不回显异常栈/校验输入；不产生 `reference`。取消/运行失败也不能发布可复用成果。终态写入只执行一次，迟到结果不能改写。
+
+`agent.list` 的准备专家增量返回 `deliverable_kind` 和 `submission_schema`；网页目录仅返回 `deliverable_kind`。已有协作详情与 `agent.result` 投影增量字段；前端显示“结构校验通过（草稿）/交付校验失败”、类型、交付 ID、引用数量和问题路径。页面刷新只读取数据库，不重新派发。
+
+### V2.9 修改代码文件与作用清单
+
+- `agent/experts.py`、`expert_prompts/benchmark_*.md`：三类准备专家与最小工具范围。
+- `agent/preparation.py`：严格正文 schema、受控引用、规范摘要、服务端成果验收与交付投影。
+- `agent/collaboration.py`、`agent/subagent_tools.py`、`agent/loop_wiring.py`：派发契约、材料投影、冻结专家提示与终态验收。
+- `frontend/src/api/types.ts`、`components/agent/loop/CollaborationPanel.vue`：草稿验收状态和可追溯引用展示。
+- `backend/api/tests/test_benchmark_preparation.py`：真实持久化与调度链路、越权/篡改/伪造/取消回归；供应商调用使用替身，真实模型试点另行验收。

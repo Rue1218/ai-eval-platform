@@ -447,6 +447,32 @@ async def test_expert_prompt_refreshes_next_turn_without_mutating_active_request
         await wired.service._close_resources(resources)
 
 
+@pytest.mark.asyncio
+async def test_preparation_child_uses_frozen_prompt_and_server_schema(wired, monkeypatch):
+    """真实装配使用派发快照，角色覆盖不能移除服务端 schema 或增加工具。"""
+    wired.session.permission_tier = "read-only"
+
+    def unexpected_read(*_args):
+        """准备运行不重新读取可能已变化的专家覆盖层。"""
+        raise AssertionError("不应重新读取专家提示词")
+
+    monkeypatch.setattr(loop_wiring, "get_effective_expert_prompt", unexpected_read)
+    deps, resources = await loop_wiring.build_dependencies(
+        wired.service, wired.entry, "actor", {
+            "content": "准备蓝图", "agent_id": "benchmark-designer", "_subagent": True,
+            "_subagent_workspace": str(wired.root),
+            "_preparation_contract": {"kind": "benchmark_blueprint", "expert_prompt": "派发时的角色。"},
+        },
+    )
+    try:
+        assert "派发时的角色。" in deps.request.system_segments[1].text
+        assert "准备成果提交约束" in deps.request.system_segments[-1].text
+        assert '"additionalProperties": false' in deps.request.system_segments[-1].text
+        assert set(deps.scheduler._by_name) <= {"read", "glob", "grep"}
+    finally:
+        await wired.service._close_resources(resources)
+
+
 def test_loop_system_prompt_locks_task_planning_and_completion_rules() -> None:
     """核心提示词必须区分会话规划、Worker 队列与经验证的完成态。"""
     prompt = loop_wiring.LOOP_SYSTEM

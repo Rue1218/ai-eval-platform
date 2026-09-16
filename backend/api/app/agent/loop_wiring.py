@@ -61,6 +61,10 @@ LOOP_SYSTEM = """你是 AI 测试与评估平台助手，通过已提供的原�
   核对分歧并由当前主 Agent 统一汇总。不要把 queued/running 当作完成，也不要伪造专家结论。
 - 主回复前必须处理所有已启动运行：读取其终态成果，或明确取消/说明失败。P1 子专家不能继续委派，
   不能代替用户审批，也不能直接执行批量评测、RAG 或压测。
+- 文本基准准备先由 benchmark-designer 生成蓝图；读取 agent.result 的 result.reference，
+  再通过 input_refs 交给 benchmark-data-curator 和 benchmark-scoring-designer，可并行生成草案。
+  以 agent.list 的 submission_schema 为结构要求；不得自行拼接引用摘要，失败成果不能用于下一阶段。
+  validated 仅表示草稿结构与引用通过校验，不代表来源审核、答案正确、校准、批准或入榜。
 
 【执行与长任务】
 - 先检查已有上下文和工作区事实，再进行修改；修改后按风险使用读取、测试或构建等可验证手段确认结果。
@@ -272,7 +276,9 @@ async def _build_dependencies(service, entry, actor_id: str, data: dict, resourc
     with service.session_factory() as db:
         profile, context_window = authorized_profile(db, data)
         overlay = get_agent_prompt_overlay(db, profile.profile_id)
-        expert_prompt = get_effective_expert_prompt(db, expert)
+        preparation_contract = data.get("_preparation_contract") if data.get("_subagent") is True else None
+        expert_prompt = (preparation_contract["expert_prompt"] if preparation_contract
+                         else get_effective_expert_prompt(db, expert))
         if data.get("_subagent") is True:
             session_row = db.get(Session, entry.log.session_id)
             default_tier = db.get(Setting, "permission_tier_default")
@@ -494,6 +500,10 @@ async def _build_dependencies(service, entry, actor_id: str, data: dict, resourc
     }
     scheduler = ToolScheduler(service._settings(), bridge.available_tools(), approval_broker=service._broker)
     segments = _loop_system_segments(overlay, expert_prompt)
+    if preparation_contract:
+        from .preparation import output_instruction
+
+        segments += (SystemSegment(text=output_instruction(preparation_contract["kind"]), cacheable=False),)
 
     def request_factory(messages, effort):
         """窗口、思考档位与供应商转换同源，记录可重建的窗口边界和摘要。"""

@@ -13,6 +13,7 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.errors import AppError, ErrorCode
+from app.expert_prompt_settings import get_effective_expert_prompt
 from app.harness.execution.loop_tools import ToolExecutionResult
 from app.harness.security import permission_tier as tier_policy
 from app.models import (
@@ -27,6 +28,7 @@ from app.models import (
 )
 from app.workspace_service import resolve_session_sandbox
 
+from . import preparation
 from .experts import get_expert, list_experts
 from .runtime import AgentRuntime
 from .subagent_log import SubagentLog
@@ -102,6 +104,9 @@ class CollaborationCoordinator:
                 item for item in experts
                 if capability in (item["name"] + " " + item["description"] + " " + item["badge"]).lower()
             ]
+        for item in experts:
+            if item.get("deliverable_kind"):
+                item["submission_schema"] = preparation.submission_schema(item["deliverable_kind"])
         return {"experts": experts, "count": len(experts), "max_instances": 8}
 
     def _ensure_collaboration(self, identity: dict[str, Any]) -> AgentCollaboration:
@@ -180,12 +185,19 @@ class CollaborationCoordinator:
         """原子创建实例与首次运行，再交给主回合子任务域并行执行。"""
         collaboration = self._ensure_collaboration(identity)
         expert = get_expert(arguments["expert_id"])
+        input_refs = preparation.parse_refs(arguments.get("input_refs", []))
+        if input_refs and not expert.deliverable_kind:
+            raise AppError(ErrorCode.VALIDATION, "该专家不接受准备成果引用")
         profile_id = arguments.get("profile_id") or self.root_data.get("profile_id")
         with self.service.session_factory() as db:
             # 与整组停止锁定同一行，避免取消锁存与新实例创建交错。
             collaboration = db.execute(select(AgentCollaboration).where(
                 AgentCollaboration.id == collaboration.id,
             ).with_for_update()).scalar_one()
+            # 回执重放也必须复验材料访问权，不能将旧回执当作授权凭证。
+            if expert.deliverable_kind:
+                preparation.resolve_inputs(db, self.entry.log.session_id, self.actor_id,
+                                           expert.deliverable_kind, input_refs)
             previous = self._receipt(db, collaboration.id, identity, "agent.spawn", arguments)
             if previous is not None:
                 return previous
@@ -220,6 +232,7 @@ class CollaborationCoordinator:
                 name for name in _expert_tools(expert)
                 if name in SUBAGENT_TOOLS and tier_policy.decide(name, {}, permission_tier) == "auto"
             ]
+            expert_prompt = get_effective_expert_prompt(db, expert) if expert.deliverable_kind else None
             instance = AgentInstance(
                 collaboration_id=collaboration.id,
                 expert_id=expert.expert_id,
@@ -228,6 +241,9 @@ class CollaborationCoordinator:
                     "name": expert.name,
                     "description": expert.description,
                     "badge": expert.badge,
+                    **({"deliverable_kind": expert.deliverable_kind,
+                        "prompt_version": "sha256:" + hashlib.sha256(expert_prompt.encode("utf-8")).hexdigest()}
+                       if expert_prompt is not None else {}),
                 },
                 profile_snapshot={
                     "id": profile.id,
@@ -252,6 +268,9 @@ class CollaborationCoordinator:
             )
             db.add(run)
             db.flush()
+            if expert.deliverable_kind:
+                preparation.save_contract(db, run, self.entry.log.session_id, expert.deliverable_kind,
+                                          input_refs, expert_prompt)
             result = {
                 "collaboration_id": collaboration.id,
                 "instance_id": instance.id,
@@ -322,9 +341,15 @@ class CollaborationCoordinator:
                     return
                 run.status = "running"
                 run.started_at = utcnow()
+                contract = preparation.load_contract(db, run_id)
+                inputs = preparation.resolve_inputs(
+                    db, self.entry.log.session_id, self.actor_id, contract["kind"], contract["input_refs"],
+                ) if contract else []
                 db.commit()
             child_entry = SimpleNamespace(log=log)
             child_prompt = f"{goal}\n\n【交付要求】\n{output_contract}"
+            if contract:
+                child_prompt += preparation.input_message(inputs)
             dependencies, resources = await build_dependencies(
                 self.service,
                 child_entry,
@@ -338,6 +363,7 @@ class CollaborationCoordinator:
                     "_subagent_workspace": workspace,
                     "_model_budget": self.budget,
                     "_budget_run_id": run_id,
+                    **({"_preparation_contract": contract} if contract else {}),
                 },
             )
             await runtime.submit(child_prompt, dependencies=dependencies, actor_id=self.actor_id)
@@ -525,6 +551,18 @@ class CollaborationCoordinator:
             if run.status in TERMINAL:
                 return
             run.status = "cancelled" if run.cancel_requested else status
+            contract = preparation.load_contract(db, run_id)
+            if contract and run.status == "succeeded":
+                instance = db.get(AgentInstance, run.instance_id)
+                verified = preparation.validate_result(
+                    db, run, self.entry.log.session_id, self.actor_id, instance.expert_id,
+                    contract, result.get("content"),
+                )
+                result = {**result, **verified}
+                if "reference" not in verified:
+                    run.status = "failed"
+                    error_code = ErrorCode.VALIDATION.value
+                    result = {**result, "complete": False}
             run.result = (
                 {**result, "finish_reason": "cancelled", "complete": False}
                 if run.status == "cancelled" else result

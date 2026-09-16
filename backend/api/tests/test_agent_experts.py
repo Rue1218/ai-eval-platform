@@ -53,7 +53,10 @@ def test_expert_projection_has_no_prompt_or_tools():
     items = experts.list_experts()
     assert {item["id"] for item in items} == {expert.expert_id for expert in experts.EXPERTS}
     for item in items:
-        assert set(item) == {"id", "name", "description", "badge", "default"}
+        expected = {"id", "name", "description", "badge", "default"}
+        if experts.get_expert(item["id"]).deliverable_kind:
+            expected.add("deliverable_kind")
+        assert set(item) == expected
         assert item["description"].strip() and item["name"].strip()
 
 
