@@ -68,6 +68,7 @@ class PlatformToolBridge:
         authorize: Callable[[ToolDef, dict[str, Any], ToolExecutionContext], None],
         runner: DispatchCallback | None = None, interaction: DispatchCallback | None = None,
         business: DispatchCallback | None = None, mcp: DispatchCallback | None = None,
+        collaboration: DispatchCallback | None = None,
         runner_instance_id: str | None = None,
         source_contract: str = "platform.v1",
     ) -> None:
@@ -76,6 +77,7 @@ class PlatformToolBridge:
             raise ValueError("未知工具字段契约版本")
         self.context_factory, self.authorize = context_factory, authorize
         self.runner, self.interaction, self.business, self.mcp = runner, interaction, business, mcp
+        self.collaboration = collaboration
         self.runner_instance_id = runner_instance_id
         self.source_contract = source_contract
         self.tools: list[PlatformLoopTool] = []
@@ -132,6 +134,8 @@ class PlatformLoopTool:
     @property
     def callback(self) -> DispatchCallback | None:
         """路由由注册表名称和 transport 决定，模型不得选择执行通道。"""
+        if self.definition.name.startswith("agent."):
+            return self.bridge.collaboration
         if self.definition.name == "bash":
             return self.bridge.runner
         if self.definition.name == "ask_user_question":
@@ -149,6 +153,7 @@ class PlatformLoopTool:
             return False
         special = (
             self.definition.name in {"bash", "ask_user_question", "task.create"}
+            or self.definition.name.startswith("agent.")
             or self.definition.requires_confirmation
             or self.definition.permission_policy.confirmation_required
             or self.definition.transport == "mcp"

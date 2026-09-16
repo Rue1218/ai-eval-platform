@@ -22,6 +22,7 @@ from .routers import (
     agents,
     auth,
     cases,
+    collaborations,
     dataset_catalog,
     datasets,
     dispatch,
@@ -222,6 +223,7 @@ app.include_router(datasets.router)
 app.include_router(datasets.folders_router)
 app.include_router(dataset_catalog.router)
 app.include_router(cases.router)
+app.include_router(collaborations.router)
 app.include_router(cases.folders_router)
 app.include_router(admin.router)
 app.include_router(user_workspaces.router)

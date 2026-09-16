@@ -5,7 +5,12 @@ api 与 worker 共用同一份模型定义，消除双副本漂移；
 """
 
 from shared.models import (  # noqa: F401
+    AgentCollaboration,
+    AgentCommandReceipt,
     AgentEvent,
+    AgentInstance,
+    AgentRun,
+    AgentRunEvent,
     AgentRuntimeState,
     AuditLog,
     Base,

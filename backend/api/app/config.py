@@ -21,6 +21,12 @@ class Settings(BaseSettings):
     # 浏览器短暂断网、切网或睡眠恢复时保留当前回合控制权；超时后才取消，
     # 避免重连只能回放 interrupted。显式取消命令仍立即生效。
     agent_loop_reconnect_grace_seconds: float = 20.0
+    # P1 前台专家协作：只允许主回合调度，子专家不能继续委派；调用次数为可强制硬上限。
+    agent_subagents_enabled: bool = True
+    agent_subagent_max_instances: int = 8
+    agent_subagent_max_concurrent: int = 3
+    agent_subagent_max_calls_per_run: int = 20
+    agent_collaboration_max_calls: int = 80
     data_dir: str = "/data"
     # Harness 记忆层：Redis 仅存可过期短期状态，长期审计仍使用 PostgreSQL。
     # 短期 Port 默认关闭；Redis 容器经 feat/deploy-* 落地后再由环境变量开启。

@@ -23,8 +23,13 @@ def test_sandbox_mode_per_tier() -> None:
 @pytest.mark.parametrize("tier", ["tier1", "tier2", "tier3"])
 def test_read_and_interaction_always_auto(tier: str) -> None:
     assert pt.decide("read", {}, tier) == "auto"
+    assert pt.decide("read_image", {}, tier) == "auto"
+    assert pt.decide("glob", {}, tier) == "auto"
+    assert pt.decide("grep", {}, tier) == "auto"
     assert pt.decide("ask_user_question", {}, tier) == "auto"
     assert pt.decide("task.create", {}, tier) == "auto"
+    assert pt.decide("agent.spawn", {}, tier) == "auto"
+    assert pt.decide("agent.cancel", {}, tier) == "auto"
 
 
 @pytest.mark.parametrize("tool", ["write", "edit", "web_search", "web_fetch"])

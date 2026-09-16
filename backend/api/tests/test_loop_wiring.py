@@ -321,6 +321,24 @@ async def test_permission_context_is_rechecked(wired):
     await wired.service._close_resources(resources)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_subagent_switch_preserves_default_assistant(wired, monkeypatch, enabled):
+    """协作开关只控制专家调度工具，关闭后仍可装配默认助手和既有工具。"""
+    monkeypatch.setattr(loop_wiring.settings, "agent_subagents_enabled", enabled)
+    deps, resources = await loop_wiring.build_dependencies(
+        wired.service, wired.entry, "actor", {"content": "普通对话"},
+    )
+    try:
+        names = set(deps.scheduler._by_name)
+        assert "read" in names
+        assert ("platform_agent_spawn" in names) is enabled
+        if enabled:
+            assert wired.entry.collaboration_coordinator in resources
+    finally:
+        await wired.service._close_resources(resources)
+
+
 def test_window_keeps_tool_group_and_applies_effort(wired):
     """旧回合可整体裁掉，当前调用与结果保持配对，思考档位写入真正请求。"""
     messages = [{"role": "user", "content": "old" * 5000}, {"role": "assistant", "content": "old answer"},
@@ -425,6 +443,32 @@ async def test_expert_prompt_refreshes_next_turn_without_mutating_active_request
             assert reads == ["testcase-agent", "testcase-agent"]
         finally:
             await wired.service._close_resources(next_resources)
+    finally:
+        await wired.service._close_resources(resources)
+
+
+@pytest.mark.asyncio
+async def test_preparation_child_uses_frozen_prompt_and_server_schema(wired, monkeypatch):
+    """真实装配使用派发快照，角色覆盖不能移除服务端 schema 或增加工具。"""
+    wired.session.permission_tier = "read-only"
+
+    def unexpected_read(*_args):
+        """准备运行不重新读取可能已变化的专家覆盖层。"""
+        raise AssertionError("不应重新读取专家提示词")
+
+    monkeypatch.setattr(loop_wiring, "get_effective_expert_prompt", unexpected_read)
+    deps, resources = await loop_wiring.build_dependencies(
+        wired.service, wired.entry, "actor", {
+            "content": "准备蓝图", "agent_id": "benchmark-designer", "_subagent": True,
+            "_subagent_workspace": str(wired.root),
+            "_preparation_contract": {"kind": "benchmark_blueprint", "expert_prompt": "派发时的角色。"},
+        },
+    )
+    try:
+        assert "派发时的角色。" in deps.request.system_segments[1].text
+        assert "准备成果提交约束" in deps.request.system_segments[-1].text
+        assert '"additionalProperties": false' in deps.request.system_segments[-1].text
+        assert set(deps.scheduler._by_name) <= {"read", "glob", "grep"}
     finally:
         await wired.service._close_resources(resources)
 

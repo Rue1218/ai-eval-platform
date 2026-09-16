@@ -1165,3 +1165,75 @@ export interface UserWorkspaceFileContent {
   is_large: boolean
   content: string
 }
+
+// —— P1 专家协作（前台主回合内运行，状态由 PostgreSQL 投影恢复）——
+export type AgentRunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled'
+export type AgentCollaborationStatus = 'running' | 'succeeded' | 'failed' | 'cancelled'
+
+// 准备成果是草稿；校验通过不等同于发布、批准或正式评分。
+export interface ExpertDeliverableRef {
+  kind: 'expert_deliverable'
+  id: string
+  version: '1'
+  hash: string
+}
+
+export interface ExpertDeliverableValidation {
+  status: 'validated' | 'rejected'
+  validator_version: string
+  issues: { path: string; code: string }[]
+}
+
+export interface ExpertDeliverable {
+  schema_id: 'expert_deliverable.v1'
+  deliverable_id: string
+  revision: number
+  kind: 'benchmark_blueprint' | 'data_manifest_candidate' | 'scoring_policy_draft'
+  producer: { collaboration_id: string; run_id: string; expert_id: string }
+  scope: { evaluation_mode: 'model'; scenario_ids: string[] }
+  based_on_refs: ExpertDeliverableRef[]
+  content_ref: { kind: 'expert_deliverable_body'; id: string; version: '1'; hash: string }
+  validation: ExpertDeliverableValidation
+}
+
+export interface AgentRunSummary {
+  run_id: string
+  instance_id: string
+  expert: { id: string; name: string; description?: string; badge?: string; deliverable_kind?: string; prompt_version?: string }
+  model?: string | null
+  goal: string
+  output_contract: string
+  status: AgentRunStatus
+  error_code?: string | null
+  result_available: boolean
+  cancel_requested: boolean
+  result?: {
+    content?: string
+    finish_reason?: string
+    complete?: boolean
+    deliverable?: ExpertDeliverable
+    body?: Record<string, unknown>
+    reference?: ExpertDeliverableRef
+    validation?: ExpertDeliverableValidation
+  } | null
+  created_at?: string | null
+  started_at?: string | null
+  finished_at?: string | null
+}
+
+export interface AgentCollaborationSummary {
+  id: string
+  session_id: string
+  root_turn: number
+  status: AgentCollaborationStatus
+  goal: string
+  budget: { max_calls?: number; calls?: number; active?: number; by_run?: Record<string, number> }
+  cancel_requested: boolean
+  created_at?: string | null
+  updated_at?: string | null
+  finished_at?: string | null
+}
+
+export interface AgentCollaborationDetail extends AgentCollaborationSummary {
+  runs: AgentRunSummary[]
+}
