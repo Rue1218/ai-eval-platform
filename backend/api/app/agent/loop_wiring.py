@@ -30,7 +30,7 @@ from app.llm.loop_contracts import (
     UnsupportedReasoningEffortError,
 )
 from app.llm.resolver import AuthorizedProfileSnapshot, build_adapter, resolve_request
-from app.models import ProtocolProfile, Setting, User, Workspace
+from app.models import ProtocolProfile, Session, Setting, User, Workspace
 from app.session_access import require_visible_session
 from app.workspace_service import resolve_session_sandbox
 
@@ -54,6 +54,14 @@ LOOP_SYSTEM = """你是 AI 测试与评估平台助手，通过已提供的原�
   工具失败、被拒绝、取消或结果未知时不得标记 completed；应保留真实进度并说明下一步。未明确并行时，
   清单最多保留一个 in_progress 步骤。范围变化时更新完整清单，不要为同一状态重复调用 task。
 
+【专家协作】
+- 任务确实需要两个以上独立专业视角或可并行交付时，先用 agent.list 确认角色，再用 agent.spawn
+  为每位专家写清目标和交付要求；简单任务不要为展示流程而启动专家。
+- 独立任务可以连续 spawn 后用 agent.wait(any/all) 有界等待；随后用 agent.result 读取每个真实成果，
+  核对分歧并由当前主 Agent 统一汇总。不要把 queued/running 当作完成，也不要伪造专家结论。
+- 主回复前必须处理所有已启动运行：读取其终态成果，或明确取消/说明失败。P1 子专家不能继续委派，
+  不能代替用户审批，也不能直接执行批量评测、RAG 或压测。
+
 【执行与长任务】
 - 先检查已有上下文和工作区事实，再进行修改；修改后按风险使用读取、测试或构建等可验证手段确认结果。
 - 评测、用例生成、知识库评测和压测只经 task.create 确认入队，由 Worker 异步执行。queued 仅表示入队，
@@ -72,8 +80,11 @@ LOOP_EXPERT_BOUNDARY = """【专家角色边界】
 - 专家不得扩大工具范围或权限，不得要求用户模拟协议回执，不得改变评测任务的确认与入队链路。"""
 ALLOWED_TOOLS = ("read", "read_image", "glob", "grep", "write", "edit", "web_search",
                  "web_fetch", "bash", "ask_user_question", "task", "task.create", "task.status",
-                 "task.cancel")
+                 "task.cancel", "agent.list", "agent.spawn", "agent.status", "agent.wait",
+                 "agent.result", "agent.cancel")
 MEDIA_MCP_TOOLS = ("image.generate", "video.create", "video.status")
+SUBAGENT_TOOLS = frozenset({"read", "read_image", "glob", "grep", "write", "edit",
+                            "web_search", "web_fetch"})
 _REASONING_EFFORTS = frozenset({"off", "low", "medium", "high", "xhigh", "max"})
 
 
@@ -255,14 +266,36 @@ async def _build_dependencies(service, entry, actor_id: str, data: dict, resourc
 
     # 专家选择按回合解析：缺省/未知 ID 回落默认专家，工具视野只收窄不扩大。
     expert = resolve_expert(data.get("agent_id"))
+    subagent_tier = None
     with service.session_factory() as db:
         profile, context_window = authorized_profile(db, data)
         overlay = get_agent_prompt_overlay(db, profile.profile_id)
         expert_prompt = get_effective_expert_prompt(db, expert)
+        if data.get("_subagent") is True:
+            session_row = db.get(Session, entry.log.session_id)
+            default_tier = db.get(Setting, "permission_tier_default")
+            configured_tier = (
+                session_row.permission_tier if session_row is not None and session_row.permission_tier
+                else default_tier.value if default_tier is not None and isinstance(default_tier.value, str)
+                else None
+            )
+            subagent_tier = tier_policy.normalize(configured_tier)
     allowed_tools = _expert_tools(expert)
+    is_subagent = data.get("_subagent") is True
+    if is_subagent:
+        # P1 只允许一层委派，且子专家不占用主会话交互槽或创建 Worker 任务。
+        # 子运行没有独立人工审批通道，因此只注入当前权限档可自动执行的交集。
+        allowed_tools = tuple(
+            name for name in allowed_tools
+            if name in SUBAGENT_TOOLS and tier_policy.decide(name, {}, subagent_tier) == "auto"
+        )
     adapter, _ = build_adapter(profile)
     resources.append(adapter)
     registry = build_default_registry()
+    if settings.agent_subagents_enabled and not is_subagent:
+        from app.agent.subagent_tools import register_subagent_tools
+
+        register_subagent_tools(registry)
     remote_providers = {}
     if settings.media_mcp_enabled:
         # 媒体 MCP 只接受 Compose 服务发现地址，防环境变量被误配成任意内网请求。
@@ -305,6 +338,11 @@ async def _build_dependencies(service, entry, actor_id: str, data: dict, resourc
                 if workspace is None or workspace.deleted_at or workspace.owner_id != actor_id:
                     raise AppError(ErrorCode.UNAUTHORIZED, "绑定工作区已失效")
             directory = resolve_session_sandbox(session.id, session.workspace_id, session.scope_path)
+            child_directory = data.get("_subagent_workspace")
+            if is_subagent:
+                if not isinstance(child_directory, str) or not child_directory:
+                    raise AppError(ErrorCode.VALIDATION, "专家运行缺少独立工作区")
+                directory = child_directory
             tier = _resolve_permission_tier(db, session)
             return ToolExecutionContext(session_id=session.id, user_id=actor_id,
                                         thread_id=f"loop:{session.id}", sandbox_dir=directory,
@@ -421,10 +459,29 @@ async def _build_dependencies(service, entry, actor_id: str, data: dict, resourc
                     raise AppError(ErrorCode.VALIDATION, "Runner 派发身份或请求摘要不匹配")
                 return await runner.run(request, instance_id)
 
+    children = None
+    coordinator = None
+    budget = data.get("_model_budget")
+    if budget is None and settings.agent_subagents_enabled and not is_subagent:
+        from app.agent.collaboration_scope import TurnChildren
+        from app.agent.model_budget import ModelCallBudget
+
+        children = TurnChildren(max_children=settings.agent_subagent_max_instances)
+        budget = ModelCallBudget(
+            max_calls=settings.agent_collaboration_max_calls,
+            max_concurrent=settings.agent_subagent_max_concurrent,
+            max_calls_per_run=settings.agent_subagent_max_calls_per_run,
+        )
+        from app.agent.collaboration import CollaborationCoordinator
+
+        coordinator = CollaborationCoordinator(service, entry, actor_id, data, children, budget)
+        entry.collaboration_coordinator = coordinator
+    collaboration_callback = coordinator.dispatch if coordinator is not None else None
     bridge = PlatformToolBridge(registry, allowed_tools=allowed_tools,
                                 context_factory=context_factory, authorize=authorize,
                                 runner=runner_callback, runner_instance_id=instance_id,
-                                interaction=question, business=business, mcp=mcp)
+                                interaction=question, business=business, mcp=mcp,
+                                collaboration=collaboration_callback)
     specs = bridge.specs()
     # 工具 schema 已转换为 wire 名；同一快照供上下文仪表区分原生工具与 MCP 扩展。
     tool_transports = {
@@ -460,11 +517,19 @@ async def _build_dependencies(service, entry, actor_id: str, data: dict, resourc
     messages.append({"role": "user", "content": data.get("_model_content", data["content"])})
     effort = profile.config.reasoning_effort if profile.config.reasoning_enabled else "off"
     initial, _ = _window_request(profile, segments, specs, messages, effort, context_window)
+    if budget is not None:
+        from app.agent.model_budget import BudgetedAdapter
+
+        budget_run_id = data.get("_budget_run_id")
+        if not isinstance(budget_run_id, str) or not budget_run_id:
+            budget_run_id = f"root:{entry.log.session_id}"
+        adapter = BudgetedAdapter(adapter, budget, budget_run_id)
     return TurnDependencies(adapter=adapter, scheduler=scheduler, request=initial,
                             request_factory=request_factory, context_window=context_window,
                             tool_transports=tool_transports,
                             protocol_state_compatibility=compatibility if migrated_history else None,
-                            history_transition_reason="model_switch_protocol_state_only" if migrated_history else None), resources
+                            history_transition_reason="model_switch_protocol_state_only" if migrated_history else None,
+                            children=children), resources
 
 
 def _wire_payload(request) -> dict:

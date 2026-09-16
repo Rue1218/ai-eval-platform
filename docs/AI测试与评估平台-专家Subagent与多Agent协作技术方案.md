@@ -1,12 +1,12 @@
 # AI 测试与评估平台 — 专家 Subagent 与多 Agent 协作技术方案
 
-> 版本：V0.5 ｜ 审查日期：2026-09-15 ｜ 状态：P0 运行时基础接缝已实施并修复取消/恢复边界；生产专家调度尚未交付，见 §22。
+> 版本：V0.6 ｜ 审查日期：2026-09-16 ｜ 状态：P1 前台持久调度、六工具与 Agent 页面板已实现；真实模型试点和 P2/P3 仍待完成，见 §22。
 >
 > 用户目标：将平台专家升级为能够独立运行、自由调度、相互通讯和协作的 subagent，并适配现有被测模型、Agent 模型和评分模型。
 >
 > 核对基线：本地仓库 `3ac0ce738f4b551510fa5a9212ab0164239390ef`；PRD V1.26、API V2.4；新会话使用 AgentLoop v2。本次只核对本地代码和公开资料，未核验生产部署或调用真实模型。
 >
-> 契约声明：本文中的新增工具、REST 路径、WS 命令、事件、配置项和表名仍为拟议设计，不代表现有接口。V0.4 的内部运行接缝已登记 PRD V1.27 / API V2.5；实施后续阶段前，仍须先将对应增量写入权威文档。历史文档与当前实现不一致的地方，以权威文档最新修订为准。
+> 契约声明：P1 已落地的六个 `agent.*` 工具、五类持久表和协作查询/停止 REST 已登记 PRD V1.28 / API V2.6；`agent.send`、工作项、WS 协作命令、主流 outbox 投影、跨进程租约与后台恢复仍为拟议设计。历史文档与当前实现不一致的地方，以权威文档最新修订为准。
 
 **阅读建议：** 产品与架构决策看第 1–7 节；通讯、数据和恢复实现看第 8–12 节；被测/评分模型适配看第 13 节；接口、上线与验收看第 14–19 节。第 20 节为来源，第 21 节区分本次实际变更与未来改造范围。
 
@@ -627,13 +627,16 @@ LLM 裁判可能存在位置、篇幅和自偏好等偏差。盲化模型身份�
 
 ### 14.1 契约登记清单
 
-以下路径和字段均待 API.md 定稿，当前不可调用。
+API V2.6 已登记 P1 查询/停止 REST；下表未标“P1 已实现”的条目仍为拟议契约。
 
 | 接口/命令 | 用途 | 关键约束 |
 | --- | --- | --- |
 | `turn.submit.data.collaboration` | 可选开启前台协作，选择专家和预算档 | 服务端重新解析；旧客户端缺省仍为原单专家行为 |
-| `GET /api/sessions/{id}/collaborations` | 列出会话协作 | 沿用会话可见性，分页 |
-| `GET /api/collaborations/{id}` | 获取状态、实例、工作项摘要和预算 | 不暴露凭据和系统提示词 |
+| `GET /api/sessions/{id}/collaborations` | 列出会话协作（P1 已实现） | 沿用会话可见性，`limit` 分页上限 |
+| `GET /api/collaborations/{id}` | 获取状态、实例和预算（P1 已实现） | 不暴露凭据和系统提示词；工作项待 P2 |
+| `GET /api/agent-runs/{id}/events` | 查看独立运行事实（P1 已实现） | 沿用父会话可见性，按 seq 分页 |
+| `POST /api/collaborations/{id}/cancel` | 停止整组（P1 已实现） | 仅会话创建者；前台同进程立即取消 |
+| `POST /api/agent-runs/{id}/cancel` | 停止单个专家（P1 已实现） | 仅会话创建者；终态幂等 |
 | `GET /api/collaborations/{id}/messages` | 查看授权通讯记录 | 分页、来源标记、评分阶段隔离 |
 | `GET /api/collaborations/{id}/artifacts` | 查看成果版本 | 逐引用检查权限 |
 | WS `collaboration.message` | 用户补充任务或回答普通协调问题 | 有 request_id/修订；不是审批回执 |
@@ -927,6 +930,7 @@ V0.1–V0.3 没有修改业务代码、数据库模型、迁移、PRD、API 或�
 | V0.3 | 2026-09-15 | 对齐采集方案 V2.4 的 RAG 证据分类策略、实际模型上下文和静态裁判接入边界，保留 benchmark 数值策略独立版本 |
 | V0.4 | 2026-09-15 | 开始 P0：日志端口、执行域隔离、前台子任务收拢、共享调用预算；登记 PRD V1.27/API V2.5，生产持久化和调度入口继续待办 |
 | V0.5 | 2026-09-15 | 修复两项审查问题：主收尾不重发子任务取消；首次调度前取消的恢复入口先收拢子任务并保留 cancelled 终态；补充回归测试 |
+| V0.6 | 2026-09-16 | 实现 P1 前台闭环：生产 SubagentLog、协作/实例/运行/事件/回执表、六个调度工具、共享调用预算、独立子目录、查询/停止 API 与 Agent 页协作面板；P2/P3 和真实模型试点保持未完成 |
 
 ## 22. 实施记录与下一批门槛
 
@@ -963,10 +967,10 @@ V0.1–V0.3 没有修改业务代码、数据库模型、迁移、PRD、API 或�
 
 ### 22.4 未完成项与推进顺序
 
-1. **完成 P0 剩余门槛**：冻结首批协作表及工具/结果 schema、权限快照、模型用途约束和预算账本；完成生产独立日志与主写者投影实验。本批不能标记整个 P0 完成。
-2. **P1 持久调度闭环**：通过 Alembic 自动生成协作/实例/运行/事件及幂等收据表迁移，实现生产 `SubagentLog`、主写者 outbox 投影、权限相交、独立工作目录和配额；之后接入六个 `agent.*` 工具、状态/成果/取消面板。
-3. **P1 验收后再推进 P2/P3**：消息、工作项与专家续跑依赖已落地的运行身份和收据；后台恢复依赖持久租约及执行端隔离。本批内存计数与任务组不得被当作这些能力的替代。
-4. **P4 评测接入**：被测模型与评分模型用途隔离、裁判策略与正式报告/榜单门槛仍按关联方案实施；需真实模型试点验证，不能使用本批确定性适配器成绩发布榜单。
+1. **P1 真实模型退出验收**：在隔离测试账号上让两个真实专家并行执行不同目标，验证实际模型调用、成果可追溯、共享额度、停止和页面刷新恢复；未完成该试点前，代码实现不能等同生产效果验收。
+2. **补主流 outbox 投影**：P1 页面已通过持久 REST 恢复；方案目标中的主会话 cursor 摘要投影仍未实现。补齐 outbox 后，WS 可即时唤醒，REST 继续作为详情和通知丢失补偿。
+3. **P2/P3**：实现 `agent.send`、消息信箱、工作项、复核与有限续跑；后台恢复另需持久租约、代次、执行端隔离和跨进程取消证据。P1 的同进程任务组不得被当作后台恢复能力。
+4. **P4 评测接入**：被测模型与评分模型用途隔离、裁判策略与正式报告/榜单门槛仍按关联方案实施；不能使用专家协作开发测试结果发布榜单。
 
 ### 22.5 V0.5 审查修复与修改代码文件清单
 
@@ -981,3 +985,27 @@ V0.1–V0.3 没有修改业务代码、数据库模型、迁移、PRD、API 或�
 最终 API 全量回归 **1,590 passed / 78 skipped / 0 failed**，使用项目内全新隔离临时目录；`ruff check . ../shared`、文档链接/编码检查和 `git diff --check` 均通过。跳过项的环境限制仍按 §22.3 说明，不代表真实模型或生产部署验收。
 
 2026-09-15 合入前补齐工程门禁：Worker **50 项通过**，前端 `npm run typecheck` 与 `npm run build` 通过（保留现有大资源包警告）。前端首次构建因沙箱读取上级目录受限失败，取得执行权限后重新构建通过；未调整业务代码或构建配置。
+
+### 22.6 V0.6 / P1 实施结果（2026-09-16）
+
+本批实现 `AgentCollaboration → AgentInstance → AgentRun → AgentRunEvent` 持久链路和 `AgentCommandReceipt` 幂等收据。迁移 `f70e5a53bd54` 由 Alembic autogenerate 生成并通过 PostgreSQL 离线升级编译。`SubagentLog` 以 `AgentRun` 行锁分配运行内 seq；不同运行各自从 0 排序，主会话历史不混入子历史。
+
+主 `general` Agent 在开关启用时获得 `agent.list/spawn/status/wait/result/cancel`。`spawn/cancel` 用服务端注入的调用身份去重；两个子实例进入同一个 `TurnChildren` 并行运行。模型适配器共享 80 次调用/3 并发/单运行 20 次的硬调用次数账本。子运行只获得权限交集内、当前档位可自动执行的工具，使用 `.subagents/<run_id>` 独立目录；P1 不注入人工交互、Worker 任务、bash 或继续委派。
+
+Agent 页新增持久“专家协作”面板。页面按父会话读取最近协作，活动期短轮询，展示目标、根回合、总状态、调用预算、专家、模型、交付契约、成果和错误；会话创建者可停止单个运行或整组。刷新与 WS 重连不会创建新运行。当前即时状态通过 REST 投影恢复，主 `session_stream` outbox 摘要仍列为下一项，不在本批伪装成已交付。
+
+收尾一致性：子运行先关闭运行时与依赖资源，再发布终态；重复取消不会打断清理。首次执行前取消和图构造失败均能持久结算，取消成果标记 `complete=false`。停止接口保留既有协作终态；无本地运行时停止最后一位专家时同步整组状态。前端后台页跳过请求但保留调度，返回页面后恢复刷新，会话切换丢弃旧请求结果。
+
+| 文件 | 实际作用 |
+| --- | --- |
+| `backend/shared/models.py`、`backend/api/migrations/versions/f70e5a53bd54_新增专家协作与子运行事实表.py` | 五类实体、约束、索引与迁移 |
+| `backend/api/app/agent/collaboration.py` | 持久协调、并行启动、wait/result/status/cancel、预算快照和终态聚合 |
+| `backend/api/app/agent/subagent_log.py` | PostgreSQL 独立运行事实日志 |
+| `backend/api/app/agent/subagent_tools.py` | 六个 P1 模型工具唯一参数契约 |
+| `backend/api/app/agent/loop_wiring.py`、`model_budget.py`、`collaboration_scope.py` | 主子依赖装配、共享调用预算、回合生命周期 |
+| `backend/api/app/harness/execution/loop_bridge.py` | agent 工具回调路由，模型不能选择执行通道 |
+| `backend/api/app/routers/collaborations.py` | 持久查询、事实分页、整组与单运行停止 |
+| `frontend/src/components/agent/loop/CollaborationPanel.vue`、`AgentWorkspace.vue` | Agent 页协作可视化与控制 |
+| `backend/api/tests/test_subagent_collaboration.py` | 六工具目录、运行日志隔离、并行与幂等、清理与取消竞态、初始化失败、停止终态保护回归 |
+
+专项验证：新增 P1 测试 **11 passed**（含浏览器记录脱敏与上述收尾边界）；既有 Wiring/Runtime/专家目录回归 **93 passed**。全量 API **1,601 passed / 78 skipped / 0 failed**，Worker **50 passed**；API ruff、前端 typecheck/build、Alembic 单一 head 与 PostgreSQL 离线升级编译均通过。前端 build 保留现有大 chunk 警告。跳过项仍包含未配置的真实 PostgreSQL/外部服务，且尚未调用真实供应商模型，因此 P1 的真实模型试点门槛保持未完成。

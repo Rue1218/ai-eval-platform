@@ -1165,3 +1165,41 @@ export interface UserWorkspaceFileContent {
   is_large: boolean
   content: string
 }
+
+// —— P1 专家协作（前台主回合内运行，状态由 PostgreSQL 投影恢复）——
+export type AgentRunStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled'
+export type AgentCollaborationStatus = 'running' | 'succeeded' | 'failed' | 'cancelled'
+
+export interface AgentRunSummary {
+  run_id: string
+  instance_id: string
+  expert: { id: string; name: string; description?: string; badge?: string }
+  model?: string | null
+  goal: string
+  output_contract: string
+  status: AgentRunStatus
+  error_code?: string | null
+  result_available: boolean
+  cancel_requested: boolean
+  result?: { content?: string; finish_reason?: string } | null
+  created_at?: string | null
+  started_at?: string | null
+  finished_at?: string | null
+}
+
+export interface AgentCollaborationSummary {
+  id: string
+  session_id: string
+  root_turn: number
+  status: AgentCollaborationStatus
+  goal: string
+  budget: { max_calls?: number; calls?: number; active?: number; by_run?: Record<string, number> }
+  cancel_requested: boolean
+  created_at?: string | null
+  updated_at?: string | null
+  finished_at?: string | null
+}
+
+export interface AgentCollaborationDetail extends AgentCollaborationSummary {
+  runs: AgentRunSummary[]
+}

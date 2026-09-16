@@ -4,15 +4,15 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V2.5 |
+| 文档版本 | V2.6 |
 | WS v2 修订日期 | 2026-09-13（§4A，模型错误安全摘要） |
-| 对应 PRD | V1.27（功能唯一权威） |
+| 对应 PRD | V1.28（功能唯一权威） |
 | 对应设计规范 | V1.12（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.7.8（AgentLoop 单入口；JSON 仍以本文为准） |
 | 对应前端计划 | AgentLoop 前端计划 V0.5 |
 | 对应后端计划 | V1.5 |
 | 撰写日期 | 2026-08-18 |
-| 本轮修订 | 2026-09-15：V2.5 登记专家协作 P0 内部运行契约，无新增公开接口；2026-09-13：V1.99 AgentLoop 模型错误安全摘要（§4A）——失败的 assistant.end 增可选 error_message，按既有平台错误码显示固定中文处理建议：额度耗尽为 BUDGET_EXCEEDED，上下文超限为 VALIDATION，限流、鉴权、模型不可用与服务异常为 UPSTREAM；不透传上游正文、凭据或堆栈。2026-09-13：V1.98 用户工作区优化并支持音视频流式预览播放与文件上传（§3.12.2）——`GET /api/workspaces/{id}/files/raw` 新增可选 `download: bool = false`，默认以 `inline` disposition 与准确 MIME 类型响应，允许浏览器在线播放音视频与 HTTP 206 Range 分段秒开拖拽；新增 `POST /api/workspaces/{id}/files/upload`（`multipart/form-data`），支持向工作区根或子目录上传任意格式文件，含防穿越、软上限配额核算与审计日志。前端新增 `WorkspaceVideoViewer` 影院级播放器（倍速/全屏/PiP/跳秒/快捷键/容错）与拖拽上传。2026-09-12：V1.96 将 AgentLoop v2 的 question.respond 回执扩展为 answers:[{question_id,answer,custom?:string}]；custom 专用于选择题的“其他，请填写”，可与 checkbox 已选标签共存，服务端继续按既有题目、选项、必填和 nonce 校验，旧客户端省略该字段保持兼容。2026-09-11：V1.92 会话标题持久化与自适应展现——新增 PUT /api/sessions/{id}/title 端点（§3.4，仅 owner，写审计 session_title_update）；会话列表 GET /api/sessions 自动回写存量未命名会话标题；AgentLoop v2 首条提问异步提炼精准标题。2026-09-09：V1.85 兼容模型思考档位与单候选滑块说明（§4A），区分浏览器 WS 与模型 HTTP/SSE。2026-09-09：V1.85 废除「首次登录强制改密」机制（产品决策）——开户/重置密码/引导成员一律不再置 must_change_password=true，登录后直接进入系统；前端移除不可关闭强制改密弹窗；users.must_change_password 列与响应字段保留（恒 false）。2026-09-09：V1.82 管理端工作区下线与智能体新建工作区——原 §3.12.2「工作区管理（会话沙箱文件夹，V1.57）」整节移除（`/api/admin/workspaces` 五个接口与前端管理页下线，工作区生命周期统一由用户域「我的工作区」承载）；原 §3.12.3 用户域工作区重编号为 §3.12.2（详见 §3.12.2 下线登记与文末 V1.82 清单）。2026-09-09：V1.78 G6b 磁盘配额与终态契约组 + G6 评审 M1–M3 合并登记（G6a 升档审批主体已随 #235 于 2026-09-08 合入 main，见错误码表与 `tool_approval`/`approval_terminal` 事件行）：`approval_terminal` payload 增 `card_type`（澄清卡 recovery_failed 路由至 ClarifyCard failed 终态）+ 错误码 `DENIED` 口径收敛为 bash 只读档拒写 + 配额卷水位核算失败 fail-closed + workspace-write 写前容量检查（详见下 V1.78 块）。2026-09-07：V1.76 会话-工作区绑定（《工作区与沙箱设计方案》V0.5 F3/G5）：`POST /api/sessions` 请求体增量可选 `workspace_id`/`scope_path`（创建时固化、运行期不可变、无换绑端点；绑定仅限 `visibility="private"`——BLK-4，team 会话绑定拒绝；属主校验 + scope 防穿越 + 目录就绪，未绑定行为与 V1.75 完全一致）；会话列表项/响应增量 `workspace_id`/`scope_path`/`workspace_name`（名称由服务端按行补充）；`PUT /api/sessions/{id}/sharing` 对已绑定会话转 `team` 返回 `VALIDATION`（写授权不随团队可见性开放）；绑定成功写 AuditLog `session_workspace_bind`（§3.12.3 词表）；会话工具（read/write/edit/bash）沙箱根 = 绑定工作区 scope（legacy 会话仍为 `data/workspaces/<session_id>`，附件 staging 仍落 legacy 目录——附件归属随绑定会话迁移留后续评审）；无 WS 事件/上行变化。2026-09-07：V1.75 用户工作区（《工作区与沙箱设计方案》V0.4.1 F1/G1）：新增用户域 `GET/POST /api/workspaces`、`PUT/DELETE /api/workspaces/{id}`（注销=软删置 `deleted_at`；`purge=true` 行锁内显式解绑会话引用后真删行+目录，FK `ON DELETE RESTRICT` 兜底、禁用 SET NULL）与 `GET/POST /api/workspaces/{id}/files`（一层目录浏览/建文件夹，段级校验+逐段 realpath 前缀重验+符号链接拒绝）；`workspaces` 表 + `sessions.workspace_id/scope_path` 新列（迁移 e8f1a2b3c4d5；会话绑定接线随 F3，本期会话不产生绑定）；孤儿判定与 `delete_orphan` 排除**活跃** `workspaces.id`（行态区分，软删目录入清理面）。REST 增量按版本纪律留档（§3.12.3）；无 WS 事件/上行变化。2026-09-07：V1.74 上下文压缩事件化（dsh 借鉴 #2 首期落地物）：超大工具结果先裁剪再进窗（`NativeToolResultStore` 长度上限与截断标注，模型只见带标注的截断结果）；发生窗口裁剪时落一条持久留痕事件 `context_trim`（§4.3，payload 仅元信息：`reason`（compact/tail_window）/`dropped`/`kept`/`in_scope_total`/`keep_from_id`/`limit`，**不含被裁原文**——观察纪律）；`recent_window` + `compact_keep_from` 算法行为不变；新增 kind 按词汇表纪律版本递增至 `event.v4`（§4.3）。2026-09-07：V1.73 审批终态（dsh 借鉴 #3）：审批卡引入 TTL/终态语义——TTL 常量 `agent_approval_ttl_seconds`（默认 3600，config）；api 侧周期扫描对过期 `tool_approval` 卡行锁清卡并广播持久终态事件 `approval_terminal`（`{approval_id, outcome:"expired"}`）；`/stop` 放弃悬挂审批卡时广播 `outcome:"cancelled"`；**失效判定以卡 `meta.created_at` + 当前时间幂等兜底，不依赖扫描进程存活性**——过期后 ack 一律拒绝且不触发 resume（沿用一次性纪律），`rejected` 语义仍由 `tool_approval_ack(action=reject)` 承载。新增 kind 按词汇表纪律版本递增至 `event.v3`（§4.3）；前端 ApprovalCard 增 disabled/终态展示。2026-09-07：V1.72 clarify 问答恢复（dsh 借鉴 #1，契约转正）：`clarify` 自「无生产者」转正为现行持久事件（§4.3，payload 定稿多题 `questions[]`），`clarify_reply` 自历史资料转正为第 5 类现行上行（§4.4，payload 定稿 `{id, answers[]}` 多题结构，替代 V1.62 单文本）；§9 红线措辞改为「上行/事件 kind 以 §4.4/§4.3 现行清单为准 + 契约评审」。卡存储走 B 路线（§3.1.2 裁决）：三类卡（`task_confirm`/`tool_approval`/`clarify`）共用 `pending_confirm` 单行互斥，`meta` 扩 `confirm_type="clarify"`；新增持久回执事件 `clarify_ack`（`{ok:true,id}`）——按 #4 词汇表纪律，**新增 kind 版本递增为 `event.v2`**（§4.3 词汇表版本段落，`backend/shared/event_vocab.py` 同步升版）。2026-09-07：V1.71 事件词汇表版本化（dsh 借鉴 #4，D0 契约先行）：§4.2 公共头增补可选 `vocab_version` 字段（服务端恒发，旧客户端忽略未知字段即可，无前端改动）；§4.3 新增词汇表版本语义与演进纪律（增删事件必须递增版本，演进理由随修订记录留档）。服务端实现：api 与 worker 共用 `backend/shared/event_vocab.py` 单一事实源（api `_emit_persistent` 与 Worker `push_ws` 落库 payload 均内嵌 `event_version` 保留字段，转发/回放剥离）；api `_forward_loop` 对未知 kind / 版本不符事件按 `event_vocab_strict`（默认 false）告警跳过或 fail-closed 拒收并落 `error`；历史 `ws_events` 无版本行按当前版本解释（只读兼容）。 |
+| 本轮修订 | 2026-09-16：V2.6 登记专家协作 P1 前台闭环：六个 `agent.*` 模型工具、协作/实例/运行/事件/幂等回执持久表、协作查询与停止 REST、Agent 页持久状态面板；2026-09-15：V2.5 登记专家协作 P0 内部运行契约，无新增公开接口。其余历史修订见各版本登记。 |
 | 最近修订 | 2026-09-03：V1.67 混合引擎执行落地（H2 Workflow DAG / H3 Agent TAOR）：恢复持久事件 `tool_call` / `tool_result`（payload 见 §4.3，ToolCard 只渲染脱敏摘要，观察全文不进任何事件）；`response.completed` 的 `engine` 从「分流结论」升级为「真实执行引擎」——`workflow`（H2，W0–W7 硬编码 DAG）与 `agent`（H3，plan→discover→orchestrator⇄tools 单图内 TAOR）均已真实执行，`agent_id` 审计随 Worker 目录（§3.6.3）供归属核验；`thought` / `tool_progress` / `tool_output_delta` / `confirm` / `clarify` 仍不产生。历史 `ws_events` 中的旧工具事件仍不重放。 |2026-09-03：V1.66 混合引擎 H1 Router 审计契约：`response.completed` payload 新增可选 `engine` / `router_confidence` / `router_reason`（仅 `hybrid_engine_enabled=true` 时出现，旧客户端忽略未知字段即可）；新增 `GET /api/agents` Worker 只读目录（§3.6.3）。本版不新增 WS 事件名、不恢复 `thought` / `tool_*`；`workflow` / `agent` 引擎在 H1 阶段降级按 `chat` 执行，`engine` 如实记录分流结论并经 `router_reason` 标注降级。2026-09-02：V1.65 工具契约加固（T1–T3）：JSON Schema 子集新增 `minItems`/`maxItems` 并为 8 处数组参数补上限；`output_schema` 从装饰字段升级为强制契约（注册期拒绝未声明，运行期按声明比对展示投影）；`platform.tasks` 三工具补全 `output_schema`；移除 `/api/mcp/tools/{name}/code` 端点与 `code_snippet` 字段。2026-08-28：V1.53 `web_fetch` 直抓路径接入 trafilatura 正文提取：可读性算法识别文章主体，保留标题层级/链接/图片/表格，未安装或提取失败降级回内置 `_TextExtractor`；提取真实产出 Markdown 时才声明 `format=markdown`（§4.3.1）。V1.52 优化 `web_fetch` 长文完整性与卡片预览：模型正文预算 8,000→60,000 字符，卡片预览与 `read` 同源对齐 `TOOL_PREVIEW_MAX_CHARS` 并随 `web.preview_limit_chars` 下发，直接抓取字节窗口 256KB→1MB（§4.3.1）。2026-08-27：V1.51 新增持久事件 `session_title`（§4.3）与会话标题 AI 生成契约（§4.3.2）：默认标题会话首条消息后由 Agent 协议档弱结构化生成标题并落库广播，修复标题不持久化问题。V1.50 统一 Agent 文本附件 staging 与 `read` 的 20MB 边界；`read` 模型窗口为 2,000 行 / 600,000 字符。V1.49 协议档新增 `max_output_tokens`（256–131072，默认 8192），创建/更新/列表/详情均支持；Agent 模型调用从协议档读取输出上限，长文档总结/导出类任务可调大避免回答被截断。2026-08-26：V1.48 同轮多调用默认串行，灰度开启后仅 `read`/`web_search`/`web_fetch` 可并行，回填按原始 `call_id`。V1.47 新增 `GET /api/agent/metrics`，不含正文/参数，不新增 WS 事件。V1.46 明确 native 一次 ToolCall 结束当前上游响应，结果回填后再请求，不新增事件名。V1.45 思考链只下发可展示摘要，隐藏 CoT（`Here's a thinking process` / `Analyze User Input`）由服务端替换，不原样推给前端。V1.44 ToolCall 在执行前持久化，新增瞬态 `tool_progress` / `tool_output_delta`，并冻结原生工具的输出 Schema、权限边界和失败恢复字段。V1.43 思考增量允许合并下发；有思考链时 `think_final` 在 `response.completed` 之前。V1.42 Direct `/help`、未知斜杠与图内防御提示在业务事件后必须再发 `response.completed`（成功 `stop`，校验/防御 `error`），结束整轮生成态。V1.41 确认卡预填与 `confirm_ack` 入队前丢掉已删除的协议档/数据集/知识库 ID，避免 Worker 再报「协议档不存在或已删除」。V1.40 `/cancel` 与 `/stress` 按 §4.4 解禁（仍走 `user_message`）：`/cancel` 取消本会话非终态任务，`/stress` 发出质量任务确认卡且 `with_stress=true`，禁止 `kind=stress`。V1.39 原生工具卡片收起态副标题统一为 `ToolCall`，不在卡片摘要区回显文件路径、命令或写入内容；详细参数仍在展开区展示。V1.38 明确原生基础 ToolCall 卡片使用英文工具名，展开区统一显示 `ToolCall` 与 `输出`，文件、命令和代码/文档结果使用行号展示；MCP/平台短工具仍按下方中文名映射。2026-08-24：V1.24 修复 Agent 附件上下文链路：服务端校验文件归属并在模型窗口解析文本、PDF、DOCX、XLSX，图片按三协议图文内容块发送；历史消息附件补齐安全元数据，前端可在刷新后继续预览。同步调整输入框内附件按钮与用户消息附件位序。V1.23 扩展 Agent 附件契约，支持图片、Word 文档与多附件拖拽上传；保留 `POST /api/files` 后再以既有 `file_id` 引用的消息链路，补充图片缩略图、PDF/文本预览与 Office 文件打开/下载说明。V1.22 修复 V1.21 遗留：§4.4 标题「仅此三条」改「仅此四条」、§9 禁止清单「第四种」改「第五种」并补四类上行事件枚举、§4.3 `tool_result.source` 语义对齐 M7 `Observation.source`（溯源标识字符串，非 short\|long 枚举）、§4.3 共享流规则补 clarify/plan/confirm 持久化广播说明、§4.4 clarify 多副本限制注明、§9 Ask/Plan 补注非 Harness plan 事件；V1.20 及更早版本沿用历史修订记录。 |
 | 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
 
@@ -3283,3 +3283,45 @@ Worker 事实覆盖一次调用快照，不新增浏览器 WS 字段。
 | `backend/api/app/agent/model_budget.py` | 共享调用次数/并发限制，无新的重试循环 |
 | `backend/api/app/harness/execution/scheduler.py`、`approval.py` | 工具执行身份透传和审批路由隔离 |
 | `backend/api/tests/test_subagent_foundations.py` | P0 并发与取消实验；验证状态详见技术方案 §22 |
+
+## V2.6 专家协作 P1 契约（2026-09-16）
+
+### 模型调度工具
+
+主回合选择 `general` 专家且 `agent_subagents_enabled=true` 时，模型可见以下六个工具。模型 wire 名由平台把点号转为安全名称（如 `agent.spawn` → `platform_agent_spawn`），事实中的 `registry_name` 保留短名。子运行不注入这些工具，因此 P1 最大委派深度固定为 1。
+
+| 工具 | 必填输入 | 语义 |
+| --- | --- | --- |
+| `agent.list` | 无 | 返回可调度专家的公开摘要 |
+| `agent.spawn` | `expert_id,goal,output_contract` | 原子创建实例和首次运行，立即返回 `collaboration_id/instance_id/run_id/status` |
+| `agent.status` | `run_ids[1..8]` | 按输入顺序返回状态与结果可用性 |
+| `agent.wait` | `run_ids[1..8]` | `mode=any\|all`，`timeout_seconds=0..30`；等待不占模型请求槽 |
+| `agent.result` | `run_id` | 返回终态成果；未终态时 `available=false` |
+| `agent.cancel` | `run_id,reason` | 先持久化取消请求与回执，再停止本地运行 |
+
+`agent.spawn` 与 `agent.cancel` 使用服务端注入的 `caller_run_id + call_id` 作为幂等身份。同一身份和相同参数返回原回执；不同参数返回 `CONCURRENCY`。首期每协作最多 8 个实例、3 个并发模型流、80 次模型调用、每个专家 20 次调用；主 Agent 与子 Agent 共用调用账本。该硬限制只针对调用次数，不表示 token 或金额硬预算。
+
+子运行权限取主会话、平台白名单和专家声明交集，且因 P1 没有子运行人工审批通道，只注入当前档位可以自动执行的工具：tier1 为文件/图片只读与 glob/grep，tier2/tier3 才可按既有档位规则获得写改和公开网页能力。不开放 `bash`、人工交互、Worker 任务或继续委派。每个运行使用会话沙箱下 `.subagents/<run_id>` 独立目录。子日志只写 `agent_run_events`，不会把专家历史合并进主会话模型历史。
+
+### REST 查询与停止
+
+| 方法与路径 | 返回/输入 | 权限 |
+| --- | --- | --- |
+| `GET /api/sessions/{session_id}/collaborations?limit=20` | `{items: AgentCollaborationSummary[]}` | 沿用会话可见性 |
+| `GET /api/collaborations/{collaboration_id}` | 协作、预算和 `runs[]` 安全投影 | 沿用父会话可见性 |
+| `GET /api/agent-runs/{run_id}/events?after_seq=-1&limit=100` | 独立运行事实分页 | 沿用父会话可见性 |
+| `POST /api/collaborations/{collaboration_id}/cancel` | `{reason}` → `{accepted,run_ids}` | 仅父会话创建者 |
+| `POST /api/agent-runs/{run_id}/cancel` | `{reason}` → `{accepted,run_id}` | 仅父会话创建者 |
+
+协作状态为 `running/succeeded/failed/cancelled`；运行状态为 `queued/running/succeeded/failed/cancelled`。页面通过持久 REST 投影恢复并在活动期短轮询，因此刷新或 WS 重连不会生成重复实例。P1 仍是前台同进程执行：主回合终态前会停止并等待未完成子任务；跨进程租约恢复、后台续跑、信箱和共享工作项属于 P2/P3。
+
+### V2.6 修改代码文件与作用清单
+
+| 文件 | 作用 |
+| --- | --- |
+| `backend/shared/models.py`、`backend/api/migrations/versions/f70e5a53bd54_新增专家协作与子运行事实表.py` | 五类持久实体及 Alembic 自动生成迁移 |
+| `backend/api/app/agent/{collaboration.py,subagent_log.py,subagent_tools.py}` | 调度器、独立事实日志与六工具契约 |
+| `backend/api/app/agent/loop_wiring.py`、`harness/execution/loop_bridge.py` | 主回合工具装配、权限交集、共享预算和协作回调 |
+| `backend/api/app/routers/collaborations.py` | 会话可见投影、事实分页与停止入口 |
+| `frontend/src/components/agent/loop/CollaborationPanel.vue`、`AgentWorkspace.vue`、`api/{http.ts,types.ts}` | 协作面板、轮询恢复、成果和停止操作 |
+| `backend/api/tests/test_subagent_collaboration.py` | 并行实例、幂等回执、日志隔离与工具目录回归 |

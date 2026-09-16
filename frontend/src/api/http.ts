@@ -56,6 +56,8 @@ import {
   type UserWorkspaceFileContent,
   type CompareSampleRow,
   type McpHealthCheckResponse,
+  type AgentCollaborationDetail,
+  type AgentCollaborationSummary,
 } from './types'
 import {
   MOCK_PROFILES,
@@ -1381,6 +1383,26 @@ export const api = {
       const { data } = await http.post(`/api/workspaces/${id}/files/upload`, form, {
         headers: { 'Content-Type': 'multipart/form-data' },
       })
+      return data
+    },
+  },
+
+  // P1 专家协作：查询可回放状态，并允许会话创建者停止整组或单个专家。
+  collaborations: {
+    async list(sessionId: string): Promise<AgentCollaborationSummary[]> {
+      const { data } = await http.get(`/api/sessions/${sessionId}/collaborations`)
+      return Array.isArray(data) ? data : data.items || []
+    },
+    async get(id: string): Promise<AgentCollaborationDetail> {
+      const { data } = await http.get(`/api/collaborations/${id}`)
+      return data
+    },
+    async cancel(id: string, reason = '用户在专家协作面板停止'): Promise<{ accepted: boolean }> {
+      const { data } = await http.post(`/api/collaborations/${id}/cancel`, { reason })
+      return data
+    },
+    async cancelRun(runId: string, reason = '用户在专家协作面板停止'): Promise<{ accepted: boolean }> {
+      const { data } = await http.post(`/api/agent-runs/${runId}/cancel`, { reason })
       return data
     },
   },

@@ -12,6 +12,7 @@
     </div>
     <p v-if="connectionState && connectionState.connection !== 'online'" class="loop-notice" role="status">{{ connectionState.connection === 'connecting' ? '正在同步会话…' : '连接中断，状态待同步。' }}<button @click="store.clients.get(sessionId)?.connect()">重新连接</button></p>
     <p v-if="connectionState?.error || error" class="loop-notice error" role="alert">{{ connectionState?.error || error }}</p>
+    <CollaborationPanel v-if="sessionId" :session-id="sessionId" :can-control="canControl" />
     <div class="loop-content">
       <div class="loop-center">
         <section v-if="tab==='chat'" ref="chatShell" class="loop-chat-shell" :class="{ 'is-resizing': isResizing, 'is-empty': !rows.length, 'has-interaction': !!activeInteractionDrawer }" :style="chatShellStyle" aria-label="对话内容区域">
@@ -386,6 +387,7 @@ import { copyText } from '../../../utils/clipboard'
 import ProviderLogo from '../../ProviderLogo.vue'
 import MarkdownView from '../MarkdownView.vue'
 import AttachmentPreview from '../AttachmentPreview.vue'
+import CollaborationPanel from './CollaborationPanel.vue'
 import AgentComposer from './AgentComposer.vue'
 import InteractionDrawer from './InteractionDrawer.vue'
 import TaskStateDrawer from './TaskStateDrawer.vue'

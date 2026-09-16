@@ -330,6 +330,127 @@ class WorkspaceExecutionGuard(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
 
 
+class AgentCollaboration(Base):
+    """主回合内一次前台专家协作；状态与预算快照可在浏览器重连后恢复。"""
+
+    __tablename__ = "agent_collaborations"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('running', 'succeeded', 'failed', 'cancelled')",
+            name="ck_agent_collaborations_status",
+        ),
+        UniqueConstraint("session_id", "root_turn", name="uq_agent_collaborations_root_turn"),
+        Index("ix_agent_collaborations_session_created", "session_id", "created_at"),
+    )
+
+    id = Column(String, primary_key=True, default=uuid_str)
+    session_id = Column(String, ForeignKey("sessions.id"), nullable=False, index=True)
+    owner_id = Column(String, ForeignKey("users.id"), nullable=False, index=True)
+    root_turn = Column(Integer, nullable=False)
+    status = Column(String, nullable=False, default="running")
+    goal = Column(Text, nullable=False, default="")
+    budget = Column(JSONB, nullable=False, default=dict)
+    cancel_requested = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+    finished_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class AgentInstance(Base):
+    """冻结专家定义、模型档和委派边界的协作实例。"""
+
+    __tablename__ = "agent_instances"
+    __table_args__ = (
+        CheckConstraint("depth >= 1", name="ck_agent_instances_depth"),
+        Index("ix_agent_instances_collaboration_created", "collaboration_id", "created_at"),
+    )
+
+    id = Column(String, primary_key=True, default=uuid_str)
+    collaboration_id = Column(
+        String, ForeignKey("agent_collaborations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    parent_instance_id = Column(String, ForeignKey("agent_instances.id"), nullable=True)
+    expert_id = Column(String, nullable=False)
+    expert_snapshot = Column(JSONB, nullable=False)
+    profile_snapshot = Column(JSONB, nullable=False)
+    permission_snapshot = Column(JSONB, nullable=False)
+    depth = Column(Integer, nullable=False, default=1)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class AgentRun(Base):
+    """专家实例的一次真实 AgentLoop 运行及其可查询终态。"""
+
+    __tablename__ = "agent_runs"
+    __table_args__ = (
+        CheckConstraint(
+            "status IN ('queued', 'running', 'succeeded', 'failed', 'cancelled')",
+            name="ck_agent_runs_status",
+        ),
+        UniqueConstraint("instance_id", "generation", name="uq_agent_runs_instance_generation"),
+        Index("ix_agent_runs_collaboration_status", "collaboration_id", "status"),
+    )
+
+    id = Column(String, primary_key=True, default=uuid_str)
+    collaboration_id = Column(
+        String, ForeignKey("agent_collaborations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    instance_id = Column(
+        String, ForeignKey("agent_instances.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    generation = Column(Integer, nullable=False, default=1)
+    status = Column(String, nullable=False, default="queued")
+    goal = Column(Text, nullable=False)
+    output_contract = Column(Text, nullable=False)
+    result = Column(JSONB, nullable=True)
+    error_code = Column(String, nullable=True)
+    cancel_requested = Column(Boolean, nullable=False, default=False)
+    next_seq = Column(BigInteger, nullable=False, default=0)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    updated_at = Column(DateTime(timezone=True), nullable=False, default=utcnow, onupdate=utcnow)
+    finished_at = Column(DateTime(timezone=True), nullable=True)
+
+
+class AgentRunEvent(Base):
+    """单个专家运行的不可变事实日志；不与主会话历史混写。"""
+
+    __tablename__ = "agent_run_events"
+    __table_args__ = (
+        UniqueConstraint("run_id", "seq", name="uq_agent_run_events_run_seq"),
+        UniqueConstraint("run_id", "logical_key", name="uq_agent_run_events_logical_key"),
+        Index("ix_agent_run_events_run_seq", "run_id", "seq"),
+    )
+
+    id = Column(String, primary_key=True, default=uuid_str)
+    run_id = Column(String, ForeignKey("agent_runs.id", ondelete="CASCADE"), nullable=False)
+    seq = Column(BigInteger, nullable=False)
+    type = Column(String, nullable=False)
+    logical_key = Column(String, nullable=True)
+    envelope = Column(JSONB, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
+class AgentCommandReceipt(Base):
+    """模型调度变更命令的幂等回执；同一调用不能用不同参数重放。"""
+
+    __tablename__ = "agent_command_receipts"
+    __table_args__ = (
+        UniqueConstraint("caller_run_id", "call_id", name="uq_agent_command_receipts_call"),
+    )
+
+    id = Column(String, primary_key=True, default=uuid_str)
+    collaboration_id = Column(
+        String, ForeignKey("agent_collaborations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    caller_run_id = Column(String, nullable=False)
+    call_id = Column(String, nullable=False)
+    command = Column(String, nullable=False)
+    fingerprint = Column(String, nullable=False)
+    result = Column(JSONB, nullable=False)
+    created_at = Column(DateTime(timezone=True), nullable=False, default=utcnow)
+
+
 class ProtocolProfile(Base):
     """两类协议档及仅写入的加密上游凭据。"""
 

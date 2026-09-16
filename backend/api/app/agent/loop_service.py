@@ -44,6 +44,7 @@ class _Entry:
     approval_gate: Callable | None = None
     approval_owner: tuple[str, str] | None = None
     writer_released: bool = False
+    collaboration_coordinator: object | None = None
 
 
 class LoopService:
