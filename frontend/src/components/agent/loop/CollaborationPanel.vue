@@ -121,7 +121,8 @@ async function cancelRun(runId: string) {
 // 独立展开每位专家的成果。
 function toggleResult(runId: string) {
   const next = new Set(expanded.value)
-  next.has(runId) ? next.delete(runId) : next.add(runId)
+  if (next.has(runId)) next.delete(runId)
+  else next.add(runId)
   expanded.value = next
 }
 
