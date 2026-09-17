@@ -1822,6 +1822,7 @@ const VENDOR_NAMES: Record<ProviderLogoKey, string> = {
   nvidia: 'NVIDIA NIM',
   mimo: 'Xiaomi Mimo',
   openai: 'OpenAI',
+  newapi: 'New API',
   anthropic: 'Anthropic Claude',
   deepseek: 'DeepSeek',
   stepfun: 'StepFun (阶跃星辰)',

@@ -106,6 +106,7 @@
         />
         <span class="small tertiary">{{ selectedTemplate?.description || '模板会在保存前以真实请求验证，未通过不会保存模型。' }}</span>
         <span v-if="props.profile?.reasoning_probe_status" class="small tertiary">当前状态：{{ probeStatusText }}</span>
+        <span v-if="isEdit" class="small tertiary">原生工具：{{ toolProbeStatusText }}</span>
       </div>
 
       <div class="field">
@@ -171,7 +172,7 @@
             <n-radio-button value="legacy">兼容 JSON-ReAct</n-radio-button>
           </n-space>
         </n-radio-group>
-        <span class="small tertiary">默认使用原生模式；仅在目标网关不支持 tools 字段时切换为兼容模式。已有协议档保持原设置。</span>
+        <span class="small tertiary">此设置影响首轮流式兼容策略；工具发送仍受平台开关控制。勾选 Agent 用途后，保存时会验证工具调用及结果回填。</span>
       </div>
 
       <div class="field">
@@ -300,6 +301,7 @@ const form = ref<{
 
 const ALL_PROTOCOL_OPTIONS: Array<{ label: string; value: ProtocolType }> = [
   { label: 'OpenAI Chat (/chat/completions)', value: 'openai_chat' },
+  { label: 'OpenAI Responses (/responses)', value: 'openai_responses' },
   { label: 'Anthropic Messages (/messages)', value: 'anthropic_messages' },
 ]
 
@@ -318,7 +320,7 @@ const vendorProtocolHint = computed(() => {
   if (!vendor) return ''
   const supported = ALL_PROTOCOL_OPTIONS
     .filter(option => vendor.protocols[option.value])
-    .map(option => option.value === 'openai_chat' ? 'OpenAI Chat' : 'Anthropic Messages')
+    .map(option => option.label.split(' (')[0])
     .join('、')
   const note = selectedProtocolPreset.value?.note
   return `${vendor.name} 已核对协议：${supported}。${note ? ` ${note}` : ''}`
@@ -328,6 +330,7 @@ const VENDOR_BY_PROVIDER: Record<string, string> = { google: 'gemini' }
 const reasoningTemplateOptions = computed(() => reasoningTemplates.value.map(template => ({ label: template.name, value: template.id })))
 const selectedTemplate = computed(() => reasoningTemplates.value.find(template => template.id === form.value.reasoning_template_id) || null)
 const probeStatusText = computed(() => ({ legacy: '旧规则兼容', unverified: '待验证', passed: '已通过', partial: '部分通过', failed: '验证失败' }[props.profile?.reasoning_probe_status || 'legacy']))
+const toolProbeStatusText = computed(() => ({ unverified: '未验证', passed: '往返已通过（单档位）', failed: '未通过，请检查模型或通道配置', skipped: '未执行' }[props.profile?.tool_probe_status || 'unverified']))
 // 连续输入、切换供应商和协议会并发拉取；只有最后一次响应有资格改写模板选择。
 let templateLoadRevision = 0
 // 用户显式选择后保留；新建及失效配置默认跟随当前模型的推荐。
@@ -374,14 +377,14 @@ async function handleSelectVendor(val: string | null) {
   const item = VENDOR_MAP[val]
   const preset = item.protocols[item.default_protocol]
   if (!preset) return
-  form.value.api_key = ''
+  form.value.api_key = preset.api_key || ''
   fetchedModelList.value = []
   form.value.full_url = false
   form.value.base_url = preset.base_url
   form.value.protocol = item.default_protocol
   form.value.context_window = item.context_window || 200000
   form.value.model = preset.model
-  form.value.name = `${item.name} (${preset.model})`
+  form.value.name = preset.model ? `${item.name} (${preset.model})` : item.name
   await loadReasoningTemplates()
   if (preset.base_url) {
     message.info(`已快速填充 ${item.name} 厂商端点与协议配置`)
@@ -403,10 +406,11 @@ async function handleProtocolChange(protocol: ProtocolType) {
     clearModelParameters()
     fetchedModelList.value = []
     form.value.full_url = false
-    form.value.base_url = preset.base_url
-    form.value.model = preset.model
+    const selfHosted = vendor.key === 'newapi' || vendor.key === 'ollama'
+    form.value.base_url = selfHosted ? form.value.base_url || preset.base_url : preset.base_url
+    form.value.model = selfHosted ? form.value.model || preset.model : preset.model
     form.value.context_window = vendor.context_window || 200000
-    form.value.name = `${vendor.name} (${preset.model})`
+    form.value.name = form.value.model ? `${vendor.name} (${form.value.model})` : vendor.name
   }
   await loadReasoningTemplates()
   if (vendor && preset && !preset.base_url) {
@@ -502,6 +506,7 @@ async function onBatchCreate(modelIds: string[]) {
   saving.value = true
   try {
     let count = 0
+    let toolFailures = 0
     for (const mId of modelIds) {
       const vendorName = selectedVendor.value ? VENDOR_MAP[selectedVendor.value]?.name : '模型'
       // 系统推荐随批量中的具体模型重新计算，显式选择的模板则保持不变。
@@ -530,8 +535,10 @@ async function onBatchCreate(modelIds: string[]) {
         return
       }
       count++
+      if (result.probe.tool_probe?.status === 'failed') toolFailures++
     }
-    message.success(`已批量创建 ${count} 个模型协议档！`)
+    if (toolFailures) message.warning(`已创建 ${count} 个协议档，其中 ${toolFailures} 个原生工具未通过，请检查后再用于 Agent。`, { duration: 10000 })
+    else message.success(`已批量创建 ${count} 个模型协议档！`)
     emit('update:show', false)
     emit('success')
   } catch (err: any) {
@@ -549,7 +556,7 @@ watch(
       templateSelectionManual.value = Boolean(profileVal?.reasoning_template_id
         && ['passed', 'partial'].includes(profileVal.reasoning_probe_status || ''))
       selectedVendor.value = props.initialData?.vendorKey
-        || (profileVal ? findPresetVendor(profileVal.base_url, profileVal.protocol) : null)
+        || (profileVal ? findPresetVendor(profileVal.base_url, profileVal.protocol, profileVal.name) : null)
         || null
       clearModelParameters()
       if (profileVal) {
@@ -650,7 +657,8 @@ async function handleSave() {
         message.error(result.message)
         return
       }
-      message.success(result.message)
+      if (result.probe.tool_probe?.status === 'failed') message.warning(result.message, { duration: 10000 })
+      else message.success(result.message)
     } else {
       const payload: ProfileProbeCreateIn = {
         name,
@@ -671,7 +679,8 @@ async function handleSave() {
         message.error(result.message)
         return
       }
-      message.success(result.message)
+      if (result.probe.tool_probe?.status === 'failed') message.warning(result.message, { duration: 10000 })
+      else message.success(result.message)
     }
     emit('update:show', false)
     emit('success')

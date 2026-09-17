@@ -2,9 +2,9 @@
 
 > ⚠️ **文档维护提示（2026-09-11）**：本文部分章节含历史实现引用（`agent/react.py`、`plan_solve.py`、`reflect.py`、`clarify.py` 等模块已删除，ReAct / Plan-Solve 图已由 AgentLoop v2 取代）；当前实现与契约以 `AGENTS.md` 状态地图及本文最新修订为准。
 
-> 版本：V1.7.12
+> 版本：V1.7.13
 > 状态：新建会话统一使用 AgentLoop v2；历史 legacy 行仅保留审计与显式回放路径。此前骨架化与混合引擎说明属于 legacy 路径及其历史阶段，不能据此认定新路径仍为纯对话。前端输入栏按每回合协议档选择模型和思考强度，完整真实供应商/Linux Runner 联调验收仍未结束。
-> 审查日期：2026-09-14
+> 审查日期：2026-09-17
 > 对应需求：`AI测试与评估平台-PRD.md` V1.21
 > 对应接口：`AI测试与评估平台-API.md` V1.97
 
@@ -640,3 +640,19 @@ AgentLoop 的专家选择仍由 `agent/experts.py` 按回合解析：缺省或�
 配置键先用 `INSERT ... ON CONFLICT DO NOTHING` 幂等创建，再 `SELECT FOR UPDATE` 并刷新 ORM 缓存；修订校验、覆盖层 flush 和无正文审计同事务提交。首次保存不再依赖 autoflush 读回未写入的内容，两个专家不会互相丢失映射，同专家旧修订拒绝覆盖。损坏配置 fail-closed；编辑器按请求代次隔离读取，保存期间禁止重复提交，恢复内置只填草稿。
 
 修改代码文件与作用清单：`backend/api/app/expert_prompt_settings.py`、`routers/admin.py` 修复持久化及异常边界；`tests/test_agent_experts.py`、`test_expert_prompt_concurrency_pg.py`、`test_loop_wiring.py` 验证真实 Session、PostgreSQL 并发与回合快照；`frontend/src/composables/useExpertPromptEditor.ts`、`components/modals/AgentExpertPromptModal.vue` 管理草稿和请求生命周期；`views/AdminProfiles.vue` 保护目录刷新与既有导出格式；`api/http.ts` 修复 Mock 保存后重读；`frontend/tests/expertPromptEditor.test.mjs` 覆盖前端竞态。
+
+
+## 2026-09-17 Responses 协议增量
+
+AgentLoop 的模型协议新增 `openai_responses`；接口以 API V2.10、PRD V1.32 为准。
+使用 `input`、`instructions`、扁平函数工具与 `max_output_tokens`；`store=false`，回传原始 output 项保留加密 reasoning，工具结果用 `call_id` 配对。协议状态继续校验供应商/模型/协议兼容性，不向普通 WS 文本暴露。
+流中只投影正文、推理摘要与函数参数；必须收到明确终态才生成 Done，EOF 不补成功。失败归一安全错误，输出截断标记 length。输入 token 预算与实际序列化使用同一 codec。
+旧 ModelGateway 仍从 adapters.py 分流至同步 Responses 桥接，共享消息转换位于 shared/responses.py。
+
+### 修改代码文件与作用清单
+
+- `backend/api/app/llm/providers/responses.py`、`resolver.py`：异步 SDK、工具调用与原始输出项回填。
+- `backend/api/app/llm/providers/options.py`、`reasoning_templates.py`：Responses 思考字段与逐档验证模板。
+- `backend/api/app/agent/loop_wiring.py`：真实请求输入投影与上下文预算。
+- `backend/api/app/responses_adapter.py`、`adapters.py`：同步兼容调用及流取消/失败归一。
+- `backend/api/tests/test_responses_protocol.py`：真实 SDK 的本地 HTTP 夹具、工具完整回合与下一轮重放。

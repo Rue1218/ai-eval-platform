@@ -457,7 +457,7 @@ class ProtocolProfile(Base):
     __tablename__ = "protocol_profiles"
     __table_args__ = (
         CheckConstraint(
-            "protocol IN ('openai_chat', 'anthropic_messages')",
+            "protocol IN ('openai_chat', 'openai_responses', 'anthropic_messages')",
             name="ck_protocol_profiles_protocol",
         ),
     )

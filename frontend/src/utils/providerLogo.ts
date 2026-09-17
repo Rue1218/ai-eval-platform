@@ -1,7 +1,7 @@
 export type ProviderLogoKey =
   | 'stepfun' | 'nvidia' | 'mimo' | 'openai' | 'anthropic' | 'gemini' | 'deepseek'
   | 'siliconflow' | 'qwen' | 'volcengine' | 'qianfan' | 'hunyuan'
-  | 'minimax' | 'grok' | 'groq' | 'ollama' | 'zhipu' | 'moonshot' | 'mistral' | 'together' | 'custom'
+  | 'newapi' | 'minimax' | 'grok' | 'groq' | 'ollama' | 'zhipu' | 'moonshot' | 'mistral' | 'together' | 'custom'
 
 /** 仅按模型 ID 推断模型品牌图标，不能读取供应商名称或端点。 */
 export function getModelLogoKey(modelId?: string | null): ProviderLogoKey {
@@ -60,6 +60,8 @@ export function getServiceLogoKey(profile: { base_url?: string; name?: string; p
   if (url.includes('together')) return 'together'
 
   // 无法从端点判断时，才使用协议档名称的显式服务商信息。
+  if (/new[ -]?api/.test(name)) return 'newapi'
+  if (name.includes('ollama')) return 'ollama'
   if (name.includes('stepfun') || name.includes('阶跃')) return 'stepfun'
   if (name.includes('nvidia')) return 'nvidia'
   if (name.includes('mimo')) return 'mimo'
@@ -78,7 +80,6 @@ export function getServiceLogoKey(profile: { base_url?: string; name?: string; p
   if (name.includes('minimax')) return 'minimax'
   if (name.includes('grok') || name.includes('xai')) return 'grok'
   if (name.includes('groq')) return 'groq'
-  if (name.includes('ollama')) return 'ollama'
   if (name.includes('together')) return 'together'
 
   if (profile.provider === 'google') return 'gemini'
@@ -91,6 +92,6 @@ function isProviderLogoKey(value: string): value is ProviderLogoKey {
   return [
     'stepfun', 'nvidia', 'mimo', 'openai', 'anthropic', 'gemini', 'deepseek',
     'siliconflow', 'qwen', 'volcengine', 'qianfan', 'hunyuan', 'minimax', 'grok',
-    'groq', 'ollama', 'zhipu', 'moonshot', 'mistral', 'together', 'custom',
+    'newapi', 'groq', 'ollama', 'zhipu', 'moonshot', 'mistral', 'together', 'custom',
   ].includes(value as ProviderLogoKey)
 }

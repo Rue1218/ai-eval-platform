@@ -15,7 +15,7 @@ def model_request_url(base_url: str, protocol: str, *, full_url: bool = False) -
     if full_url:
         return url
     path = parts.path.rstrip("/")
-    for suffix in ("/chat/completions", "/messages", "/models"):
+    for suffix in ("/chat/completions", "/responses", "/messages", "/models"):
         if path.endswith(suffix):
             path = path[:-len(suffix)]
             break
@@ -24,5 +24,5 @@ def model_request_url(base_url: str, protocol: str, *, full_url: bool = False) -
                  else re.search(r"/v\d+(?:beta\d*|alpha\d*)?(?:/openai)?$", path))
     if not versioned:
         path += "/v1"
-    path += "/messages" if protocol == "anthropic_messages" else "/chat/completions"
+    path += {"anthropic_messages": "/messages", "openai_responses": "/responses"}.get(protocol, "/chat/completions")
     return urlunsplit((parts.scheme, parts.netloc, path, "", ""))

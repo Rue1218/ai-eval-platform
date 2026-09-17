@@ -5,6 +5,36 @@ import pytest
 from app import protocol
 
 
+def test_responses_worker_wire_usage_and_failure(monkeypatch):
+    """评测发送 Responses 字段，记录真实用量，拒绝 HTTP 200 的截断输出。"""
+    captured = []
+    payload = {"status": "completed", "output": [
+        {"type": "message", "content": [{"type": "output_text", "text": "完成"}]}],
+        "usage": {"input_tokens": 12, "output_tokens": 8,
+                  "output_tokens_details": {"reasoning_tokens": 3}}}
+
+    def post(url, body, headers, timeout_s):
+        """替换外部网络，保留协议请求和响应解析。"""
+        captured.append((url, body, headers))
+        return payload
+
+    monkeypatch.setattr(protocol, "_post_json", post)
+    args = dict(protocol="openai_responses", base_url="https://unit.invalid/v1/responses",
+                model="gpt-5.4", api_key="unit", system="简短回答", messages=[{"role": "user", "content": "问"}])
+    result = protocol.call_protocol(**args)
+    assert result.text == "完成" and result.usage["total_tokens"] == 20
+    assert result.usage["reasoning_tokens"] == 3
+    url, body, headers = captured[0]
+    assert url == args["base_url"]
+    assert body["input"] == args["messages"] and body["instructions"] == args["system"]
+    assert body["max_output_tokens"] == 1024 and body["store"] is False
+    assert "temperature" not in body and "messages" not in body
+    assert headers["Authorization"] == "Bearer unit"
+    payload["status"] = "incomplete"
+    with pytest.raises(protocol.ProtocolCallError, match="UPSTREAM"):
+        protocol.call_protocol(**args)
+
+
 @pytest.mark.parametrize("kind", ["openai_chat", "anthropic_messages"])
 def test_full_endpoint_is_used_unchanged(monkeypatch, kind):
     """Worker 完整 URL 与 API 行为一致，不追加资源后缀。"""

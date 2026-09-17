@@ -4,9 +4,10 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V2.9 |
+| 文档版本 | V2.12 |
+| 本轮审查日期 | 2026-09-17（Responses / New API / Ollama） |
 | WS v2 修订日期 | 2026-09-13（§4A，模型错误安全摘要） |
-| 对应 PRD | V1.30（功能唯一权威） |
+| 对应 PRD | V1.32（功能唯一权威） |
 | 对应设计规范 | V1.12（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.7.8（AgentLoop 单入口；JSON 仍以本文为准） |
 | 对应前端计划 | AgentLoop 前端计划 V0.5 |
@@ -44,7 +45,7 @@
 >
 > V1.81（2026-09-09）：不新增 REST 或 WS 字段。`subscribe` 的 attach 阶段在回放前检查持久开放回合：只有成功取得已释放的 PostgreSQL advisory writer lock，才结算硬重启遗留的 `turn.end(reason="interrupted")`；锁仍被存活实例持有时只订阅，不转移控制权或关闭其回合。每回合按所选 Agent 协议档读取已保存的补充提示词，核心提示词优先、补充段不可缓存，并在读取时再次拒绝疑似密钥或接管性内容。`task.create` 的评测档和裁判档使用全员同权协议档目录，`created_by` 仅为审计字段。CI 同时运行三组 Loop PostgreSQL 夹具和 Runner 回归；真实 cgroup v2 进程树取消仍需部署环境验收。
 >
-> V1.82（2026-09-09）：协议档只接受 `openai_chat` 与 `anthropic_messages`。删除 OpenAI Responses 的请求适配、模型列表分支和前端选项；迁移执行时删除全部 `openai_responses` 档、其受控环境文件变量及历史数据库密文，并清理指向被删除档位的 `settings.agent_profile_id`，避免 Agent 留下失效默认配置。历史任务与报告的快照不改写；新请求携带已删除协议一律返回 `VALIDATION`。
+> V1.82（2026-09-09，历史；V2.10 已重新加入 Responses，原有删除迁移不回改、不恢复已删除档案）：协议档只接受 `openai_chat` 与 `anthropic_messages`。删除 OpenAI Responses 的请求适配、模型列表分支和前端选项；迁移执行时删除全部 `openai_responses` 档、其受控环境文件变量及历史数据库密文，并清理指向被删除档位的 `settings.agent_profile_id`，避免 Agent 留下失效默认配置。历史任务与报告的快照不改写；新请求携带已删除协议一律返回 `VALIDATION`。
 >
 > V1.80（2026-09-09）：AgentLoop 成为**唯一新会话引擎**。`POST /api/sessions` 的 `engine_version` 仅接受且默认 `agent_loop_v2`；历史 `legacy` 行仍可读取，但不能借创建或 WS 入口回退。删除 `AGENT_LOOP_ENABLED` 开关，旧 `/ws/agent` 必须显式携带历史会话 ID，否则关闭 4400；新会话只使用 `/ws/agent/v2`。`turn.submit.data` 新增可选 `profile_id`，只能是平台协议档 ID：服务端每回合重新校验 Agent 用途、连接凭据、模型与 `reasoning_effort`，浏览器不能传模型地址、密钥或供应商参数。`agent-ui` 增量 `profiles[]`，并将 `profile` 扩为同形脱敏投影，供输入栏逐回合选择模型和思考强度。
 >
@@ -225,7 +226,7 @@ WS `error` 事件 payload 与上表同一套 `code` + `message`（可带 `fields
 | `role` | `member`（PRD 2.1 单一角色；历史三角色字段不再作为 V1.0 契约） |
 | `kind` | `benchmark` `rag` `testcase` `stress` |
 | `task_status` | `queued` `running` `succeeded` `failed` `cancelled` `awaiting_case_confirm` |
-| `protocol` | `openai_chat` `anthropic_messages` |
+| `protocol` | `openai_chat` `openai_responses` `anthropic_messages` |
 | `profile_usage` | `target` `agent` `judge`（被测 / Agent 后端 / 裁判；同一档可多用途，**Agent 后端全局仅一个**，见 settings） |
 | `metric` | `exact` `contain` `regex` `rouge_l` `bleu` |
 | `rag_mode` | `naive` `local` `global` `hybrid` |
@@ -697,7 +698,7 @@ V2.2 修订（替代 V2.1 的模型族硬限制和超时说明）：供应商与
 
 #### `GET /api/profiles/reasoning-templates`
 
-参数：`provider`（供应商标识）、`protocol`（`openai_chat` / `anthropic_messages`）和必填 `model`（目标模型 ID）。返回当前组合可选择的静态模板摘要：`id,name,provider,protocol,mode,allowed_efforts,default_effort,description,version`。模板是平台受控的参数适配器目录，不接收任意 JSON 请求覆盖，也不回传密钥。
+参数：`provider`（供应商标识）、`protocol`（`openai_chat` / `openai_responses` / `anthropic_messages`）和必填 `model`（目标模型 ID）。返回当前组合可选择的静态模板摘要：`id,name,provider,protocol,mode,allowed_efforts,default_effort,description,version`。模板是平台受控的参数适配器目录，不接收任意 JSON 请求覆盖，也不回传密钥。
 
 #### `POST /api/profiles/probe-create`
 
@@ -3446,3 +3447,44 @@ Worker 事实覆盖一次调用快照，不新增浏览器 WS 字段。
 - `agent/collaboration.py`、`agent/subagent_tools.py`、`agent/loop_wiring.py`：派发契约、材料投影、冻结专家提示与终态验收。
 - `frontend/src/api/types.ts`、`components/agent/loop/CollaborationPanel.vue`：草稿验收状态和可追溯引用展示。
 - `backend/api/tests/test_benchmark_preparation.py`：真实持久化与调度链路、越权/篡改/伪造/取消回归；供应商调用使用替身，真实模型试点另行验收。
+
+
+## 2026-09-17 Responses 协议与 New API / Ollama 供应商
+
+- 协议枚举增加 `openai_responses`，适用于协议档创建/更新、模型发现、验证、Agent、Judge、被测模型和派生压测。默认路径为 `POST {base}/v1/responses`；已有版本段不重复追加，完整 URL 保留路径与查询串。
+- 请求使用 `input`、`instructions`、`max_output_tokens` 和扁平函数工具，默认 `store=false`；工具结果以 `function_call_output.call_id` 配对。平台持有完整历史，Responses 的原始 output 项（含加密 reasoning）按现有协议状态兼容边界回填，不依赖 previous_response_id。
+- 流式文本/思考摘要/函数参数映射到既有 Agent 事件，不增加 WS 事件名。失败/缺少终态不视为成功；截断以 length 收尾，非流式评测拒绝截断响应。input_tokens/output_tokens 归一用量，保留缓存与推理明细。
+- 新建供应商增加 New API 与 Ollama。New API 可选 Chat、Responses、Messages，地址和模型由用户填写；实际通道支持以真实探测为准。Ollama 提供 Chat 和 Responses，默认地址 http://localhost:11434/v1，必须改为 API/Worker 可访问地址（容器中的 localhost 指容器自身），模型从服务获取或手填。
+- Ollama 本地服务可用 `ollama` 作为 SDK 所需的非空占位 Key，受认证代理应填写真实 Key；不放宽其它协议档凭据校验。供应商仍沿用现有预设/端点/名称识别，不新增持久供应商字段。
+- Responses 受控思考模板使用 reasoning.effort；各档位必须真实验证通过后才保存为可选能力。
+
+### 修改代码文件与作用清单
+
+| 文件 | 作用 |
+| --- | --- |
+| `backend/shared/responses.py`、`model_urls.py`、`models.py` | 共享编解码、端点及协议约束 |
+| `backend/api/migrations/versions/*responses*.py` | 扩展协议 CHECK 约束，回退前拒绝存在 Responses 档 |
+| `backend/api/app/llm/providers/responses.py`、`options.py`、`reasoning_templates.py`、`resolver.py` | 原生 Responses 流、历史回填与思考模板 |
+| `backend/api/app/adapters.py`、`schemas.py`、`routers/profiles.py`、`agent/loop_wiring.py` | 旧调用路径、接口枚举与输入预算 |
+| `backend/worker/app/protocol.py`、`stress.py` | Worker 评测及派生压测 |
+| `frontend/src/utils/profileVendors.ts`、`providerLogo.ts`、`components/modals/ProfileModal.vue`、`api/types.ts` | 供应商预设、协议选择与类型 |
+
+协议依据：[OpenAI Responses 迁移指南](https://developers.openai.com/api/docs/guides/migrate-to-responses)、[Ollama OpenAI 兼容接口](https://docs.ollama.com/api/openai-compatibility)。
+
+
+### V2.11 Responses 工具与供应商思考兼容审查（2026-09-17）
+
+Ollama Responses 增加 `ollama-responses-effort-v1` 模板，将统一档位映射到 `reasoning.effort` 的 none/low/medium/high/max。OpenAI Chat 与通用 Responses 模板版本升至 3：早期推理型号最高映射 high，GPT-5.1-Codex-Max 及后续型号/未知兼容端点验证 xhigh 候选，探测对相同参数去重。旧模板版本的探测不能继续授权档位，需要重新验证；REST/WS 字段及事件不变。供应商保存前探测只验证文本/思考能力，不保证实际模型的工具支持。详细范围及官方依据见《协议档供应商思考适配》V1.3。
+
+修改代码文件与作用清单：`backend/shared/reasoning.py` 共用最高档映射；`backend/api/app/llm/providers/{reasoning_templates,options}.py` 提供 Ollama Responses 模板与版本校验；`backend/api/app/responses_adapter.py` 同步映射；`backend/api/tests/test_responses_protocol.py` 覆盖多工具回填、异常禁止调度与 SDK 参数；`frontend/src/components/ProviderLogo.vue` 与 `assets/providers/{newapi,ollama}.svg` 补齐完整供应商图标。
+
+
+### V2.12 协议档原生工具往返验证（2026-09-17）
+
+`POST /api/profiles/probe-create` 和 `POST /api/profiles/{id}/probe-update` 在思考验证通过且 usages 包含 agent 时，选模板默认的已通过档位（否则首个通过档位）执行最多两次模型调用：请求固定的无副作用探测函数、回填随机结果并要求准确复述。必须有完整调用身份、合法参数、可回放的推理状态和成功终态；文本自称支持工具不算成功。两次请求共用 30 秒上限；文本/思考阶段仍为最多五档并发及 30 秒上限。探测总时限为 55 秒（工具阶段使用剩余时间，另预留资源清理），低于 REST 代理默认的 60 秒；前端探测请求超时调整为 70 秒。
+
+`probe` 增加 `tool_probe: {status: passed|failed|skipped, effort?: string, error_code?: string}`，沿用 reasoning_probe JSON 存储；只存安全状态，不存模型正文、随机值或密钥。未选择 Agent 用途或思考验证失败时为 skipped。工具验证失败不抹去已通过的思考档位，不阻止保存评测用协议档；message 明确警告原生工具未通过，前端用警告反馈。此结果不是运行时授权或全档位能力保证，不修改工具装配开关。
+
+ProfileOut 新增只读 `tool_probe_status: unverified|passed|failed|skipped`，默认 unverified。旧配置和已失效思考验证不能显示工具已通过；更换 API Key 或 anthropic_version 同样使旧探测失效；编辑页显示状态以支持重新验证。工具模式 legacy 也不跳过检测，它并非原生 tools 的运行时禁用开关。
+
+修改代码文件与作用清单：`profile_tool_probe.py` 实现无副作用工具往返；`profile_probe.py` 调度与安全结果；`routers/profiles.py`、`schemas.py` 投影状态和提示；前端 `api/{types,http}.ts`、`components/modals/ProfileModal.vue` 显示结果及超时；相关测试验证真实 SDK 和错误路径。

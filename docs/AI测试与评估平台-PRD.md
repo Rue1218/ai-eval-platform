@@ -4,7 +4,8 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.31 |
+| 文档版本 | V1.33 |
+| 本轮审查日期 | 2026-09-17（Responses / New API / Ollama） |
 | 文档状态 | V1.31 已实现三类准备专家与受控草稿；V1.30 的完整计划/报告连接仍待实现，后台恢复与专家通讯仍待 P2/P3 |
 | 撰写日期 | 2026-08-17 |
 | 本轮修订 | 2026-09-16：V1.31 实现三类准备专家、固定版本引用交接、严格成果验收与前端草稿标识；完整修订链、资产/报告引用、冻结计划入队与真实供应商试点尚未交付。 |
@@ -63,14 +64,14 @@
 | 模块 | 职责 |
 | --- | --- |
 | A. Agent | 会话、拆解、确认卡、进度；**不执行长任务** |
-| B. Benchmark | 自定义文本集、两类协议调用、规则评分 / Judge、对比与基线 |
+| B. Benchmark | 自定义文本集、三类协议调用、规则评分 / Judge、对比与基线 |
 | C. RAG | Compose 内 LightRAG，或外部 **OpenAI Chat Completions** RAG HTTP |
 | 共享压测 | 质量成功后压同一推理 / query 接口；平台面板 + Prometheus scrape |
 
 ### 1.3 目标
 
 1. 对话完成：用例（可选）→ Benchmark 和 / 或 RAG →（可选）压测 → 报告。
-2. 兼容 `openai_chat`、`anthropic_messages`；Agent / Judge / 被测均可切换。
+2. 兼容 `openai_chat`、`openai_responses`、`anthropic_messages`；Agent / Judge / 被测均可切换。
 3. 无内置公开榜单；集来自 JSONL/CSV 或用例映射。
 4. 一张 Compose 拉起：`web` `api` `worker` `postgres` `lightrag` `stress`（go-stress-testing 扩展）。
 
@@ -88,7 +89,7 @@
 
 | 术语 | 含义 |
 | --- | --- |
-| 协议档 | `openai_chat` / `anthropic_messages` 之一 + 主模型 base_url/模型名/Key；可选 Embedding、Reranker 各自 base_url/模型名/Key，均写入受控环境文件 |
+| 协议档 | `openai_chat` / `openai_responses` / `anthropic_messages` 之一 + 主模型 base_url/模型名/Key；可选 Embedding、Reranker 各自 base_url/模型名/Key，均写入受控环境文件 |
 | 会话 | 每成员可多开；默认仅创建者可见，也可由创建者设为团队共享；**会话内任务串行**，会话间可并行（受平台并发上限） |
 | 长任务 | `benchmark.run` / `rag.evaluate` / `testcase.generate` 由 **worker 进程执行**；`stress.run` 由 worker **下发到 stress 容器**（go-stress-testing） |
 | 短工具 | `*.list` / `report.get` / `task.get`，Agent 可同步调用 |
@@ -121,12 +122,12 @@
 WebSocket 短票
   -> LangGraph Agent Graph（单轮）
   -> ModelGateway（LangGraph 模型调用图）
-  -> 两类协议适配器
+  -> 三类协议适配器
   -> user_message / thought / assistant_delta / assistant_message / response.completed / error / pong
 ```
 
 - `app/agent/graph.py` 只编排一次模型调用，不持有数据库、WebSocket、工具或任务状态；
-- `app/llm/` 只负责 `ModelRequest`、`ModelResponse`、两类协议适配与流式事件，不承载 Harness；
+- `app/llm/` 只负责 `ModelRequest`、`ModelResponse`、三类协议适配与流式事件，不承载 Harness；
 - `app/routers/ws.py` 负责短票、会话事件、后台 Task 和流式 WS 投影，收包循环不得等待整轮模型调用；
 - 首期支持 `user_message(role=user)`、`thought` 思考摘要、`assistant_delta` 正文增量、`assistant_message` 最终交付句和 `response.completed` 结束信号；`pong` 为独立应用层心跳；`message` 不再作为新用户回显事件；
 - Harness、ReAct/MCP、人工确认、任务取消、长任务队列和记忆层属于后续设计，不得在首期代码中提前实现。
@@ -236,7 +237,7 @@ queued → running → succeeded
 
 ### 4.1 内
 
-三模块、共享压测、两类协议、内部 MCP、用例/评测 Skill、Naive UI 工作台、Compose 六件套（含 stress）、Grafana scrape、预算与并发。
+三模块、共享压测、三类协议、内部 MCP、用例/评测 Skill、Naive UI 工作台、Compose 六件套（含 stress）、Grafana scrape、预算与并发。
 
 ### 4.2 外
 
@@ -496,7 +497,7 @@ V1 压测内核：**go-stress-testing**（Apache-2.0）扩展，独立 `stress` 
 | `/datasets` | 数据集工作台 | 目录树结构管理、自定义列管理（+新增列）、单元格行内即点即改、多行/JSON 弹窗编辑器、AI 智能合成新数据与补全缺失行 | 成员 |
 | `/cases` | 用例工作台 | 用例集目录树、6 大测试策略分布与自检横幅、用例表格行内编辑、AI 智能从 PRD 生成用例集、批量映射至基准数据集/黄金 QA、72h 倒计时确认入库 | 成员 |
 | `/kb` | 知识库与切块检索 | 文档分块预览、2D 向量投影散点图、Top-K 相似度召回连线与重排前后位次对比 (Rerank Delta)、黄金 QA 维护 | 成员 |
-| `/admin/profiles` | 协议档治理 | 两类协议（`openai_chat`、`anthropic_messages`）及可选 Embedding / Reranker 端点维护、Key 只写不回显、连通性检查 | 成员 |
+| `/admin/profiles` | 协议档治理 | 三类协议（`openai_chat`、`openai_responses`、`anthropic_messages`）及可选 Embedding / Reranker 端点维护、Key 只写不回显、连通性检查 | 成员 |
 | `/admin/stress` | 压测治理 | 白名单维护、QPS/时长上限、默认预算、单价并发控制、AI 参数推荐 | 成员 |
 | `/admin/users` | 账号协同 | 成员开户、停用、重置密码（系统安全保底：不可停用最后一名正常账号） | 成员 |
 
@@ -534,6 +535,7 @@ FastAPI（REST + WS）+ worker 进程 + PostgreSQL + Vue3/Naive/Vite + LightRAG 
 | 类型 | 请求 | 鉴权 |
 | --- | --- | --- |
 | `openai_chat` | `POST {base}/v1/chat/completions`，`messages` | `Authorization: Bearer` |
+| `openai_responses` | `POST {base}/v1/responses`，`input` / `instructions` | `Authorization: Bearer` |
 | `anthropic_messages` | `POST {base}/v1/messages`，`system` 拆出，`messages` 仅 user/assistant | `x-api-key` + `anthropic-version: 2023-06-01`（可配） |
 
 被测评测：**非流式**。压测：对 chat/responses 解析 SSE 以算 TTFT。适配失败归 `UPSTREAM`，raw 截断入库（≤32KB）。
@@ -553,7 +555,7 @@ FastAPI（REST + WS）+ worker 进程 + PostgreSQL + Vue3/Naive/Vite + LightRAG 
               ModelGateway（LangGraph）
                     │
                     ▼
-              两类协议适配器 / 上游模型
+              三类协议适配器 / 上游模型
 
   其它页 ──REST─┐
                 └── PostgreSQL（sessions / messages / ws_events / tasks）
@@ -562,7 +564,7 @@ FastAPI（REST + WS）+ worker 进程 + PostgreSQL + Vue3/Naive/Vite + LightRAG 
               worker（后续长任务：评测 / RAG / 生成用例；压测下发到 stress）
                  │         │              │
                  ▼         ▼              ▼
-           两类协议适配 LightRAG      go-stress-testing
+           三类协议适配 LightRAG      go-stress-testing
                          /外部 Chat        /metrics
                                             ▼
                                     现有 Prometheus
@@ -597,7 +599,7 @@ testcase-tools：只对齐，不进镜像。LightRAG：MIT，锁 tag。go-stress
 | 稳定 | 断点：评测按样本行号续跑；可用性 99%/月 |
 | 安全 | 协议档 URL、模型 ID、API Key 按 profile 写入服务器受控环境文件（文件权限 0600、API 加锁刷新并 fsync、Worker 只读）；旧数据库密文仅迁移后清空；WS 使用短票 `ws_ticket`；`/metrics` 不暴露公网 |
 | 成本 | usage_ledger + 任务预算 |
-| 兼容 | 被测仅 HTTP 两类协议；导出 xlsx / xmind 8+ |
+| 兼容 | 被测仅 HTTP 三类协议；导出 xlsx / xmind 8+ |
 
 ---
 
@@ -605,7 +607,7 @@ testcase-tools：只对齐，不进镜像。LightRAG：MIT，锁 tag。go-stress
 
 | 风险 | 应对 |
 | --- | --- |
-| 两类协议字段差 | 夹具单测 |
+| 三类协议字段差 | 夹具单测 |
 | 并行打爆 API | 平台并发 + 预算 |
 | 映射失败 | 待补全；可手传 JSONL |
 | LightRAG 升级 | 锁 tag |
@@ -703,7 +705,7 @@ testcase-tools：只对齐，不进镜像。LightRAG：MIT，锁 tag。go-stress
 ### 本版（V1.6.3）相对问答仍无冲突的说明
 
 - 「Agent 调 MCP」：Host 仍是 Agent；长任务进 PG 后由 worker / stress 执行，避免对话断线任务停。与「PG 队列 + worker」那一问一致。
-- 外部 RAG 只用 OpenAI Chat：以最后一问为准；被测/Agent/Judge 仅支持两类协议。
+- 外部 RAG 只用 OpenAI Chat：以最后一问为准；被测/Agent/Judge 仅支持三类协议。
 - 压测 Grafana：以「需要接入」为准，覆盖更早的「不需要」。
 
 ### 会话上下文持久化修订（2026-08-20）
@@ -913,3 +915,33 @@ Anthropic Messages 兼容供应商的思考配置必须由供应商模板解析�
 ### V1.31 修改代码文件与作用清单
 
 `agent/experts.py`、三个 `expert_prompts/benchmark_*.md` 注册角色；`agent/preparation.py` 校验与交接；`agent/collaboration.py`、`subagent_tools.py`、`loop_wiring.py` 接通调度；前端 `types.ts`、`CollaborationPanel.vue` 展示草稿；`test_benchmark_preparation.py` 覆盖成功和拒绝路径。无 Worker 行为变更。
+
+
+## 2026-09-17 Responses 协议与 New API / Ollama 供应商
+
+- 协议枚举增加 `openai_responses`，适用于协议档创建/更新、模型发现、验证、Agent、Judge、被测模型和派生压测。默认路径为 `POST {base}/v1/responses`；已有版本段不重复追加，完整 URL 保留路径与查询串。
+- 请求使用 `input`、`instructions`、`max_output_tokens` 和扁平函数工具，默认 `store=false`；工具结果以 `function_call_output.call_id` 配对。平台持有完整历史，Responses 的原始 output 项（含加密 reasoning）按现有协议状态兼容边界回填，不依赖 previous_response_id。
+- 流式文本/思考摘要/函数参数映射到既有 Agent 事件，不增加 WS 事件名。失败/缺少终态不视为成功；截断以 length 收尾，非流式评测拒绝截断响应。input_tokens/output_tokens 归一用量，保留缓存与推理明细。
+- 新建供应商增加 New API 与 Ollama。New API 可选 Chat、Responses、Messages，地址和模型由用户填写；实际通道支持以真实探测为准。Ollama 提供 Chat 和 Responses，默认地址 http://localhost:11434/v1，必须改为 API/Worker 可访问地址（容器中的 localhost 指容器自身），模型从服务获取或手填。
+- Ollama 本地服务可用 `ollama` 作为 SDK 所需的非空占位 Key，受认证代理应填写真实 Key；不放宽其它协议档凭据校验。供应商仍沿用现有预设/端点/名称识别，不新增持久供应商字段。
+- Responses 受控思考模板使用 reasoning.effort；各档位必须真实验证通过后才保存为可选能力。
+
+### 修改代码文件与作用清单
+
+| 文件 | 作用 |
+| --- | --- |
+| `backend/shared/responses.py`、`model_urls.py`、`models.py` | 共享编解码、端点及协议约束 |
+| `backend/api/migrations/versions/*responses*.py` | 扩展协议 CHECK 约束，回退前拒绝存在 Responses 档 |
+| `backend/api/app/llm/providers/responses.py`、`options.py`、`reasoning_templates.py`、`resolver.py` | 原生 Responses 流、历史回填与思考模板 |
+| `backend/api/app/adapters.py`、`schemas.py`、`routers/profiles.py`、`agent/loop_wiring.py` | 旧调用路径、接口枚举与输入预算 |
+| `backend/worker/app/protocol.py`、`stress.py` | Worker 评测及派生压测 |
+| `frontend/src/utils/profileVendors.ts`、`providerLogo.ts`、`components/modals/ProfileModal.vue`、`api/types.ts` | 供应商预设、协议选择与类型 |
+
+协议依据：[OpenAI Responses 迁移指南](https://developers.openai.com/api/docs/guides/migrate-to-responses)、[Ollama OpenAI 兼容接口](https://docs.ollama.com/api/openai-compatibility)。
+
+
+### V1.33 协议档验证结果修正（2026-09-17）
+
+针对 Agent 用途，保存前验证补充原生工具调用和结果回填的无副作用探测，并与思考档位结果分别显示。只验证一个已通过思考档位，不能据此宣称所有档位或所有业务工具均可用。失败允许保存评测用途，但显著提示原生工具未通过；旧配置显示未验证，需用户在配置页重新测试。无 Agent 用途时不额外调用模型，不改变现有工具权限或后台任务流程。
+
+修改代码文件与作用清单：后端 `profile_tool_probe.py` / `profile_probe.py` / `routers/profiles.py` / `schemas.py` 实现探测与状态；前端 `api/{types,http}.ts` / `components/modals/ProfileModal.vue` 展示独立结果并适配探测时限。

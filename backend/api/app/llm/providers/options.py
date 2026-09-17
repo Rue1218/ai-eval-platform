@@ -2,6 +2,8 @@
 
 import re
 
+from shared.reasoning import openai_effort
+
 from ..loop_contracts import LlmRequest, UnsupportedReasoningEffortError
 from .common import invalid, validate_request
 from .reasoning_templates import resolve_template_options
@@ -55,6 +57,14 @@ def resolve_options(request: LlmRequest, provider: str, protocol: str) -> dict:
     if "[" in request.model and request.model.rstrip().endswith("]"):
         if enabled:
             raise UnsupportedReasoningEffortError(provider, effort)
+    elif protocol == "openai_responses":
+        # Responses 方言不能透传 Chat 的 thinking/enable_thinking 扩展。
+        if enabled:
+            options["reasoning_effort"] = openai_effort(request.model, effort)
+        elif model.startswith(("gpt-5.1", "gpt-5.2", "gpt-5.3", "gpt-5.4")):
+            options["reasoning_effort"] = "none"
+        if enabled or model.startswith(("o1", "o3", "o4", "gpt-5")):
+            options["omit_temperature"] = True
     elif protocol == "anthropic_messages":
         if provider in {"deepseek", "qwen"} and (deepseek_v4 or model in {"deepseek-chat", "deepseek-reasoner"}):
             options["thinking"] = {"type": "enabled" if enabled else "disabled"}
@@ -167,9 +177,14 @@ def request_options(request: LlmRequest, provider: str, protocol: str) -> dict:
         result["timeout"] = request.timeout_s
     if request.temperature is not None and not resolved.get("omit_temperature"):
         result["temperature"] = request.temperature
-    token_key = resolved.get("max_tokens_parameter", "max_tokens")
+    token_key = "max_output_tokens" if protocol == "openai_responses" else resolved.get("max_tokens_parameter", "max_tokens")
     result[token_key] = request.max_tokens
-    if protocol == "anthropic_messages":
+    if protocol == "openai_responses":
+        if "reasoning_effort" in resolved:
+            result["reasoning"] = {"effort": resolved["reasoning_effort"]}
+            if resolved["reasoning_effort"] != "none":
+                result["reasoning"]["summary"] = "auto"
+    elif protocol == "anthropic_messages":
         if "thinking" in resolved:
             result["thinking"] = resolved["thinking"]
             if (not request.reasoning_template_id and _qwen_budget_model(request.model.lower()) and "budget_tokens" in resolved["thinking"]

@@ -132,6 +132,10 @@ def _build_probe(profile: ProtocolProfile) -> tuple[str, str, dict[str, str], di
         if api_key:
             headers["x-api-key"] = api_key
         headers["anthropic-version"] = profile.anthropic_version or "2023-06-01"
+    elif profile.protocol == "openai_responses":
+        body = {"model": model, "input": ping, "max_output_tokens": 16, "store": False}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
     else:
         body = {"model": model, "messages": ping, "max_tokens": 8, "temperature": 0}
         if api_key:

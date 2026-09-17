@@ -8,8 +8,8 @@ import {
   PROFILE_VENDORS,
 } from '../src/utils/profileVendors.ts'
 
-test('新建供应商只保留指定十个品牌', () => {
-  assert.deepEqual(PROFILE_VENDORS.map(v => v.key), ['zhipu', 'deepseek', 'qwen', 'moonshot', 'minimax', 'nvidia', 'volcengine', 'gemini', 'openai', 'anthropic'])
+test('新建供应商包含 New API 与 Ollama', () => {
+  assert.deepEqual(PROFILE_VENDORS.map(v => v.key), ['zhipu', 'deepseek', 'qwen', 'moonshot', 'minimax', 'nvidia', 'volcengine', 'gemini', 'openai', 'anthropic', 'newapi', 'ollama'])
 })
 
 test('供应商协议矩阵保存各自官方 Base URL', () => {
@@ -65,4 +65,15 @@ test('路径型模型 ID 仍按品牌显示，未知模型稳定兜底', () => {
   assert.equal(getModelLogoKey('openrouter/deepseek/deepseek-r1'), 'deepseek')
   assert.equal(getModelLogoKey('Qwen/Qwen3.5-Plus'), 'qwen')
   assert.equal(getModelLogoKey('unknown-private-model'), 'custom')
+})
+
+
+test('Responses 和自建服务预设不会伪造公网端点或模型', () => {
+  assert.equal(getVendorProtocolPreset('openai', 'openai_responses').base_url, 'https://api.openai.com/v1')
+  assert.equal(getVendorProtocolPreset('newapi', 'openai_responses').base_url, '')
+  assert.equal(getVendorProtocolPreset('ollama', 'openai_chat').api_key, 'ollama')
+  assert.equal(getVendorProtocolPreset('ollama', 'openai_responses').model, '')
+  assert.equal(getServiceLogoKey({base_url: 'https://gateway.example/v1', name: 'New API (gpt-5.4)'}), 'newapi')
+  assert.equal(findPresetVendor('https://gateway.example/v1', 'openai_chat', 'New API (gpt-5.4)'), 'newapi')
+  assert.equal(findPresetVendor('http://private.example:8080/v1', 'openai_chat', 'Ollama (qwen3:8b)'), 'ollama')
 })

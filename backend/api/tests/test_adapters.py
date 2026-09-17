@@ -73,11 +73,11 @@ def test_remaining_protocols_call_their_native_adapters(monkeypatch, protocol, p
         assert seen["body"]["messages"] == [{"role": "user", "content": "ping"}]
 
 
-def test_removed_responses_protocol_is_rejected_before_network_call():
-    """已删除协议必须在触网前按统一 VALIDATION 契约拒绝。"""
+def test_unknown_protocol_is_rejected_before_network_call():
+    """未知协议必须在触网前按统一 VALIDATION 契约拒绝。"""
     with pytest.raises(AppError) as caught:
         call_protocol(
-            protocol="openai_responses",
+            protocol="unknown_protocol",
             base_url="https://unit.invalid/v1",
             model="unit-model",
             api_key="unit-key",
