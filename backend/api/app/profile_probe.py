@@ -157,6 +157,19 @@ async def _probe_all(config: ModelConfig, *, check_tools: bool = False) -> dict[
         _probe_with_deadline(config, requires_reasoning_evidence=template.requires_reasoning_evidence)
         for _effort, config in attempt_inputs
     ))
+    # 限流只说明当时容量不足，不能据此判定不支持档位；首批结束后逐档重试一次。
+    # 重试与后续工具探测共用总截止时间，避免叠加多个完整超时突破代理上限。
+    for index, ((_, attempt_config), outcome) in enumerate(zip(attempt_inputs, outcomes, strict=True)):
+        if outcome[2] != "RATE_LIMITED":
+            continue
+        remaining = PROBE_TOTAL_DEADLINE_SECONDS - (asyncio.get_running_loop().time() - started)
+        if remaining <= 0.25:
+            break
+        await asyncio.sleep(0.25)
+        outcomes[index] = await _probe_with_deadline(
+            replace(attempt_config, timeout_s=min(attempt_config.timeout_s, remaining - 0.25)),
+            requires_reasoning_evidence=template.requires_reasoning_evidence,
+        )
     for (effort, _attempt_config), (ok, evidence, error_code) in zip(attempt_inputs, outcomes, strict=True):
         attempt = {"effort": effort, "ok": ok}
         if evidence:

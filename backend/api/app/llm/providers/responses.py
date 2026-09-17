@@ -88,7 +88,12 @@ class ResponsesAdapter:
         try:
             stream = await self._client.responses.create(**kwargs)
             async for event in stream:
-                for part in decoder.feed(plain(event)):
+                try:
+                    parts = decoder.feed(plain(event))
+                except (KeyError, TypeError, ValueError) as exc:
+                    # 流自身损坏属于响应协议错误，不能归因为用户请求参数被拒绝。
+                    raise invalid("Responses 流与完成快照不一致") from exc
+                for part in parts:
                     if part[0] == "text":
                         yield TextDelta(part[1])
                     elif part[0] == "reasoning":

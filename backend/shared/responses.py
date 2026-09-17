@@ -78,6 +78,31 @@ class ResponsesStream:
     def __init__(self):
         self.calls: dict[int, dict] = {}
         self.response: dict | None = None
+        self.text_parts: dict[tuple, str] = {}
+        self.emitted_text = ""
+
+    def _complete_text(self, output: list[dict]) -> list[tuple]:
+        """按输出项和内容项核对正文，仅补齐可安全追加的后缀，拒绝回退或错序。"""
+        final_parts = {}
+        for output_index, item in enumerate(output):
+            if item.get("type") != "message":
+                continue
+            for content_index, part in enumerate(item.get("content", [])):
+                kind = part.get("type")
+                if kind not in {"output_text", "refusal"}:
+                    continue
+                text = part.get("text" if kind == "output_text" else "refusal", "")
+                if not isinstance(text, str):
+                    raise ValueError("Responses 完成正文不是文本")
+                final_parts[(output_index, content_index, kind)] = text
+        for key, streamed in self.text_parts.items():
+            if key not in final_parts or not final_parts[key].startswith(streamed):
+                raise ValueError("Responses 完成正文与增量不一致")
+        final_text = "".join(final_parts.values())
+        if not final_text.startswith(self.emitted_text):
+            raise ValueError("Responses 正文顺序不一致")
+        tail = final_text[len(self.emitted_text):]
+        return [("text", tail)] if tail else []
 
     def _call(self, index: int, item: dict, *, complete: bool) -> list[tuple]:
         """使用 call_id 配对结果，item.id 仅属于供应商输出项身份。"""
@@ -109,7 +134,15 @@ class ResponsesStream:
         if kind in {"error", "response.failed"}:
             raise ValueError("Responses 上游响应失败")
         if kind in {"response.output_text.delta", "response.refusal.delta"}:
-            return [("text", event.get("delta", ""))]
+            delta = event.get("delta", "")
+            if not isinstance(delta, str):
+                raise ValueError("Responses 正文增量不是文本")
+            # 兼容省略索引的单正文网关；标准多项响应仍使用各自索引，不能混淆拒绝与正文。
+            key = (event.get("output_index", 0), event.get("content_index", 0),
+                   "refusal" if kind == "response.refusal.delta" else "output_text")
+            self.text_parts[key] = self.text_parts.get(key, "") + delta
+            self.emitted_text += delta
+            return [("text", delta)]
         if kind in {"response.reasoning_summary_text.delta", "response.reasoning_text.delta"}:
             return [("reasoning", event.get("delta", ""))]
         if kind in {"response.output_item.added", "response.output_item.done"}:
@@ -127,7 +160,7 @@ class ResponsesStream:
             expected = "completed" if kind.endswith(".completed") else "incomplete"
             if response.get("status") != expected or response.get("error"):
                 raise ValueError("Responses 终态不一致")
-            events = []
+            events = self._complete_text(response["output"])
             final_calls = set()
             for index, item in enumerate(response["output"]):
                 if item.get("type") == "function_call":

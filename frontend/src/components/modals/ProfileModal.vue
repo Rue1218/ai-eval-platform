@@ -113,7 +113,7 @@
         <div class="row-between">
           <label class="field-label">
             API Key
-            <span style="font-size: 11.5px; color: var(--text-tertiary); margin-left: 6px">(平台受控加密存储不回显；编辑时留空保留原密钥)</span>
+            <span style="font-size: 11.5px; color: var(--text-tertiary); margin-left: 6px">(密钥不回显；同源地址留空保留，变更协议、主机或端口须重新填写)</span>
           </label>
           <span v-if="props.profile?.has_api_key" class="key-status-badge ok">
             ● 已配置密钥
@@ -126,7 +126,7 @@
           v-model:value="form.api_key"
           type="password"
           show-password-on="click"
-          :placeholder="props.profile?.has_api_key ? '********* (已配置密钥，留空保留原密钥)' : '可选；私有端点或免密模型可留空'"
+          :placeholder="props.profile?.has_api_key ? '已配置密钥；地址跨源变更须重新填写' : '可选；私有端点或免密模型可留空'"
         />
       </div>
 
