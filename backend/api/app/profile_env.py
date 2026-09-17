@@ -365,121 +365,42 @@ def restore_snapshot(snapshot: ProfileEnvSnapshot) -> None:
 
 
 def resolve_env_api_key_for_url(base_url: str | None, protocol: str | None = None) -> str | None:
-    """根据给定的 Base URL 或协议类型，从 .env 环境文件（及进程环境变量）中自动匹配可用的 API Key。"""
+    """仅从已配置的同源端点解析凭据，不按 URL 子串或协议向任意主机兜底。"""
+    from shared.model_urls import same_origin
+
     try:
         snapshot = _read_snapshot(env_path())
         values = _parse_lines(snapshot.content.splitlines())
     except Exception:
         values = {}
-
-    def _get(key: str) -> str | None:
-        return values.get(key) or os.environ.get(key) or None
-
-    norm_target = str(base_url or "").strip().rstrip("/")
-    if norm_target.endswith("/v1"):
-        norm_target = norm_target[:-3].rstrip("/")
-
-    # 1. 优先在已有的 AI_PROFILE_*_BASE_URL 中寻找匹配的 profile Key
-    if norm_target:
-        combined = {**values, **os.environ}
-        for k, v in combined.items():
-            if k.startswith("AI_PROFILE_") and k.endswith("_BASE_URL"):
-                profile_base = str(v).strip().rstrip("/")
-                if profile_base.endswith("/v1"):
-                    profile_base = profile_base[:-3].rstrip("/")
-                if profile_base == norm_target:
-                    key_var = k[:-9] + "_API_KEY"
-                    cand = _get(key_var)
-                    if cand:
-                        return cand
-
-    # 2. 根据 Base URL 中的厂商域名特征映射环境变量
-    url_lower = norm_target.lower()
-    if "xiaomimimo" in url_lower or "mimo" in url_lower:
-        for var in ("MIMO_API_KEY", "MIMO_TTS_API_KEY", "LLM_API_KEY"):
-            val = _get(var)
-            if val:
-                return val
-    elif "openai" in url_lower:
-        for var in ("OPENAI_API_KEY", "LLM_API_KEY"):
-            val = _get(var)
-            if val:
-                return val
-    elif "anthropic" in url_lower:
-        for var in ("ANTHROPIC_API_KEY", "LLM_API_KEY"):
-            val = _get(var)
-            if val:
-                return val
-    elif "deepseek" in url_lower:
-        for var in ("DEEPSEEK_API_KEY", "LLM_API_KEY"):
-            val = _get(var)
-            if val:
-                return val
-    elif "siliconflow" in url_lower:
-        for var in ("SILICONFLOW_API_KEY", "LLM_API_KEY"):
-            val = _get(var)
-            if val:
-                return val
-    elif "dashscope" in url_lower or "aliyuncs" in url_lower or "qwen" in url_lower:
-        for var in ("DASHSCOPE_API_KEY", "QWEN_API_KEY", "QWEN_IMAGE_API_KEY", "LLM_API_KEY"):
-            val = _get(var)
-            if val:
-                return val
-    elif "nvidia" in url_lower or "integrate.api.nvidia" in url_lower:
-        for var in ("NVIDIA_API_KEY", "NIM_API_KEY", "LLM_API_KEY"):
-            val = _get(var)
-            if val:
-                return val
-    elif "volces" in url_lower or "volcengine" in url_lower:
-        for var in ("VOLCENGINE_API_KEY", "DOUBAO_API_KEY", "LLM_API_KEY"):
-            val = _get(var)
-            if val:
-                return val
-    elif "baidubce" in url_lower or "qianfan" in url_lower:
-        for var in ("QIANFAN_API_KEY", "BAIDU_API_KEY", "LLM_API_KEY"):
-            val = _get(var)
-            if val:
-                return val
-    elif "bigmodel" in url_lower or "zhipu" in url_lower:
-        for var in ("ZHIPU_API_KEY", "GLM_API_KEY", "LLM_API_KEY"):
-            val = _get(var)
-            if val:
-                return val
-    elif "moonshot" in url_lower or "kimi" in url_lower:
-        for var in ("MOONSHOT_API_KEY", "KIMI_API_KEY", "LLM_API_KEY"):
-            val = _get(var)
-            if val:
-                return val
-    elif "groq" in url_lower:
-        for var in ("GROQ_API_KEY", "LLM_API_KEY"):
-            val = _get(var)
-            if val:
-                return val
-    elif "together" in url_lower:
-        for var in ("TOGETHER_API_KEY", "LLM_API_KEY"):
-            val = _get(var)
-            if val:
-                return val
-    elif "mistral" in url_lower:
-        for var in ("MISTRAL_API_KEY", "LLM_API_KEY"):
-            val = _get(var)
-            if val:
-                return val
-    elif "lingyi" in url_lower or "01.ai" in url_lower:
-        for var in ("LINGYI_API_KEY", "YI_API_KEY", "LLM_API_KEY"):
-            val = _get(var)
-            if val:
-                return val
-    elif "baichuan" in url_lower:
-        for var in ("BAICHUAN_API_KEY", "LLM_API_KEY"):
-            val = _get(var)
-            if val:
-                return val
-
-    # 3. 按协议类型或通用别名兜底
-    if protocol == "anthropic_messages":
-        return _get("ANTHROPIC_API_KEY") or _get("LLM_API_KEY")
-    return _get("OPENAI_API_KEY") or _get("LLM_API_KEY")
+    # 环境文件与原有读取语义一致，优先于进程环境，避免端点和密钥来源混搭。
+    combined = {**os.environ, **values}
+    for name, configured_url in combined.items():
+        if name.startswith("AI_PROFILE_") and name.endswith("_BASE_URL"):
+            if same_origin(base_url, configured_url):
+                candidate = combined.get(name[:-9] + "_API_KEY")
+                if candidate:
+                    return candidate
+    # 全局别名也必须与它自己的显式端点成对；原厂默认地址仅用于无自定义地址的专属 Key。
+    prefixes = ("ANTHROPIC", "LLM") if protocol == "anthropic_messages" else ("OPENAI", "LLM")
+    for prefix in prefixes:
+        configured_url = combined.get(prefix + "_BASE_URL")
+        default_url = {"OPENAI": "https://api.openai.com", "ANTHROPIC": "https://api.anthropic.com"}.get(prefix)
+        if same_origin(base_url, configured_url or default_url):
+            candidate = combined.get(prefix + "_API_KEY")
+            if not candidate and configured_url and prefix in {"OPENAI", "ANTHROPIC"}:
+                # 历史部署使用 OPENAI/ANTHROPIC_BASE_URL + LLM_API_KEY，仍须显式地址匹配。
+                candidate = combined.get("LLM_API_KEY")
+            if candidate:
+                return candidate
+    # 其它厂商仅接受部署者明确配置的 BASE_URL / API_KEY 对，不猜测凭据所属主机。
+    for name, configured_url in combined.items():
+        if name.endswith("_BASE_URL") and not name.startswith("AI_PROFILE_"):
+            if same_origin(base_url, configured_url):
+                candidate = combined.get(name[:-9] + "_API_KEY")
+                if candidate:
+                    return candidate
+    return None
 
 
 def resolve_env_base_url(protocol: str | None = None) -> str | None:

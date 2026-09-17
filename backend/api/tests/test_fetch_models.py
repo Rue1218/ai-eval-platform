@@ -238,7 +238,9 @@ def test_resolve_env_api_key_for_url(tmp_path, monkeypatch):
         'AI_PROFILE_MY_VENDOR_BASE_URL="https://my-vendor.example.com/v1"\n'
         'AI_PROFILE_MY_VENDOR_API_KEY="sk-vendor-12345"\n'
         'MIMO_API_KEY="mimo-token-abc"\n'
+        'MIMO_BASE_URL="https://token-plan-cn.xiaomimimo.com"\n'
         'DEEPSEEK_API_KEY="deepseek-token-xyz"\n'
+        'DEEPSEEK_BASE_URL="https://api.deepseek.com"\n'
         'OPENAI_BASE_URL="https://api.openai.com/v1"\n'
         'OPENAI_API_KEY="sk-openai-global"\n',
         encoding="utf-8",
@@ -249,11 +251,11 @@ def test_resolve_env_api_key_for_url(tmp_path, monkeypatch):
     key = resolve_env_api_key_for_url("https://my-vendor.example.com")
     assert key == "sk-vendor-12345"
 
-    # 2. 匹配 Xiaomi Mimo 域名特征
+    # 2. 匹配显式配置的 Xiaomi Mimo 端点，不再用域名子串猜测。
     key_mimo = resolve_env_api_key_for_url("https://token-plan-cn.xiaomimimo.com")
     assert key_mimo == "mimo-token-abc"
 
-    # 3. 匹配 DeepSeek 域名特征
+    # 3. 匹配显式配置的 DeepSeek 端点。
     key_ds = resolve_env_api_key_for_url("https://api.deepseek.com/v1")
     assert key_ds == "deepseek-token-xyz"
 

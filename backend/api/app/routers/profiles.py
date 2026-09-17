@@ -4,6 +4,7 @@ import logging
 
 from fastapi import APIRouter, Depends, Query
 from fastapi import Request as FastApiRequest
+from shared.model_urls import same_origin
 from sqlalchemy.orm import Session
 
 from ..adapters import DEFAULT_TIMEOUT_S, fetch_remote_models
@@ -52,6 +53,16 @@ logger = logging.getLogger("ai-eval.profiles")
 PROFILE_CHECK_TIMEOUT_S = DEFAULT_TIMEOUT_S
 
 
+def _reuse_api_key(current_url: str | None, next_url: str | None, current_key: str | None,
+                  explicit_key: str | None) -> str | None:
+    """跨源编辑必须重新提供凭据，在探测、获取模型和保存前统一拒绝隐式转发。"""
+    if explicit_key:
+        return explicit_key
+    if current_key and not same_origin(current_url, next_url):
+        raise AppError(ErrorCode.VALIDATION, "服务地址的协议、主机或端口已变更，请重新填写 API Key")
+    return current_key
+
+
 def _validate_profile_url(url: str, protocol: str, full_url: bool) -> None:
     """保存前验证 URL，不向上游发送请求或要求模型支持思考。"""
     try:
@@ -96,7 +107,7 @@ def _profile_connection(
             or (global_values.model if allow_global_alias and not profile_env_configured else None)
             or profile.model,
             env_values.api_key
-            or (global_values.api_key if allow_global_alias and not profile_env_configured else None)
+            or (global_values.api_key if allow_global_alias and not profile_env_configured and global_base_url else None)
             or _legacy_api_key(profile),
         )
     except AppError:
@@ -490,7 +501,7 @@ def _update_profile(
     if values.get("model") is not None:
         next_model = values["model"]
     _validate_profile_url(next_base_url, values.get("protocol") or profile.protocol, full_url)
-    next_api_key = api_key or current_api_key
+    next_api_key = _reuse_api_key(current_base_url, next_base_url, current_api_key, api_key)
     next_embedding_base_url = current_env.embedding_base_url
     next_embedding_model = current_env.embedding_model
     next_reranker_base_url = current_env.reranker_base_url
@@ -507,8 +518,14 @@ def _update_profile(
     if "reranker_model" in values:
         raw_model = values.pop("reranker_model")
         next_reranker_model = str(raw_model).strip() if raw_model and str(raw_model).strip() else None
-    next_embedding_api_key = embedding_api_key or current_env.embedding_api_key
-    next_reranker_api_key = reranker_api_key or current_env.reranker_api_key
+    next_embedding_api_key = _reuse_api_key(
+        current_env.embedding_base_url or current_base_url, next_embedding_base_url or next_base_url,
+        current_env.embedding_api_key, embedding_api_key,
+    )
+    next_reranker_api_key = _reuse_api_key(
+        current_env.reranker_base_url or current_base_url, next_reranker_base_url or next_base_url,
+        current_env.reranker_api_key, reranker_api_key,
+    )
     key_changed = bool(api_key or embedding_api_key or reranker_api_key)
     snapshot: ProfileEnvSnapshot | None = None
     for field, value in values.items():
@@ -593,8 +610,8 @@ def probe_update_profile(
     profile = db.query(ProtocolProfile).filter(ProtocolProfile.id == profile_id).first()
     if not profile:
         raise AppError(ErrorCode.NOT_FOUND, "协议档不存在")
-    _base_url, _model, current_api_key = _profile_connection(profile, allow_global_alias=True)
-    api_key = body.api_key or current_api_key
+    current_base_url, _model, current_api_key = _profile_connection(profile, allow_global_alias=True)
+    api_key = _reuse_api_key(current_base_url, body.base_url, current_api_key, body.api_key)
     probe = _probe_model_config(body, api_key=api_key)
     message = _probe_message(probe)
     if probe.get("status") == "failed":
@@ -694,8 +711,7 @@ def fetch_models(
         if not base_url:
             base_url = env_base_url
         anthropic_version = profile.anthropic_version
-        if not api_key:
-            api_key = env_api_key
+        api_key = _reuse_api_key(env_base_url, base_url, env_api_key, api_key)
 
     # 若未提供 Base URL，尝试从 .env 获取默认 Base URL
     if not base_url:

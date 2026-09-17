@@ -1,4 +1,6 @@
 import base64
+import hashlib
+import hmac
 from datetime import UTC, datetime, timedelta
 
 import bcrypt
@@ -9,6 +11,11 @@ from .config import settings
 
 TOKEN_TYPE_ACCESS = "access"
 TOKEN_TYPE_WS = "ws_ticket"
+
+
+def credential_scope(value: str) -> str:
+    """用服务器密钥派生不可逆作用域，凭据原文和可离线猜测的普通哈希不进入历史。"""
+    return hmac.new(settings.secret_key.encode(), b"llm-replay-v2\0" + value.encode(), hashlib.sha256).hexdigest()
 
 
 def hash_password(password: str) -> str:

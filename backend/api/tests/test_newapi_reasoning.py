@@ -169,6 +169,7 @@ def test_responses_probe_recognizes_both_reasoning_events(monkeypatch, event_typ
     def handler(request):
         """取消推理用量，只用标准增量证明证据识别路径。"""
         data = completed()
+        data["output"][0]["content"][0]["text"] = "answer"
         data["usage"]["output_tokens_details"]["reasoning_tokens"] = 0
         return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=wire([
             {"type": event_type, "delta": "reasoning evidence", "item_id": "rs_1", "output_index": 0,

@@ -1,5 +1,6 @@
 """授权配置到可持久化请求的边界；本模块不查询数据库或自行授权。"""
 
+import json
 from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, field, replace
@@ -51,7 +52,7 @@ def resolve_request(
     snapshot = _snapshot(config)
     model = snapshot.config
     # 即使只构建请求也校验连接格式，但地址本身不进入持久请求头。
-    normalize_base_url(model.base_url, model.protocol, full_url=model.full_url)
+    endpoint = normalize_base_url(model.base_url, model.protocol, full_url=model.full_url)
     if not model.model or model.protocol not in {
         "openai_chat",
         "openai_responses",
@@ -81,6 +82,14 @@ def resolve_request(
                 ToolSpec(str(tool["name"]), str(tool.get("description", "")), deepcopy(schema))
             )
     provider = _provider(snapshot)
+    from ..security import credential_scope
+
+    # 不透明状态绑定授权连接；切换端点、档案或凭据时走已有可迁移消息降级路径。
+    replay_scope = credential_scope(json.dumps({
+        "endpoint": endpoint, "api_key": model.api_key,
+        "profile_id": snapshot.profile_id, "profile_version": snapshot.profile_version,
+        "model_key": compatibility_key(provider, model.protocol, model.model),
+    }, sort_keys=True))
     selected_effort = model.reasoning_effort if model.reasoning_enabled else "off"
     if (
         model.reasoning_allowed_efforts is not None
@@ -109,7 +118,7 @@ def resolve_request(
         timeout_s=model.timeout_s,
         reasoning_enabled=model.reasoning_enabled,
         provider_options=options,
-        compatibility_key=compatibility_key(provider, model.protocol, model.model),
+        compatibility_key=replay_scope,
         reasoning_template_id=model.reasoning_template_id,
     )
     # 提前解析实际 wire 选项，使 header 可重建真正发送的参数。

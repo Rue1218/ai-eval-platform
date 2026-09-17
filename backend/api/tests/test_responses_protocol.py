@@ -49,6 +49,70 @@ def text_events():
             {"type": "response.completed", "response": completed(), "sequence_number": 2}]
 
 
+@pytest.mark.parametrize("prefix", ["", "你", "你好"])
+def test_terminal_snapshot_completes_text_once(prefix):
+    """只含快照、部分增量和完整增量均还原相同正文，不重复追加。"""
+    stream = ResponsesStream()
+    events = stream.feed({"type": "response.output_text.delta", "delta": prefix}) if prefix else []
+    events += stream.feed({"type": "response.completed", "response": completed()})
+    assert "".join(event[1] for event in events if event[0] == "text") == "你好"
+
+
+@pytest.mark.parametrize("output,prefix", [
+    ([], "你好"),
+    ([{"type": "message", "content": [{"type": "output_text", "text": "不同正文"}]}], "你好"),
+    ([{"type": "message", "content": [{"type": "output_text", "text": "你"}]}], "你好"),
+])
+def test_terminal_snapshot_rejects_missing_or_conflicting_text(output, prefix):
+    """终态删除、篡改或缩短已发正文时不得宣布成功。"""
+    stream = ResponsesStream()
+    stream.feed({"type": "response.output_text.delta", "delta": prefix})
+    with pytest.raises(ValueError, match="正文"):
+        stream.feed({"type": "response.completed", "response": completed(output)})
+    assert stream.response is None
+
+
+def test_text_reconciliation_uses_content_indexes_and_refusals():
+    """按内容索引独立核对拒绝文本，不能把后一个分块的文本挪到前面。"""
+    output = [{"type": "message", "content": [
+        {"type": "output_text", "text": "说明"}, {"type": "refusal", "refusal": "无法执行"},
+    ]}]
+    stream = ResponsesStream()
+    stream.feed({"type": "response.output_text.delta", "delta": "说明", "content_index": 0})
+    stream.feed({"type": "response.refusal.delta", "delta": "无法", "content_index": 1})
+    assert stream.feed({"type": "response.completed", "response": completed(output)}) == [("text", "执行")]
+    wrong_order = ResponsesStream()
+    wrong_order.feed({"type": "response.refusal.delta", "delta": "无法", "content_index": 1})
+    with pytest.raises(ValueError, match="顺序"):
+        wrong_order.feed({"type": "response.completed", "response": completed(output)})
+
+
+@pytest.mark.asyncio
+async def test_sdk_partial_stream_matches_persisted_snapshot(monkeypatch):
+    """实际 SDK 流完成后用户正文必须与持久回放快照一致。"""
+    from app.agent.stream import AssistantAttempt
+    from app.llm.resolver import close_adapter
+
+    def handler(request):
+        """本地传输模拟网关遗漏末尾正文增量。"""
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=wire([
+            {"type": "response.output_text.delta", "delta": "你", "output_index": 0, "content_index": 0},
+            {"type": "response.completed", "response": completed()},
+        ]))
+
+    transport(monkeypatch, handler, asynchronous=True)
+    config = ModelConfig("openai_responses", "https://unit.invalid", "unit", api_key="fake", reasoning_enabled=False)
+    adapter, _ = build_adapter(config)
+    attempt = AssistantAttempt()
+    try:
+        async for chunk in adapter.stream(resolve_request(config, messages=[])):
+            attempt.push(chunk)
+        assert attempt.done.finish_reason == "stop"
+        assert attempt.text == attempt.protocol_state["items"][0]["content"][0]["text"] == "你好"
+    finally:
+        await close_adapter(adapter)
+
+
 def transport(monkeypatch, handler, asynchronous=False):
     """保留完整 SDK 生命周期与 URL hook，只替换网络传输。"""
     name = "AsyncClient" if asynchronous else "Client"

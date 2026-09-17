@@ -209,6 +209,52 @@ async def test_probe_runs_all_template_efforts_concurrently(monkeypatch):
     assert result["status"] == "passed"
 
 
+@pytest.mark.asyncio
+async def test_rate_limited_efforts_retry_serially(monkeypatch):
+    """单并发网关拒绝关闭思考时，限流的开启档位仍能逐档验证成功。"""
+    active = 0
+    calls = []
+
+    async def gateway(config, **kwargs):
+        """模拟仅允许单并发、强制思考的供应商。"""
+        nonlocal active
+        calls.append(config.reasoning_effort if config.reasoning_enabled else "off")
+        if active:
+            return False, None, "RATE_LIMITED"
+        active += 1
+        try:
+            await asyncio.sleep(0.01)
+            return (True, "reasoning_delta", None) if config.reasoning_enabled else (False, None, "PARAMETERS_REJECTED")
+        finally:
+            active -= 1
+
+    monkeypatch.setattr(profile_probe, "_probe_one", gateway)
+    result = await profile_probe._probe_all(_config())
+    assert result["status"] == "partial"
+    assert result["supported_efforts"] == ["low", "medium", "high", "max"]
+    assert len(calls) == 9
+    assert calls.count("off") == 1
+
+
+@pytest.mark.asyncio
+async def test_rate_limit_retry_has_total_deadline(monkeypatch):
+    """限流重试仍受整次探测截止时间约束，预算耗尽不继续发请求。"""
+    calls = []
+
+    async def gateway(config, **kwargs):
+        """首批立即限流，重试模拟持续挂起的上游。"""
+        calls.append(config.timeout_s)
+        if len(calls) <= 5:
+            return False, None, "RATE_LIMITED"
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(profile_probe, "_probe_one", gateway)
+    monkeypatch.setattr(profile_probe, "PROBE_TOTAL_DEADLINE_SECONDS", 0.35)
+    result = await asyncio.wait_for(profile_probe._probe_all(_config()), timeout=0.8)
+    assert len(calls) == 6 and calls[-1] < 0.11
+    assert result["status"] == "failed"
+
+
 @pytest.mark.parametrize(('provider', 'protocol', 'model', 'first'), [
     ('qwen', 'openai_chat', 'qwen3-235b-a22b', 'qwen-openai-thinking-budget-v1'),
     ('qwen', 'openai_chat', 'deepseek-v4.1-flash', 'aliyun-deepseek-openai-v1'),

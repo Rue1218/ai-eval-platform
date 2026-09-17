@@ -4,7 +4,7 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V2.14 |
+| 文档版本 | V2.15 |
 | 本轮审查日期 | 2026-09-17（Responses / New API / Ollama） |
 | WS v2 修订日期 | 2026-09-13（§4A，模型错误安全摘要） |
 | 对应 PRD | V1.35（功能唯一权威） |
@@ -762,7 +762,7 @@ has_reranker_api_key, created_at`
 `anthropic_messages` 可另存 `anthropic_version`（默认 `2023-06-01`）。变更写审计；API Key 不进入数据库，
 `has_api_key`、`has_embedding_api_key`、`has_reranker_api_key` 仅表示环境文件中是否存在对应 Key。
 Embedding 与 Reranker 的 URL、模型和 Key 与主模型使用相同的“按协议档隔离、受控环境文件写入、空 Key 保留旧值”规则；
-更新时只提交需要修改的字段，三类 Key 留空均表示不修改既有密文。
+更新时只提交需要修改的字段。三类 Key 仅在各自地址同源（协议、主机、有效端口一致）时允许留空保留；跨源变更且存在旧 Key 时，保存、测试并更新、获取模型列表均返回 `VALIDATION`，要求显式填写新 Key。Embedding/Reranker 未设置独立地址时，以主模型地址作为凭据复用边界。获取模型列表自动读取环境凭据仅限已配置的同源端点，禁止按域名子串或协议向任意主机兜底。
 
 `max_output_tokens` 为 Agent 单回合模型输出上限（映射到上游 `max_tokens` / `max_output_tokens`），取值 256–131072，默认 `8192`；仅影响 `usages` 含 `agent` 的对话调用，不影响 benchmark、judge、用例生成等离线调用。
 
@@ -3528,3 +3528,23 @@ Responses 识别 response.reasoning_text.delta 与已有摘要增量，保留供
 - backend/shared/reasoning.py、backend/shared/responses.py、backend/api/app/llm/providers/{options,reasoning_templates}.py：原生 max 映射、版本失效与增量识别。
 - frontend/src/api/{types,http}.ts、views/AdminProfiles.vue、components/modals/CheckResultModal.vue：保留并展示安全诊断。
 - API 探活/Responses 回归测试：真实 SDK 请求、连接清理、档位映射与安全诊断；前端类型检查验证诊断字段贯通。
+
+## 协议档审查修复（2026-09-17）
+
+- 凭据复用限定同源（协议、主机、有效端口）。主模型、Embedding、Reranker 跨源编辑均需显式提供新 Key；保存前探测与模型列表获取使用相同规则。模型列表只从已绑定端点选择环境凭据，不再按域名子串或协议向陌生主机兜底。只有 Key、没有配套地址的旧第三方环境配置需补充 BASE_URL 或显式输入凭据；原生 OpenAI/Anthropic 专属 Key 可匹配其官方默认地址。
+- 首批五档探测仍并发，RATE_LIMITED 档位在首批结束后串行重试一次，最多十次实际思考请求（单并发触发场景为九次）。重试和工具探测共用 55 秒总预算；不重试认证、参数或模型错误，不因限流推断模型不支持思考。回执仍按唯一档位保存，无新增 REST 字段。
+- Responses 完成快照按 output_index/content_index 校验正文与拒绝文本。可追加的缺失后缀补齐一次；正文冲突、回退、缺失或不能追加的错序返回响应协议错误，不能宣布成功。用户正文与持久回放快照保持一致。
+- 不透明协议状态以服务器 HMAC 绑定端点、模型协议、档案版本及凭据身份，不持久化原始地址/凭据或普通密钥哈希。切换连接时使用既有消息迁移流程清理旧状态；旧版兼容键会在首次续聊时清理，正文及工具调用历史保留。修改思考档位不改变连接身份。
+
+Responses 事件字段依据：[OpenAI 官方流式响应示例](https://developers.openai.com/api/reference/typescript/resources/beta/subresources/responses/methods/create)。
+
+修改代码文件与作用清单：
+- `backend/shared/model_urls.py`、`backend/api/app/{profile_env.py,routers/profiles.py}`：同源判断、环境凭据绑定及编辑/探测/模型列表防护。
+- `backend/api/app/{security.py,llm/resolver.py}`：受保护的协议状态连接作用域。
+- `backend/api/app/profile_probe.py`：限流串行重试及剩余总时限。
+- `backend/shared/responses.py`、`backend/api/app/llm/providers/responses.py`：正文终态核对、补齐与安全错误分类。
+- `frontend/src/components/modals/ProfileModal.vue`：跨源变更重新填写密钥的提示。
+- `backend/api/tests/test_{profile_credential_scope,replay_connection_scope,reasoning_templates,responses_protocol,newapi_reasoning,fetch_models}.py`：凭据边界、连接迁移、限流预算与正文一致性回归。
+
+
+本轮验证：API 全量 1918 passed / 78 skipped；随后补充端口 0 边界并重跑凭据安全测试。Worker 51 passed，前端 99 passed；Ruff、typecheck、生产构建通过。所有新增供应商用例使用虚构凭据及本地替身，未使用生产密钥。
