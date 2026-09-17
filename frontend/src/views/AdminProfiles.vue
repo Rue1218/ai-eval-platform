@@ -172,7 +172,7 @@
                     title="点击重新测试连通性"
                     @click="handlePing(p)"
                   >
-                    {{ pingStates[p.id].ok ? `${pingStates[p.id].latencyMs ?? '—'}ms` : '连接失败' }}
+                    {{ pingStates[p.id].ok ? `${pingStates[p.id].latencyMs ?? '—'}ms` : '测试未通过' }}
                   </button>
                   <button
                     v-else
@@ -2169,7 +2169,7 @@ async function handlePing(p: Profile) {
     if (res.ok) {
       message.success(`[${p.name}] 连通正常 · ${res.latency_ms ?? '—'}ms`)
     } else {
-      message.error(`[${p.name}] 连通测试失败`)
+      message.error(`[${p.name}] ${res.message || res.error || '本次连通测试未通过'}`)
     }
   } catch (err: any) {
     pingStates.value[p.id] = { ok: false, latencyMs: null }

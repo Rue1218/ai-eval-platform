@@ -1,6 +1,6 @@
 # 协议档供应商与思考强度适配
 
-版本：V1.5 ｜ 审查日期：2026-09-17
+版本：V1.6 ｜ 审查日期：2026-09-17
 
 ## 产品与接口增量
 
@@ -169,3 +169,20 @@ V1.5 验证：API 1816 passed / 78 skipped，Worker 51 passed，前端 99 passed
 修改代码文件与作用清单：`backend/api/app/profile_probe.py` 保留 SDK 已脱敏的具体故障类别；`backend/api/app/routers/profiles.py` 显示可操作的修正提示；`backend/api/tests/test_newapi_reasoning.py` 通过真实 SDK 注入错误状态，核对分类及秘密不外泄。
 
 补充验证：诊断分类加入后 API 全量 1837 passed / 78 skipped，Ruff 与 diff --check 通过。无密钥连通性检查确认用户网关 v1.0.0-rc.37 的 Chat/Responses 路由返回标准 401；未获得已认证模型调用结果，不据此宣称模型可用。
+
+
+## 连通检查与 New API Responses 一致性修复（2026-09-17）
+
+列表连接测试沿用实际对话的 build_adapter / resolve_request，不再走旧非流式 call_protocol，不再把输出上限强设为 1，也不丢失保存的思考模板。使用 profile_reasoning 投影的已验证默认档位与实际输出上限；模板未验证或失效时返回 VALIDATION 并要求重新测试。探活等待首个有效正文、思考片段或合法终态，整段上限仍为 30 秒并关闭流及连接池。探活成功只说明本次模型接口可响应，不写回思考档位或工具能力。失败前端显示服务端安全 message，状态文案改为“测试未通过”，避免把参数拒绝、等待超时统称网络断开。
+
+GPT-5.6（含 sol/terra/luna 及快照）的统一最高档发送原生 max；已知旧型号继续 high/xhigh。New API Chat/Responses 模板版本升至 3，OpenAI Chat/通用 Responses 模板升至 4，旧探测结果须重新验证后开放档位，避免使用旧 xhigh 回执宣称 max 已验证。依据：https://developers.openai.com/api/docs/models/gpt-5.6-terra 。
+
+Responses 识别 response.reasoning_text.delta 与已有摘要增量，保留供应商返回的协议状态，不生成或推断隐藏推理。工具调用、加密推理回放与正常结束规则不变。依据：https://github.com/openai/openai-python/blob/main/src/openai/types/responses/response_reasoning_text_delta_event.py 。
+
+修改代码文件与作用清单：
+- backend/api/app/profile_check.py、routers/profiles.py：复用运行时适配器的单次流式探活与清理。
+- backend/shared/reasoning.py、backend/shared/responses.py、backend/api/app/llm/providers/{options,reasoning_templates}.py：原生 max 映射、版本失效与增量识别。
+- frontend/src/api/{types,http}.ts、views/AdminProfiles.vue、components/modals/CheckResultModal.vue：保留并展示安全诊断。
+- API 探活/Responses 回归测试：真实 SDK 请求、连接清理、档位映射与安全诊断；前端类型检查验证诊断字段贯通。
+
+V1.6 本地验证：API 1878 passed / 78 skipped，Worker 51 passed，前端 99 passed；Ruff、typecheck、生产构建与 diff --check 通过。新增真实 SDK + HTTP 替身回归覆盖流式限定网关、完整 URL、已验证默认 max、模板版本失效、首字退出/超时清理、两种 Responses 思考增量及脱敏错误。本次未使用生产密钥调用用户通道。

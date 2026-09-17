@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, Query
 from fastapi import Request as FastApiRequest
 from sqlalchemy.orm import Session
 
-from ..adapters import DEFAULT_TIMEOUT_S, call_protocol, fetch_remote_models
+from ..adapters import DEFAULT_TIMEOUT_S, fetch_remote_models
 from ..db import get_db
 from ..deps import get_current_user
 from ..errors import AppError, ErrorCode
@@ -20,6 +20,7 @@ from ..llm.providers.reasoning_templates import (
     list_templates,
 )
 from ..models import AuditLog, ProtocolProfile, Setting, User
+from ..profile_check import check_model_connection
 from ..profile_env import (
     ProfileEnvSnapshot,
     read_global_llm_env,
@@ -722,11 +723,7 @@ def check_profile(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """向目标协议端点发送最小真实探活请求并返回脱敏结果。
-
-    复用两类协议统一适配器：上游 4xx/5xx → ``UPSTREAM``、超时 → ``TIMEOUT``、
-    结构异常 → ``UPSTREAM``；探活仅验证连通与鉴权，不因空文本判定失败。
-    """
+    """以已保存模板及默认档位执行流式探活，参数与实际对话同源。"""
     profile = db.query(ProtocolProfile).filter(ProtocolProfile.id == profile_id).first()
     if not profile:
         raise AppError(ErrorCode.NOT_FOUND, "协议档不存在")
@@ -734,18 +731,19 @@ def check_profile(
     base_url, model, api_key = _profile_connection(profile, allow_global_alias=True)
     if not api_key:
         raise AppError(ErrorCode.VALIDATION, "协议档未配置 API Key")
-    try:
-        result = call_protocol(
-            protocol=profile.protocol,
-            base_url=base_url,
-            model=model,
-            api_key=api_key,
-            messages=[{"role": "user", "content": "ping"}],
-            full_url=read_profile_env(profile.id).full_url,
-            max_tokens=1,
-            anthropic_version=profile.anthropic_version,
-            timeout_s=PROFILE_CHECK_TIMEOUT_S,
-        )
-    except AppError as exc:
-        return {"ok": False, "code": exc.code.value, "message": exc.message}
-    return {"ok": True, "latency_ms": result.latency_ms, "model": model}
+    full_url = read_profile_env(profile.id).full_url
+    max_tokens = getattr(profile, "max_output_tokens", 8192) or 8192
+    template_id = getattr(profile, "reasoning_template_id", None)
+    reasoning = profile_reasoning(profile.protocol, base_url, model, max_tokens, full_url=full_url,
+                                  reasoning_template_id=template_id,
+                                  reasoning_probe=getattr(profile, "reasoning_probe", None))
+    if template_id and not reasoning["allowed_efforts"]:
+        return {"ok": False, "code": "VALIDATION", "message": "思考模板尚未验证或已失效，请编辑协议档重新测试并保存"}
+    effort = reasoning["reasoning_effort"]
+    return check_model_connection(ModelConfig(
+        protocol=profile.protocol, base_url=base_url, model=model, api_key=api_key,
+        full_url=full_url, max_tokens=max_tokens, anthropic_version=profile.anthropic_version,
+        timeout_s=PROFILE_CHECK_TIMEOUT_S, reasoning_template_id=template_id,
+        reasoning_enabled=effort != "off", reasoning_effort=effort if effort != "off" else "medium",
+        reasoning_allowed_efforts=tuple(reasoning["allowed_efforts"]) if template_id else None,
+    ))

@@ -58,12 +58,12 @@ TEMPLATES: tuple[ReasoningTemplate, ...] = (
     ReasoningTemplate(
         "newapi-chat-effort-v1", "New API Chat · 思考强度", "*", "openai_chat",
         "effort", _EFFORTS, "medium", "newapi_effort",
-        "发送网关 reasoning_effort，由 New API 转换上游参数；每档须验证思考证据。",
+        "发送网关 reasoning_effort，由 New API 转换上游参数；每档须验证思考证据。", version=3,
     ),
     ReasoningTemplate(
         "newapi-responses-effort-v1", "New API Responses · 思考强度", "*", "openai_responses",
         "effort", _EFFORTS, "medium", "newapi_effort",
-        "发送网关 reasoning.effort；通道、网关版本及模型决定有效档位。",
+        "发送网关 reasoning.effort；通道、网关版本及模型决定有效档位。", version=3,
     ),
     ReasoningTemplate(
         "newapi-messages-effort-v1", "New API Messages · 自适应思考强度", "*", "anthropic_messages",
@@ -93,8 +93,8 @@ TEMPLATES: tuple[ReasoningTemplate, ...] = (
     ReasoningTemplate(
         "responses-reasoning-effort-v1", "Responses · 思考强度", "*", "openai_responses",
         "effort", _EFFORTS, "medium", "openai_effort",
-        "使用 reasoning.effort；旧 OpenAI 模型最高映射 high，其余验证 xhigh 候选。兼容端点各档位以真实验证为准。",
-        version=3,
+        "使用 reasoning.effort；早期模型最高 high，GPT-5.6 使用 max，其余验证 xhigh 候选。兼容端点各档位以真实验证为准。",
+        version=4,
     ),
     ReasoningTemplate(
         "aliyun-numeric-effort-v1", "百炼 · 数值思考强度（可选）", "qwen", "openai_chat",
@@ -136,7 +136,7 @@ TEMPLATES: tuple[ReasoningTemplate, ...] = (
     ReasoningTemplate(
         "openai-reasoning-effort-v1", "OpenAI Reasoning Effort", "openai", "openai_chat",
         "effort", _EFFORTS, "medium", "openai_effort",
-        "适用于 OpenAI 原生 reasoning_effort 参数的推理模型。", version=3, model_pattern=r"^(?:o1|o3|o4|gpt-5)(?:[.-]|$)",
+        "适用于 OpenAI 原生 reasoning_effort 参数的推理模型。", version=4, model_pattern=r"^(?:o1|o3|o4|gpt-5)(?:[.-]|$)",
     ),
     ReasoningTemplate(
         "deepseek-thinking-switch-v1", "DeepSeek 思考开关", "deepseek", "openai_chat",

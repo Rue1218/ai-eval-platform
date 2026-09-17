@@ -16,7 +16,7 @@ from tests.test_loop_llm_sdk import install_transport, sse
 from tests.test_profile_tool_probe import probe_wire
 
 PROTOCOLS = ("openai_chat", "openai_responses", "anthropic_messages")
-MODELS = ("gpt-5.4", "gpt-5.1", "claude-sonnet-4-6", "gemini-2.5-flash", "qwen3.6-flash", "private-alias")
+MODELS = ("gpt-5.6-terra", "gpt-5.4", "gpt-5.1", "claude-sonnet-4-6", "gemini-2.5-flash", "qwen3.6-flash", "private-alias")
 EFFORTS = ("off", "low", "medium", "high", "max")
 
 
@@ -58,7 +58,7 @@ def test_newapi_sdk_reasoning_and_tool_roundtrip(monkeypatch, protocol, model, e
         assert payload["model"] == model and "temperature" not in payload
         expected = "none" if effort == "off" else effort
         if effort == "max" and model.startswith("gpt-"):
-            expected = "high" if model == "gpt-5.1" else "xhigh"
+            expected = "max" if model == "gpt-5.6-terra" else "high" if model == "gpt-5.1" else "xhigh"
         if protocol == "openai_chat":
             assert payload["reasoning_effort"] == expected
             assert payload["max_tokens"] == 8192
@@ -158,3 +158,39 @@ def test_probe_failure_keeps_safe_actionable_category(monkeypatch, protocol, sta
     message = _probe_message({"status": "failed", "attempts": [{"ok": False, "error_code": result[2]}]})
     assert label in message and "未保存" in message
     assert "private-key" not in message and "secret-prompt" not in message
+
+
+@pytest.mark.parametrize("event_type", ["response.reasoning_text.delta", "response.reasoning_summary_text.delta"])
+def test_responses_probe_recognizes_both_reasoning_events(monkeypatch, event_type):
+    """网关未报告 reasoning_tokens 时，标准思考增量仍是有效证据。"""
+    from app.profile_probe import _probe_one
+    from tests.test_responses_protocol import completed, wire
+
+    def handler(request):
+        """取消推理用量，只用标准增量证明证据识别路径。"""
+        data = completed()
+        data["usage"]["output_tokens_details"]["reasoning_tokens"] = 0
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=wire([
+            {"type": event_type, "delta": "reasoning evidence", "item_id": "rs_1", "output_index": 0,
+             "content_index": 0, "summary_index": 0, "sequence_number": 1},
+            {"type": "response.output_text.delta", "delta": "answer", "sequence_number": 2},
+            {"type": "response.completed", "response": data, "sequence_number": 3},
+        ]))
+
+    install_transport(monkeypatch, "openai", handler)
+    config = ModelConfig("openai_responses", "https://unit.invalid", "gpt-5.6-terra", api_key="unit",
+                         reasoning_enabled=True, reasoning_template_id="newapi-responses-effort-v1")
+    assert asyncio.run(_probe_one(config, requires_reasoning_evidence=True)) == (True, "reasoning_delta", None)
+
+
+@pytest.mark.parametrize("model,expected", [
+    ("gpt-5.6", "max"), ("gpt-5.6-sol", "max"), ("gpt-5.6-terra", "max"),
+    ("gpt-5.6-luna-2026-09-01", "max"), ("openai/gpt-5.6-terra", "max"),
+    ("gpt-5.5", "xhigh"), ("gpt-5.4", "xhigh"), ("gpt-5.1", "high"), ("o3", "high"),
+])
+def test_openai_max_effort_is_model_specific(model, expected):
+    """最高档不能一概降成 xhigh，已有旧型号映射保持兼容。"""
+    from shared.reasoning import openai_effort
+
+    assert openai_effort(model, "max") == expected
+    assert openai_effort(model, "high") == "high"
