@@ -556,7 +556,7 @@ watch(
       templateSelectionManual.value = Boolean(profileVal?.reasoning_template_id
         && ['passed', 'partial'].includes(profileVal.reasoning_probe_status || ''))
       selectedVendor.value = props.initialData?.vendorKey
-        || (profileVal ? findPresetVendor(profileVal.base_url, profileVal.protocol, profileVal.name) : null)
+        || (profileVal ? findPresetVendor(profileVal.base_url, profileVal.protocol, profileVal.name, profileVal.reasoning_template_id) : null)
         || null
       clearModelParameters()
       if (profileVal) {

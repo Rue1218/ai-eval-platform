@@ -1,6 +1,6 @@
 # 协议档供应商与思考强度适配
 
-版本：V1.4 ｜ 审查日期：2026-09-17
+版本：V1.5 ｜ 审查日期：2026-09-17
 
 ## 产品与接口增量
 
@@ -105,16 +105,16 @@ Profile 响应增加只读 `provider, reasoning_effort, allowed_efforts, reasoni
 
 新增供应商依据：[New API 支持端点](https://docs.newapi.pro/en/docs/guide/feature-guide/user/api)。
 
-New API 的模板目录与后端运行时使用相同的模型名称回退规则；Ollama Chat 提供独立 `ollama-reasoning-effort-v1` 模板，使用 `reasoning_effort`（none/low/medium/high/max）和 max_tokens，不透传百炼等托管服务的 enable_thinking/thinking_budget。Ollama 允许任意部署地址，因此此模板按显式选择及真实探测放行，不以主机名假定模型归属。
+New API 的模板目录使用下述 V1.5 网关专用规则；Ollama Chat 提供独立 `ollama-reasoning-effort-v1` 模板，使用 `reasoning_effort`（none/low/medium/high/max）和 max_tokens，不透传百炼等托管服务的 enable_thinking/thinking_budget。Ollama 允许任意部署地址，因此此模板按显式选择及真实探测放行，不以主机名假定模型归属。
 
 
 ## V1.3 协议工具与思考兼容审查（2026-09-17）
 
 - 三种 Agent 协议均支持平台函数工具调用。Responses 使用扁平 `tools`、`function_call.call_id` 和 `function_call_output`；完整 reasoning/output 项随工具结果回传。多工具交错增量按 output_index 累积，断流、失败、截断和重复调用身份不允许实际执行工具。平台 MCP 工具仍由本地调度器执行；此处不等于开启 OpenAI 托管工具或远程 MCP 工具类型。
-- New API 是协议网关，Chat/Responses/Messages 的工具与思考能力取决于所选通道、模型和网关版本。模板按模型方言推荐，逐档验证参数和思考证据；HTTP 成功本身不证明工具能力。现有保存前验证不执行工具，需另行进行真实 Agent 工具调用验收。
+- New API 是协议网关，Chat/Responses/Messages 的工具与思考能力取决于所选通道、模型和网关版本。模板按网关协议推荐，逐档验证参数和思考证据；HTTP 成功本身不证明工具能力。现有保存前验证不执行工具，需另行进行真实 Agent 工具调用验收。
 - Ollama Chat 使用 `reasoning_effort`，Responses 新增独立 `ollama-responses-effort-v1`，使用 `reasoning.effort`；均发送文档声明的 none/low/medium/high/max。GPT-OSS 的文档档位为 low/medium/high，不能推定支持关闭或独立 max；不支持档位由真实探测排除。Responses 仅使用无状态历史回放，要求 Ollama 0.13.3+；具体工具能力仍受模型限制。
 - OpenAI 的平台最高档不再统一转 xhigh：o1/o3/o4、GPT-5、GPT-5.1 映射 high，GPT-5.1-Codex-Max 与后续型号/未知兼容端点验证 xhigh 候选。high/max 同参时由现有探测去重，只发布一个档位；未知型号不因名称推断为已支持。OpenAI Chat 与通用 Responses 模板版本提升为 3，旧版本探测失效，须重新验证。同步 Responses 网关使用相同最高档映射。
-- New API 和 Ollama 使用项目现有 MIT 品牌资源包的完整同名单色 SVG；不再使用字母占位或不完整轮廓，随 currentColor 适配明暗主题。
+- New API 使用 MIT 品牌资源包的渐变 newapi-color.svg，Ollama 使用完整同名单色 SVG；不再使用字母占位或不完整轮廓，随 currentColor 适配明暗主题。
 
 核对来源：[OpenAI 函数工具调用](https://developers.openai.com/api/docs/guides/function-calling)、[GPT-5.1 参数范围](https://developers.openai.com/api/docs/models/gpt-5.1)、[OpenAI 推理指南](https://developers.openai.com/api/docs/guides/reasoning)、[Ollama OpenAI 兼容接口](https://docs.ollama.com/api/openai-compatibility)、[Ollama 思考能力](https://docs.ollama.com/capabilities/thinking)、[New API 支持端点](https://docs.newapi.pro/en/docs/guide/feature-guide/user/api)。
 
@@ -140,3 +140,32 @@ New API 的模板目录与后端运行时使用相同的模型名称回退规则
 修改代码文件与作用清单：`backend/api/app/profile_tool_probe.py` 复用生产消息拼装与三协议适配器；`profile_probe.py` 选择已验证档位和总时限；`routers/profiles.py` / `schemas.py` 状态投影及失效；`frontend/src/api/{types,http}.ts` / `components/modals/ProfileModal.vue` 独立状态、警告和时限；`backend/api/tests/test_profile_tool_probe.py` 覆盖三种真实 SDK、错误分支和旧验证失效。
 
 V1.4 验证：API 1700 passed / 78 skipped，前端 98 passed；Ruff、typecheck、生产构建和 diff --check 通过。测试覆盖真实 SDK 的三协议往返、异常流、超时清理及凭据/模板失效，网络采用本地替身。本次未调用线上模型、未部署。
+
+
+## New API 网关思考适配修复（2026-09-17）
+
+New API 使用独立、可持久化的协议模板，不再按模型品牌推荐原厂请求扩展：`newapi-chat-effort-v1` 发送 `reasoning_effort`，`newapi-responses-effort-v1` 发送 `reasoning.effort`，`newapi-messages-effort-v1` 发送 `thinking.type=adaptive` 与 `output_config.effort`。Messages 另提供 `newapi-messages-budget-v1`，用于不支持自适应转换的通道。关闭分别发送 `none` / `thinking.type=disabled`；普通模型可选择 `newapi-no-reasoning-v1`，不发送思考字段。
+
+统一五档仍为 off/low/medium/high/max；Chat/Responses 的已知 GPT/o 系列最高档沿用 OpenAI high/xhigh 映射，其它模型及未知别名验证 max 候选。Chat 使用 max_tokens，Responses 使用 max_output_tokens，Messages 使用 max_tokens。网关负责向上游转换；网关版本、别名、通道与模型决定实际有效档位，只有收到思考证据且完成探测的档位才能出现在对话强度选择中。模板声明不代表已验证支持。
+
+显式 New API 模板可用于任意部署地址，并用于恢复编辑时的供应商和管理页品牌分组；运行时模型供应商继续用于各模型的内容回放。旧档需重新编辑并验证 New API 模板后更新已保存能力，不自动沿用旧探测结果。New API Chat 保留工具轮次的 reasoning_content；Messages 兼容无签名的网关转换思考块，原生 Claude 签名要求保持不变。
+
+图标采用与官方公开 logo.png 一致的青紫／粉色渐变版，使用现有 MIT 图标包 newapi-color.svg；图标来源：[官方公开标志](https://github.com/QuantumNous/new-api/blob/69a50029819a26c53e6babd276d49cfe2f8880ad/web/public/logo.png)。参数依据：[Chat 接口文档](https://docs.newapi.pro/en/docs/api/ai-model/chat/openai/createchatcompletion)、[网关统一思考意图与七档解析](https://github.com/QuantumNous/new-api/blob/69a50029819a26c53e6babd276d49cfe2f8880ad/relaykit/relayconvert/reasoning/intent.go)、[Claude 转换](https://github.com/QuantumNous/new-api/blob/69a50029819a26c53e6babd276d49cfe2f8880ad/relaykit/relayconvert/reasoning/claude.go)。文档仅列 low/medium/high，而当前源码接受更多值，因此最高档必须真实探测。
+
+修改代码文件与作用清单：
+- `backend/api/app/llm/providers/reasoning_templates.py`：New API 专用目录、三协议字段和普通模式。
+- `backend/api/app/llm/providers/{openai,anthropic}.py`、`backend/api/app/agent/loop_wiring.py`：网关思考内容回放与上下文计量一致。
+- `frontend/src/utils/{providerLogo,profileVendors}.ts`、`frontend/src/components/modals/ProfileModal.vue`：保存模板恢复供应商与品牌分组。
+- `frontend/src/assets/providers/{newapi.svg,README.md}`：渐变品牌图标与来源说明。
+- 后端 New API 回归与前端供应商测试：三协议、多模型别名、档位投影与重新编辑。
+
+V1.5 验证：API 1816 passed / 78 skipped，Worker 51 passed，前端 99 passed；Ruff、typecheck、生产构建通过。New API 回归使用真实 SDK 与本地 HTTP 替身验证三协议、六种模型名称和五档参数，以及工具回填和已保存探测结果投影；未调用线上 New API。渐变图标已检查浅色、深色及 24px 显示。
+
+
+### 添加失败的诊断修复（2026-09-17）
+
+保存前探测的 `attempts[].error_code` 增补安全分类：`AUTH_FAILED`（密钥或权限）、`MODEL_OR_ENDPOINT_UNAVAILABLE`（模型或接口）、`RATE_LIMITED`（限流）、`UPSTREAM_UNAVAILABLE`（上游服务）、`CONNECTION_FAILED`（连接）、`PARAMETERS_REJECTED`（协议或参数）、`INVALID_RESPONSE`（流格式）、`INCOMPLETE_RESPONSE`（未正常结束）。额度不足继续使用 `BUDGET_EXCEEDED`。这些是探测明细分类，不改变 REST 十大错误码；不回显上游错误正文、密钥或提示词。任何验证全部失败的档仍不保存。
+
+修改代码文件与作用清单：`backend/api/app/profile_probe.py` 保留 SDK 已脱敏的具体故障类别；`backend/api/app/routers/profiles.py` 显示可操作的修正提示；`backend/api/tests/test_newapi_reasoning.py` 通过真实 SDK 注入错误状态，核对分类及秘密不外泄。
+
+补充验证：诊断分类加入后 API 全量 1837 passed / 78 skipped，Ruff 与 diff --check 通过。无密钥连通性检查确认用户网关 v1.0.0-rc.37 的 Chat/Responses 路由返回标准 401；未获得已认证模型调用结果，不据此宣称模型可用。

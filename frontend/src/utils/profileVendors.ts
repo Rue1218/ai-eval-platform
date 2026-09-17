@@ -123,8 +123,9 @@ export function getVendorProtocolPreset(vendorKey: string | null, protocol: Prot
   return PROFILE_VENDORS.find(vendor => vendor.key === vendorKey)?.protocols[protocol]
 }
 
-/** 仅当已保存地址命中官方预设时恢复供应商选择，避免把自建兼容网关误锁为原厂。 */
-export function findPresetVendor(baseUrl: string | undefined, protocol: ProtocolType, name?: string): ProviderLogoKey | null {
+/** 优先按显式网关模板恢复供应商，再匹配官方预设地址或自建服务名称。 */
+export function findPresetVendor(baseUrl: string | undefined, protocol: ProtocolType, name?: string, reasoningTemplateId?: string | null): ProviderLogoKey | null {
+  if (reasoningTemplateId?.startsWith('newapi-')) return 'newapi'
   const normalized = (baseUrl || '').trim().replace(/\/+$/, '').toLowerCase()
   if (!normalized) return null
   const matched = PROFILE_VENDORS.find((vendor) => {
@@ -139,7 +140,7 @@ export function findPresetVendor(baseUrl: string | undefined, protocol: Protocol
   return service === 'newapi' || service === 'ollama' ? service : null
 }
 
-/** 管理页的分组供应商只读取服务端点与协议档名称，不读取模型 ID。 */
-export function getProfileVendor(profile: { provider?: string; base_url?: string; name?: string }): ProviderLogoKey {
+/** 管理页按网关模板、服务端点与协议档名称分组，不读取模型 ID。 */
+export function getProfileVendor(profile: { provider?: string; base_url?: string; name?: string; reasoning_template_id?: string | null }): ProviderLogoKey {
   return getServiceLogoKey(profile)
 }

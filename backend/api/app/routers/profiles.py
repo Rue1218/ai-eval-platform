@@ -304,6 +304,15 @@ def _probe_message(probe: dict[str, object]) -> str:
         "TIMEOUT": "验证超时",
         "UPSTREAM": "上游拒绝请求或未正常完成",
         "VALIDATION": "所选参数不兼容",
+        "AUTH_FAILED": "模型服务鉴权失败，请检查 API Key、令牌分组及模型访问权限",
+        "MODEL_OR_ENDPOINT_UNAVAILABLE": "模型或接口不可用，请核对模型 ID、Base URL 和通道支持的协议",
+        "RATE_LIMITED": "模型服务限流，请检查令牌并发限制或稍后重试",
+        "UPSTREAM_UNAVAILABLE": "网关或上游通道暂时不可用，请检查通道状态",
+        "CONNECTION_FAILED": "无法连接模型服务，请检查服务器到 Base URL 的网络与证书",
+        "PARAMETERS_REJECTED": "请求参数或协议被拒绝，请核对通道是否支持当前协议及思考模板",
+        "INVALID_RESPONSE": "返回格式与所选协议不匹配，请核对接口地址、协议和流式支持",
+        "INCOMPLETE_RESPONSE": "模型响应未正常结束，请检查输出上限或流式连接",
+        "BUDGET_EXCEEDED": "模型服务额度不足，请检查令牌余额及上游通道额度",
     }
     reasons = list(dict.fromkeys(
         labels.get(item.get("error_code"), "所选参数未通过验证")

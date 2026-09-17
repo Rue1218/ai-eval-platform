@@ -268,12 +268,12 @@ def test_responses_agent_tool_roundtrip_and_next_turn(monkeypatch, call_count):
 
 
 def test_self_hosted_vendor_templates_match_runtime():
-    """New API 按模型方言推荐；Ollama 任意地址仍可用显式兼容模板。"""
+    """New API 按网关协议推荐；Ollama 任意地址仍可用显式兼容模板。"""
     from app.llm.providers.options import request_options
     from app.llm.providers.reasoning_templates import list_templates
 
-    assert list_templates("newapi", "openai_chat", "gpt-5.4")[0].id == "openai-reasoning-effort-v1"
-    assert list_templates("newapi", "openai_chat", "qwen3.6-flash")[0].provider == "qwen"
+    assert list_templates("newapi", "openai_chat", "gpt-5.4")[0].id == "newapi-chat-effort-v1"
+    assert list_templates("newapi", "openai_chat", "qwen3.6-flash")[0].id == "newapi-chat-effort-v1"
     template = list_templates("ollama", "openai_chat", "qwen3:8b")[0]
     assert template.id == "ollama-reasoning-effort-v1"
     config = ModelConfig("openai_chat", "http://private.invalid:8080/v1", "qwen3:8b", api_key="ollama",

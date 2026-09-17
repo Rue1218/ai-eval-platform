@@ -34,6 +34,7 @@ from .common import (
     validate_messages,
 )
 from .options import request_options
+from .reasoning_templates import is_newapi_template
 
 
 def to_openai_messages(
@@ -147,7 +148,7 @@ class OpenAiAdapter:
             messages=to_openai_messages(
                 request.messages,
                 request.system,
-                include_reasoning_content=provider in {"deepseek", "moonshot", "zhipu", "minimax"},
+                include_reasoning_content=is_newapi_template(request.reasoning_template_id) or provider in {"deepseek", "moonshot", "zhipu", "minimax"},
                 request=request,
             ),
             stream=True,

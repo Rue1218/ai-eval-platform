@@ -37,13 +37,14 @@ from .common import (
     validate_messages,
 )
 from .options import request_options
+from .reasoning_templates import is_newapi_template
 
 
 def _allows_unsigned_thinking(request: LlmRequest | None) -> bool:
     """兼容供应商的 Messages 流可省略签名，原生 Claude 仍严格要求签名。"""
-    return request is not None and request.provider in {
+    return request is not None and (is_newapi_template(request.reasoning_template_id) or request.provider in {
         "deepseek", "qwen", "zhipu", "moonshot", "minimax", "nvidia", "volcengine",
-    }
+    })
 
 
 def _validate_block(block: dict, *, allow_unsigned_thinking: bool = False) -> None:

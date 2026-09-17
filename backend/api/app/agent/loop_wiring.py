@@ -29,6 +29,7 @@ from app.llm.loop_contracts import (
     ProtocolState,
     UnsupportedReasoningEffortError,
 )
+from app.llm.providers.reasoning_templates import is_newapi_template
 from app.llm.resolver import AuthorizedProfileSnapshot, build_adapter, resolve_request
 from app.models import ProtocolProfile, Session, Setting, User, Workspace
 from app.session_access import require_visible_session
@@ -555,7 +556,7 @@ def _wire_payload(request) -> dict:
             "messages": to_openai_messages(
                 request.messages,
                 request.system,
-                include_reasoning_content=request.provider in {"deepseek", "moonshot", "zhipu", "minimax"},
+                include_reasoning_content=is_newapi_template(request.reasoning_template_id) or request.provider in {"deepseek", "moonshot", "zhipu", "minimax"},
                 request=request,
             ),
             "tools": to_openai_tools(request.tools),
