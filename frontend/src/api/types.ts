@@ -51,7 +51,7 @@ export interface WsTicketOut {
 }
 
 // 协议类型
-export type ProtocolType = 'openai_chat' | 'anthropic_messages'
+export type ProtocolType = 'openai_chat' | 'openai_responses' | 'anthropic_messages'
 
 // Agent 思考强度；具体模型不支持某档位时由上游返回统一 UPSTREAM 错误。
 export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
@@ -78,6 +78,7 @@ export interface Profile {
   reasoning_template_id?: string | null
   reasoning_template_name?: string | null
   reasoning_probe_status?: 'legacy' | 'unverified' | 'passed' | 'partial' | 'failed'
+  tool_probe_status?: 'unverified' | 'passed' | 'failed' | 'skipped'
   id: string
   name: string
   protocol: ProtocolType
@@ -165,6 +166,8 @@ export interface ProfileReasoningProbe {
   supported_efforts: ProfileEffort[]
   attempts: Array<{ effort: ProfileEffort; ok: boolean; evidence?: 'reasoning_delta' | 'reasoning_usage' | 'request_completed'; error_code?: string }>
   tested_at: string
+  /** 仅一个已通过思考档位的原生工具往返结果，不代表运行时授权。 */
+  tool_probe?: { status: 'passed' | 'failed' | 'skipped'; effort?: ProfileEffort; error_code?: string }
 }
 
 export interface ProfileProbeOut {

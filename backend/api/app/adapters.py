@@ -37,7 +37,7 @@ if TYPE_CHECKING:
     from .llm.contracts import SystemSegment
 
 # 契约支持的两类协议（与 protocol_profiles 的 CHECK 约束一致）
-SUPPORTED_PROTOCOLS = ("openai_chat", "anthropic_messages")
+SUPPORTED_PROTOCOLS = ("openai_chat", "openai_responses", "anthropic_messages")
 
 # 非流式调用被测 / Agent 模型的默认超时秒数
 DEFAULT_TIMEOUT_S = 30.0
@@ -595,6 +595,7 @@ def _service_base_url(base_url: str) -> str:
     base = base_url.strip().rstrip("/")
     for suffix in (
         "/chat/completions",
+        "/responses",
         "/messages",
         "/models",
         "/v1/models",
@@ -675,6 +676,13 @@ def call_protocol(
     """
     if protocol not in SUPPORTED_PROTOCOLS:
         raise AppError(ErrorCode.VALIDATION, f"协议不受支持：{protocol}")
+
+    if protocol == "openai_responses":
+        from .responses_adapter import call_responses
+
+        return call_responses(base_url=base_url, api_key=api_key, timeout_s=timeout_s, full_url=full_url,
+            model=model, messages=messages, system=system, temperature=temperature, max_tokens=max_tokens,
+            reasoning_enabled=reasoning_enabled, reasoning_effort=reasoning_effort, tools=tools)
 
     base = base_url.strip() if full_url else _service_base_url(base_url)
     client: object | None = None
@@ -795,6 +803,14 @@ def stream_protocol(
     """
     if protocol not in SUPPORTED_PROTOCOLS:
         raise AppError(ErrorCode.VALIDATION, f"协议不受支持：{protocol}")
+
+    if protocol == "openai_responses":
+        from .responses_adapter import stream_responses
+
+        yield from stream_responses(base_url=base_url, api_key=api_key, timeout_s=timeout_s, full_url=full_url,
+            model=model, messages=messages, system=system, temperature=temperature, max_tokens=max_tokens,
+            reasoning_enabled=reasoning_enabled, reasoning_effort=reasoning_effort, tools=tools, should_abort=should_abort)
+        return
 
     base = base_url.strip() if full_url else _service_base_url(base_url)
     def complete_stream_call(

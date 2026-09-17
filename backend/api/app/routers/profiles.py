@@ -166,6 +166,12 @@ def _profile_out(profile: ProtocolProfile, connection: tuple[str, str, str | Non
     )
     if template_id and probe_status in {"passed", "partial"} and not reasoning["allowed_efforts"]:
         probe_status = "unverified"
+    tool_probe = probe.get("tool_probe", {}) if isinstance(probe, dict) else {}
+    tool_status = tool_probe.get("status") if isinstance(tool_probe, dict) else None
+    if probe_status not in {"passed", "partial"} or tool_status not in {"passed", "failed", "skipped"}:
+        tool_status = "unverified"
+    elif tool_status in {"passed", "failed"} and tool_probe.get("effort") not in reasoning["allowed_efforts"]:
+        tool_status = "unverified"
     return ProfileOut(
         **reasoning,
         full_url=env_values.full_url,
@@ -188,6 +194,7 @@ def _profile_out(profile: ProtocolProfile, connection: tuple[str, str, str | Non
         reasoning_template_id=template_id,
         reasoning_template_name=template_name,
         reasoning_probe_status=probe_status,
+        tool_probe_status=tool_status,
         tool_call_mode=getattr(profile, "tool_call_mode", "native") or "native",
         created_at=profile.created_at,
         updated_at=profile.updated_at,
@@ -231,7 +238,7 @@ def get_reasoning_templates(
     user: User = Depends(get_current_user),
 ):
     """返回当前供应商、协议和模型可选择的受控思考模板，不返回可执行请求体。"""
-    if protocol not in {"openai_chat", "anthropic_messages"}:
+    if protocol not in {"openai_chat", "openai_responses", "anthropic_messages"}:
         raise AppError(ErrorCode.VALIDATION, "协议类型不支持")
     normalized_provider = provider.strip().lower()
     if not normalized_provider or len(normalized_provider) > 64:
@@ -271,7 +278,7 @@ def _probe_model_config(
         reasoning_template_id=template.id,
     )
     try:
-        return probe_reasoning_template(config)
+        return probe_reasoning_template(config, check_tools="agent" in body.usages)
     except LlmRequestError as exc:
         raise AppError(ErrorCode.VALIDATION, "模型思考模板配置无效") from exc
 
@@ -280,10 +287,15 @@ def _probe_message(probe: dict[str, object]) -> str:
     """把非敏感探测结果转换为配置页可读提示，不泄露上游正文。"""
     supported = probe.get("supported_efforts")
     count = len(supported) if isinstance(supported, list) else 0
-    if probe.get("status") == "passed":
-        return f"模型模板验证通过，已确认 {count} 个思考档位"
-    if probe.get("status") == "partial":
-        return f"模型模板部分通过，已确认 {count} 个思考档位"
+    if probe.get("status") in {"passed", "partial"}:
+        label = "验证通过" if probe["status"] == "passed" else "部分通过"
+        message = f"模型模板{label}，已确认 {count} 个思考档位"
+        tool_status = (probe.get("tool_probe") or {}).get("status")
+        if tool_status == "passed":
+            return message + "；原生工具调用及结果回填已通过"
+        if tool_status == "failed":
+            return message + "；原生工具往返未通过，已保存但用于 Agent 前请检查模型或通道配置"
+        return message + "；原生工具未验证"
     # 仅解释平台安全分类，不展示上游正文；便于用户选其他方言或重试。
     labels = {
         "NO_REASONING_EVIDENCE": "本次未观察到思考证据",
@@ -453,9 +465,9 @@ def _update_profile(
     embedding_api_key = values.pop("embedding_api_key", None)
     reranker_api_key = values.pop("reranker_api_key", None)
     changed_reasoning_inputs = bool(
-        {"protocol", "base_url", "full_url", "model", "max_output_tokens", "reasoning_template_id"}
+        {"protocol", "base_url", "full_url", "model", "max_output_tokens", "reasoning_template_id", "anthropic_version"}
         & set(values)
-    )
+    ) or bool(api_key)  # 新凭据可能路由到不同通道，不能复用旧验证结果。
     current_env = read_profile_env(profile.id)
     full_url = values.pop("full_url", None)
     full_url = current_env.full_url if full_url is None else full_url

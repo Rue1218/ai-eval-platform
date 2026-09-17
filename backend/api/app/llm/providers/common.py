@@ -41,7 +41,7 @@ def normalize_base_url(base_url: str, protocol: str, *, full_url: bool = False) 
         raise LlmRequestError("模型服务地址不合法", code="model_config") from exc
     if full_url:
         return url
-    suffix = "/v1/messages" if protocol == "anthropic_messages" else "/chat/completions"
+    suffix = {"anthropic_messages": "/v1/messages", "openai_responses": "/responses"}.get(protocol, "/chat/completions")
     return url[:-len(suffix)] if url.endswith(suffix) else url.rsplit("/messages", 1)[0]
 
 

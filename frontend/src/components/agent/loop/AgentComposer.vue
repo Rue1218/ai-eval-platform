@@ -252,7 +252,7 @@ function chooseTier(value: string) {
   emit('updatePermissionTier', value)
 }
 const sendLabel = computed(() => props.busy ? (props.cancelling ? '正在取消' : '停止执行') : props.draft.submitting ? '正在提交' : '发送')
-const protocolLabels: Record<string, string> = { openai_chat: 'OpenAI 兼容', anthropic_messages: 'Anthropic' }
+const protocolLabels: Record<string, string> = { openai_chat: 'OpenAI 兼容', openai_responses: 'Responses', anthropic_messages: 'Anthropic' }
 function handleClickSend() {
   if (props.busy) { emit('stop'); return }
   emit('submit')

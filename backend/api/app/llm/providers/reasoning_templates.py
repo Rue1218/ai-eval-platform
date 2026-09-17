@@ -10,6 +10,8 @@ import re
 from dataclasses import dataclass
 from typing import Literal
 
+from shared.reasoning import openai_effort
+
 from ..loop_contracts import LlmRequest, LlmRequestError, UnsupportedReasoningEffortError
 
 TemplateMode = Literal["none", "switch", "effort", "budget", "fixed"]
@@ -54,6 +56,22 @@ class ReasoningTemplate:
 
 TEMPLATES: tuple[ReasoningTemplate, ...] = (
     ReasoningTemplate(
+        "ollama-reasoning-effort-v1", "Ollama · 思考强度", "*", "openai_chat",
+        "effort", _EFFORTS, "medium", "ollama_effort",
+        "使用 Ollama 兼容接口 reasoning_effort；不同模型的档位以真实验证为准。",
+    ),
+    ReasoningTemplate(
+        "ollama-responses-effort-v1", "Ollama Responses · 思考强度", "*", "openai_responses",
+        "effort", _EFFORTS, "medium", "ollama_effort",
+        "使用 reasoning.effort（none/low/medium/high/max）；GPT-OSS 等模型的有效档位以真实验证为准。",
+    ),
+    ReasoningTemplate(
+        "responses-reasoning-effort-v1", "Responses · 思考强度", "*", "openai_responses",
+        "effort", _EFFORTS, "medium", "openai_effort",
+        "使用 reasoning.effort；旧 OpenAI 模型最高映射 high，其余验证 xhigh 候选。兼容端点各档位以真实验证为准。",
+        version=3,
+    ),
+    ReasoningTemplate(
         "aliyun-numeric-effort-v1", "百炼 · 数值思考强度（可选）", "qwen", "openai_chat",
         "effort", _EFFORTS, "medium", "aliyun_numeric",
         "仅供已支持整数强度的兼容端点验证：低/中/高/最高为 1/33/67/100；不按型号默认启用。",
@@ -93,7 +111,7 @@ TEMPLATES: tuple[ReasoningTemplate, ...] = (
     ReasoningTemplate(
         "openai-reasoning-effort-v1", "OpenAI Reasoning Effort", "openai", "openai_chat",
         "effort", _EFFORTS, "medium", "openai_effort",
-        "适用于 OpenAI 原生 reasoning_effort 参数的推理模型。", model_pattern=r"^(?:o1|o3|o4|gpt-5)(?:[.-]|$)",
+        "适用于 OpenAI 原生 reasoning_effort 参数的推理模型。", version=3, model_pattern=r"^(?:o1|o3|o4|gpt-5)(?:[.-]|$)",
     ),
     ReasoningTemplate(
         "deepseek-thinking-switch-v1", "DeepSeek 思考开关", "deepseek", "openai_chat",
@@ -222,10 +240,17 @@ def list_templates(provider: str, protocol: str, model: str) -> list[ReasoningTe
     """列出供应商和协议允许的全部模板，匹配名称的优先，普通模板置后。"""
     normalized_provider = provider.strip().lower()
     normalized_protocol = protocol.strip()
+    if normalized_provider == "newapi":
+        # 网关不是模型方言；与保存和运行时的模型回退规则保持一致。
+        from .catalog import detect_provider
+
+        normalized_provider = detect_provider("", model, protocol)
     matched = [
         template for template in TEMPLATES
         if template.provider in {normalized_provider, "*"}
         and template.protocol in {normalized_protocol, "*"}
+        # Ollama 可用任意部署地址；模板不依赖域名，目录仅在显式选择时推荐。
+        and (template.adapter != "ollama_effort" or normalized_provider == "ollama")
     ]
     return sorted(matched, key=lambda item: (
         item.provider == "*", not _matches_model(item, model), item.adapter == "aliyun_numeric",
@@ -283,8 +308,10 @@ def resolve_template_options(request: LlmRequest, provider: str, protocol: str) 
     adapter = template.adapter
     if adapter == "none":
         return {}
+    if adapter == "ollama_effort":
+        return {"reasoning_effort": effort if enabled else "none"}
     if adapter == "openai_effort":
-        return {"reasoning_effort": "none" if not enabled else ("xhigh" if effort == "max" else effort),
+        return {"reasoning_effort": "none" if not enabled else openai_effort(request.model, effort),
                 "omit_temperature": True, "max_tokens_parameter": "max_completion_tokens"}
     if adapter == "thinking_switch":
         return {"thinking": {"type": "enabled" if enabled else "disabled"}, "omit_temperature": enabled}

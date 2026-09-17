@@ -560,6 +560,11 @@ def _wire_payload(request) -> dict:
             ),
             "tools": to_openai_tools(request.tools),
         }
+    if request.protocol == "openai_responses":
+        from app.llm.providers.responses import to_responses_input, to_responses_tools
+
+        return {"instructions": request.system, "input": to_responses_input(request),
+                "tools": to_responses_tools(request.tools)}
     if request.protocol == "anthropic_messages":
         from app.llm.providers.anthropic import to_anthropic_messages, to_anthropic_tools
 
@@ -633,6 +638,9 @@ def _prompt_breakdown(
                     categories["conversation_messages"] += tokens(wire)
         else:
             categories["conversation_messages"] += tokens(projected)
+    elif request.protocol == "openai_responses":
+        categories["system_prompt"] += tokens(payload.get("instructions", ""))
+        categories["conversation_messages"] += tokens(payload.get("input", []))
     else:
         # Anthropic 会把连续 ToolResult 合并进 user 块，不能从 wire 可靠拆回单项。
         categories["system_prompt"] += tokens(payload.get("system", ""))

@@ -347,7 +347,8 @@ export const api = {
         const now = new Date().toISOString()
         return { ok: true, profile: { ...profile, reasoning_probe_status: 'passed' }, message: '模拟模式已验证', probe: { status: 'passed', template_id: payload.reasoning_template_id, template_version: 1, supported_efforts: ['off'], attempts: [{ effort: 'off', ok: true }], tested_at: now } }
       }
-      const { data } = await http.post('/api/profiles/probe-create', payload)
+      // 思考阶段与工具往返各最多 30 秒，为收尾和保存预留时间。
+      const { data } = await http.post('/api/profiles/probe-create', payload, { timeout: 70000 })
       return data
     },
     async probeUpdate(id: string, payload: ProfileProbeUpdateIn): Promise<ProfileProbeOut> {
@@ -358,7 +359,7 @@ export const api = {
         const now = new Date().toISOString()
         return { ok: true, profile: { ...profile, reasoning_probe_status: 'passed' }, message: '模拟模式已验证', probe: { status: 'passed', template_id: payload.reasoning_template_id, template_version: 1, supported_efforts: ['off'], attempts: [{ effort: 'off', ok: true }], tested_at: now } }
       }
-      const { data } = await http.post(`/api/profiles/${id}/probe-update`, payload)
+      const { data } = await http.post(`/api/profiles/${id}/probe-update`, payload, { timeout: 70000 })
       return data
     },
     async delete(id: string): Promise<void> {

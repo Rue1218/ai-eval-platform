@@ -41,6 +41,8 @@ import volcengineSvg from '../assets/providers/volcengine.svg?raw'
 import geminiSvg from '../assets/providers/gemini.svg?raw'
 import openaiSvg from '../assets/providers/openai.svg?raw'
 import anthropicSvg from '../assets/providers/claude.svg?raw'
+import newapiSvg from '../assets/providers/newapi.svg?raw'
+import ollamaSvg from '../assets/providers/ollama.svg?raw'
 import type { ProviderLogoKey } from '../utils/providerLogo'
 
 export type { ProviderLogoKey } from '../utils/providerLogo'
@@ -62,6 +64,7 @@ interface ProviderLogoDefinition {
 
 // 图形来源于 Simple Icons 或供应商官网公开品牌资源；未提供可验证独立图形的供应商使用文字标记，避免借用母公司 Logo。
 const LOGOS: Record<ProviderLogoKey, ProviderLogoDefinition> = {
+  newapi: { label: 'New API', color: '#222831', mark: '' },
   stepfun: {
     label: '阶跃星辰 StepFun', color: '#111827', mark: '阶', viewBox: '0 0 20 20',
     // 来源：https://www.stepfun.com/step_favicon.svg，紧凑态还原图二的黑色阶梯方块标记。
@@ -105,10 +108,7 @@ const LOGOS: Record<ProviderLogoKey, ProviderLogoDefinition> = {
       { d: 'm18.445 4.406-9.468 13.74 7.341.665-1.69 9.578 9.469-13.74-7.342-.664 1.69-9.579Z', fill: '#FFFFFF' },
     ],
   },
-  ollama: {
-    label: 'Ollama', color: '#111827', mark: 'O',
-    path: 'M16.361 10.26a.894.894 0 0 0-.558.47l-.072.148.001.207c0 .193.004.217.059.353.076.193.152.312.291.448.24.238.51.3.872.205a.86.86 0 0 0 .517-.436.752.752 0 0 0 .08-.498c-.064-.453-.33-.782-.724-.897a1.06 1.06 0 0 0-.466 0zm-9.203.005c-.305.096-.533.32-.65.639a1.187 1.187 0 0 0-.06.52c.057.309.31.59.598.667.362.095.632.033.872-.205.14-.136.215-.255.291-.448.055-.136.059-.16.059-.353l.001-.207-.072-.148a.894.894 0 0 0-.565-.472 1.02 1.02 0 0 0-.474.007Zm4.184 2c-.131.071-.223.25-.195.383.031.143.157.288.353.407.105.063.112.072.117.136.004.038-.01.146-.029.243-.02.094-.036.194-.036.222.002.074.07.195.143.253.064.052.076.054.255.059.164.005.198.001.264-.03.169-.082.212-.234.15-.525-.052-.243-.042-.28.087-.355.137-.08.281-.219.324-.314a.365.365 0 0 0-.175-.48.394.394 0 0 0-.181-.033c-.126 0-.207.03-.355.124l-.085.053-.053-.032c-.219-.13-.259-.145-.391-.143zm.39-2.195c-.373.036-.475.05-.654.086-.291.06-.68.195-.951.328-.94.46-1.589 1.226-1.787 2.114-.04.176-.045.234-.045.53 0 .294.005.357.043.524.264 1.16 1.332 2.017 2.714 2.173.3.033 1.596.033 1.896 0 1.11-.125 2.064-.727 2.493-1.571.114-.226.169-.372.22-.602.039-.167.044-.23.044-.523 0-.297-.005-.355-.045-.531-.288-1.29-1.539-2.304-3.072-2.497a6.873 6.873 0 0 0-.855-.031zm.645.937a3.283 3.283 0 0 1 1.44.514c.223.148.537.458.671.662.166.251.26.508.303.82.02.143.01.251-.043.482-.08.345-.332.705-.672.957a3.115 3.115 0 0 1-.689.348c-.382.122-.632.144-1.525.138-.582-.006-.686-.01-.853-.042-.57-.107-1.022-.334-1.35-.68-.264-.28-.385-.535-.45-.946-.03-.192.025-.509.137-.776.136-.326.488-.73.836-.963.403-.269.934-.46 1.422-.512.187-.02.586-.02.773-.002z',
-  },
+  ollama: { label: 'Ollama', color: '#222831', mark: '' },
   zhipu: { label: 'GLM / Z.ai', color: '#222831', mark: '' },
   moonshot: { label: 'Kimi', color: '#222831', mark: '' },
   mistral: {
@@ -121,7 +121,7 @@ const LOGOS: Record<ProviderLogoKey, ProviderLogoDefinition> = {
 }
 
 // 只渲染随包分发的静态品牌 SVG；来源和许可证见 assets/providers/README.md。
-const BRAND_SVGS: Partial<Record<ProviderLogoKey, string>> = {zhipu: zhipuSvg, moonshot: moonshotSvg, deepseek: deepseekSvg, qwen: qwenSvg, minimax: minimaxSvg, nvidia: nvidiaSvg, volcengine: volcengineSvg, gemini: geminiSvg, openai: openaiSvg, anthropic: anthropicSvg}
+const BRAND_SVGS: Partial<Record<ProviderLogoKey, string>> = {newapi: newapiSvg, ollama: ollamaSvg, zhipu: zhipuSvg, moonshot: moonshotSvg, deepseek: deepseekSvg, qwen: qwenSvg, minimax: minimaxSvg, nvidia: nvidiaSvg, volcengine: volcengineSvg, gemini: geminiSvg, openai: openaiSvg, anthropic: anthropicSvg}
 const brandSvg = computed(() => BRAND_SVGS[props.provider as ProviderLogoKey])
 const logo = computed(() => {
   const key = props.provider as ProviderLogoKey

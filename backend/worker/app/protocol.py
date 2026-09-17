@@ -20,9 +20,10 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from shared.model_urls import model_request_url
+from shared.responses import response_body, response_text, response_usage
 
 # 契约支持的两类协议（与 protocol_profiles 的 CHECK 约束一致）
-SUPPORTED_PROTOCOLS = ("openai_chat", "anthropic_messages")
+SUPPORTED_PROTOCOLS = ("openai_chat", "openai_responses", "anthropic_messages")
 
 # 非流式调用被测模型的默认超时秒数
 DEFAULT_TIMEOUT_S = 30.0
@@ -77,6 +78,8 @@ def _norm_usage(data: dict, *, anthropic: bool) -> dict:
 
 def _full_text(protocol: str, data: dict) -> str:
     """从完整（非流式）响应对象中提取全文。"""
+    if protocol == "openai_responses":
+        return response_text(data)
     if protocol == "openai_chat":
         choices = data["choices"]
         return str(choices[0]["message"].get("content") or "")
@@ -122,6 +125,10 @@ def call_protocol(
             body["thinking"] = {"type": "disabled"}
         headers["Authorization"] = f"Bearer {api_key}"
 
+    elif protocol == "openai_responses":
+        body = response_body(model=model, messages=messages, system=system,
+                             temperature=temperature, max_tokens=max_tokens)
+        headers["Authorization"] = f"Bearer {api_key}"
     else:  # anthropic_messages
         body = {
             "model": model,
@@ -141,6 +148,8 @@ def call_protocol(
     started = time.perf_counter()
     try:
         data = _post_json(url, body, headers, timeout_s)
+    except (ValueError, TypeError) as exc:
+        raise ProtocolCallError("UPSTREAM", "上游响应结构异常") from exc
     except HTTPError as exc:
         # 仅回显状态码，绝不把请求头（含 Key）或上游原文带入异常信息
         raise ProtocolCallError("UPSTREAM", f"上游返回 {exc.code}") from exc
@@ -155,12 +164,13 @@ def call_protocol(
     latency_ms = round((time.perf_counter() - started) * 1000)
     try:
         text = _full_text(protocol, data)
-    except (KeyError, IndexError, TypeError, AttributeError) as exc:
+        usage = response_usage(data) if protocol == "openai_responses" else _norm_usage(data, anthropic=protocol == "anthropic_messages")
+    except (KeyError, IndexError, TypeError, AttributeError, ValueError) as exc:
         raise ProtocolCallError("UPSTREAM", "上游响应结构异常") from exc
 
     return AdapterResult(
         text=text,
-        usage=_norm_usage(data, anthropic=protocol == "anthropic_messages"),
+        usage=usage,
         raw=data,
         latency_ms=latency_ms,
     )

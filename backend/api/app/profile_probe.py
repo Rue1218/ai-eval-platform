@@ -1,9 +1,10 @@
-"""协议档思考模板的预注册真实探测服务。"""
+"""协议档思考模板及 Agent 原生工具往返的保存前探测服务。"""
 
 from __future__ import annotations
 
 import asyncio
 import json
+from dataclasses import replace
 from datetime import UTC, datetime
 
 from .llm.contracts import ModelConfig
@@ -11,9 +12,11 @@ from .llm.loop_contracts import Done, LlmRequestError, ReasoningDelta, TextDelta
 from .llm.providers.catalog import detect_provider
 from .llm.providers.reasoning_templates import ensure_template_compatible
 from .llm.resolver import build_adapter, close_adapter, resolve_request
+from .profile_tool_probe import probe_tool_roundtrip
 
 PROBE_MAX_ATTEMPTS = 5
 PROBE_DEADLINE_SECONDS = 30.0
+PROBE_TOTAL_DEADLINE_SECONDS = 55.0  # 留出清理/保存余量，低于 REST 代理默认的 60 秒。
 _PROBE_MESSAGES = [{"role": "user", "content": "在满足 x+y=23、3x+5y=89 的整数中，求 x*y。请核对两个条件后简短回答。"}]
 _REASONING_USAGE_KEYS = frozenset({
     "reasoning_tokens", "reasoning_output_tokens", "thinking_tokens", "thought_tokens",
@@ -91,8 +94,9 @@ async def _probe_with_deadline(config: ModelConfig, *, requires_reasoning_eviden
         return False, None, "TIMEOUT"
 
 
-async def _probe_all(config: ModelConfig) -> dict[str, object]:
-    """按模板声明顺序逐档探测，最多五次并始终收敛为非敏感结果。"""
+async def _probe_all(config: ModelConfig, *, check_tools: bool = False) -> dict[str, object]:
+    """最多探测五个思考档位，Agent 用途追加单档工具往返并返回安全状态。"""
+    started = asyncio.get_running_loop().time()
     template_id = config.reasoning_template_id
     if not template_id:
         raise LlmRequestError("探测请求缺少思考模板", code="model_config")
@@ -152,16 +156,27 @@ async def _probe_all(config: ModelConfig) -> dict[str, object]:
         if ok:
             supported.append(effort)
     status = "passed" if len(supported) == len(attempts) else "partial" if supported else "failed"
+    tool_probe = {"status": "skipped"}
+    if check_tools and supported:
+        # 仅选择一个已验证档位，避免将未验证参数造成的错误归因于工具协议。
+        selected = template.default_effort if template.default_effort in supported else supported[0]
+        selected_config = next(item for effort, item in attempt_inputs if effort == selected)
+        remaining = PROBE_TOTAL_DEADLINE_SECONDS - (asyncio.get_running_loop().time() - started)
+        if remaining <= 0:
+            tool_probe = {"status": "failed", "effort": selected, "error_code": "TIMEOUT"}
+        else:
+            tool_probe = await probe_tool_roundtrip(replace(selected_config, timeout_s=min(selected_config.timeout_s, remaining)))
     return {
         "status": status,
         "template_id": template.id,
         "template_version": template.version,
         "supported_efforts": supported,
         "attempts": attempts,
+        "tool_probe": tool_probe,
         "tested_at": datetime.now(UTC).isoformat(),
     }
 
 
-def probe_reasoning_template(config: ModelConfig) -> dict[str, object]:
+def probe_reasoning_template(config: ModelConfig, *, check_tools: bool = False) -> dict[str, object]:
     """供同步 REST 路由调用的探测入口；路由运行在线程池，不阻塞事件循环。"""
-    return asyncio.run(_probe_all(config))
+    return asyncio.run(_probe_all(config, check_tools=check_tools))
