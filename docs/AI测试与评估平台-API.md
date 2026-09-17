@@ -3506,3 +3506,10 @@ New API 使用独立、可持久化的协议模板，不再按模型品牌推荐
 - `frontend/src/utils/{providerLogo,profileVendors}.ts`、`frontend/src/components/modals/ProfileModal.vue`：保存模板恢复供应商与品牌分组。
 - `frontend/src/assets/providers/{newapi.svg,README.md}`：渐变品牌图标与来源说明。
 - 后端 New API 回归与前端供应商测试：三协议、多模型别名、档位投影与重新编辑。
+
+
+### 添加失败的诊断修复（2026-09-17）
+
+保存前探测的 `attempts[].error_code` 增补安全分类：`AUTH_FAILED`（密钥或权限）、`MODEL_OR_ENDPOINT_UNAVAILABLE`（模型或接口）、`RATE_LIMITED`（限流）、`UPSTREAM_UNAVAILABLE`（上游服务）、`CONNECTION_FAILED`（连接）、`PARAMETERS_REJECTED`（协议或参数）、`INVALID_RESPONSE`（流格式）、`INCOMPLETE_RESPONSE`（未正常结束）。额度不足继续使用 `BUDGET_EXCEEDED`。这些是探测明细分类，不改变 REST 十大错误码；不回显上游错误正文、密钥或提示词。任何验证全部失败的档仍不保存。
+
+修改代码文件与作用清单：`backend/api/app/profile_probe.py` 保留 SDK 已脱敏的具体故障类别；`backend/api/app/routers/profiles.py` 显示可操作的修正提示；`backend/api/tests/test_newapi_reasoning.py` 通过真实 SDK 注入错误状态，核对分类及秘密不外泄。

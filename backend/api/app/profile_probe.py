@@ -22,6 +22,17 @@ _REASONING_USAGE_KEYS = frozenset({
     "reasoning_tokens", "reasoning_output_tokens", "thinking_tokens", "thought_tokens",
 })
 
+# 只投影固定枚举，不把 SDK 错误正文或模型返回的字符串存入探测回执。
+_PROBE_ERROR_CODES = {
+    "provider_auth": "AUTH_FAILED",
+    "provider_model": "MODEL_OR_ENDPOINT_UNAVAILABLE",
+    "provider_rate_limit": "RATE_LIMITED",
+    "provider_unavailable": "UPSTREAM_UNAVAILABLE",
+    "provider_transport": "CONNECTION_FAILED",
+    "provider_request": "PARAMETERS_REJECTED",
+    "provider_protocol": "INVALID_RESPONSE",
+}
+
 
 def _has_reasoning_usage(usage: dict[str, int]) -> bool:
     """只识别正数的推理用量，不把缺失、零值或未知字段误判为思考证据。"""
@@ -60,7 +71,7 @@ async def _probe_one(
                 if evidence is None and _has_reasoning_usage(event.usage):
                     evidence = "reasoning_usage"
         if not completed:
-            return False, None, "UPSTREAM"
+            return False, None, "INCOMPLETE_RESPONSE"
         if config.reasoning_enabled and requires_reasoning_evidence and evidence is None:
             # 兼容网关可能静默丢弃未知字段；没有证据时绝不能开放思考滑块。
             return False, None, "NO_REASONING_EVIDENCE"
@@ -70,7 +81,7 @@ async def _probe_one(
             return False, evidence, "EMPTY_RESPONSE"
         return True, evidence or "request_completed", None
     except LlmRequestError as exc:
-        return False, None, exc.public_code
+        return False, None, _PROBE_ERROR_CODES.get(exc.code, exc.public_code)
     except TimeoutError:
         return False, None, "TIMEOUT"
     except Exception:

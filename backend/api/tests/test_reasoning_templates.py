@@ -346,7 +346,7 @@ def test_old_or_other_template_probe_cannot_authorize_runtime(override):
     ([ReasoningDelta('thinking'), TextDelta('120'), Done('stop')], 'THINKING_NOT_DISABLED'),
     ([TextDelta('<thi'), TextDelta('nk>thinking'), Done('stop')], 'THINKING_NOT_DISABLED'),
     ([TextDelta('120'), Done('stop', {'reasoning_tokens': 10})], 'THINKING_NOT_DISABLED'),
-    ([TextDelta('unfinished'), Done('length')], 'UPSTREAM'),
+    ([TextDelta('unfinished'), Done('length')], 'INCOMPLETE_RESPONSE'),
     ([Done('stop')], 'EMPTY_RESPONSE'),
 ])
 async def test_probe_rejects_false_off_and_incomplete_results(monkeypatch, events, code):

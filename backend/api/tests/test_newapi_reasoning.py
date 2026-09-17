@@ -125,3 +125,36 @@ def test_newapi_messages_budget_fallback(effort):
         assert wire["thinking"] == {"type": "disabled"}
     else:
         assert 1024 <= wire["thinking"]["budget_tokens"] < wire["max_tokens"]
+
+
+@pytest.mark.parametrize("protocol", PROTOCOLS)
+@pytest.mark.parametrize("status,error_type,expected,label", [
+    (401, "new_api_error", "AUTH_FAILED", "鉴权失败"),
+    (403, "new_api_error", "AUTH_FAILED", "鉴权失败"),
+    (404, "new_api_error", "MODEL_OR_ENDPOINT_UNAVAILABLE", "模型或接口不可用"),
+    (429, "new_api_error", "RATE_LIMITED", "限流"),
+    (429, "insufficient_quota", "BUDGET_EXCEEDED", "额度不足"),
+    (502, "new_api_error", "UPSTREAM_UNAVAILABLE", "上游通道暂时不可用"),
+    (400, "new_api_error", "PARAMETERS_REJECTED", "请求参数或协议被拒绝"),
+])
+def test_probe_failure_keeps_safe_actionable_category(monkeypatch, protocol, status, error_type, expected, label):
+    """真实 SDK 错误经过探测后仍有具体分类，任何上游原文都不能回显。"""
+    from app.profile_probe import _probe_one
+    from app.routers.profiles import _probe_message
+
+    def handler(request):
+        """根域名自动补版本路径；带秘密的上游错误必须在分类边界被丢弃。"""
+        expected_path = {"openai_chat": "/v1/chat/completions", "openai_responses": "/v1/responses",
+                         "anthropic_messages": "/v1/messages"}[protocol]
+        assert request.url.path == expected_path
+        return httpx.Response(status, json={"error": {"type": error_type, "message": "private-key secret-prompt"}})
+
+    install_transport(monkeypatch, "anthropic" if protocol == "anthropic_messages" else "openai", handler)
+    template = list_templates("newapi", protocol, "gpt-5.6-terra")[0]
+    config = ModelConfig(protocol, "https://gateway.invalid", "gpt-5.6-terra", api_key="unit",
+                         reasoning_template_id=template.id, reasoning_enabled=True)
+    result = asyncio.run(_probe_one(config, requires_reasoning_evidence=True))
+    assert result == (False, None, expected)
+    message = _probe_message({"status": "failed", "attempts": [{"ok": False, "error_code": result[2]}]})
+    assert label in message and "未保存" in message
+    assert "private-key" not in message and "secret-prompt" not in message
