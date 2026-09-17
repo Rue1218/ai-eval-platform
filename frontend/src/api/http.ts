@@ -8,6 +8,7 @@ import {
   ERROR_MESSAGES,
   type AuthUser,
   type Profile,
+  type ProfileCheckOut,
   type ProfileCreateIn,
   type ProfileProbeCreateIn,
   type ProfileProbeOut,
@@ -369,7 +370,7 @@ export const api = {
       }
       await http.delete(`/api/profiles/${id}`)
     },
-    async check(id: string): Promise<{ ok: boolean; latency_ms?: number; model?: string }> {
+    async check(id: string): Promise<ProfileCheckOut> {
       if (getDataMode() === 'mock') return { ok: true, latency_ms: 120, model: 'gpt-4o' }
       const { data } = await http.post(`/api/profiles/${id}/check`)
       return data

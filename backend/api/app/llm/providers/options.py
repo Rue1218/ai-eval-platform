@@ -140,7 +140,7 @@ def resolve_options(request: LlmRequest, provider: str, protocol: str) -> dict:
         can_disable = modern or model.startswith("gpt-5.1")
         if (not enabled and not can_disable) or model.startswith("gpt-5-pro") and effort != "high":
             raise UnsupportedReasoningEffortError(provider, effort)
-        selected = ("xhigh" if modern else "high") if effort in {"max", "xhigh"} else effort
+        selected = openai_effort(request.model, effort)
         options["omit_temperature"] = True
         options["reasoning_effort"] = selected if enabled else "none"
         options["max_tokens_parameter"] = "max_completion_tokens"

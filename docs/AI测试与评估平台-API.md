@@ -4,10 +4,10 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V2.13 |
+| 文档版本 | V2.14 |
 | 本轮审查日期 | 2026-09-17（Responses / New API / Ollama） |
 | WS v2 修订日期 | 2026-09-13（§4A，模型错误安全摘要） |
-| 对应 PRD | V1.34（功能唯一权威） |
+| 对应 PRD | V1.35（功能唯一权威） |
 | 对应设计规范 | V1.12（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.7.8（AgentLoop 单入口；JSON 仍以本文为准） |
 | 对应前端计划 | AgentLoop 前端计划 V0.5 |
@@ -778,7 +778,7 @@ Embedding 与 Reranker 的 URL、模型和 Key 与主模型使用相同的“按
 
 #### `POST /api/profiles/{id}/check`
 
-向被测模型或裁判端点发送轻量探活 ping 请求，最长等待 30 秒以覆盖模型冷启动。响应：
+使用实际对话同一流式适配器发送 ping；复用已保存输出上限、模板及已验证默认思考档。30 秒内收到首个非空正文/思考片段或合法 stop/length 终态即确认连通并关闭流；不再发送 max_tokens=1。该检查不代替完整思考和工具能力验证，超时仅表示本次探测未通过。响应：
 
 ```json
 { "ok": true, "latency_ms": 120 }
@@ -3513,3 +3513,18 @@ New API 使用独立、可持久化的协议模板，不再按模型品牌推荐
 保存前探测的 `attempts[].error_code` 增补安全分类：`AUTH_FAILED`（密钥或权限）、`MODEL_OR_ENDPOINT_UNAVAILABLE`（模型或接口）、`RATE_LIMITED`（限流）、`UPSTREAM_UNAVAILABLE`（上游服务）、`CONNECTION_FAILED`（连接）、`PARAMETERS_REJECTED`（协议或参数）、`INVALID_RESPONSE`（流格式）、`INCOMPLETE_RESPONSE`（未正常结束）。额度不足继续使用 `BUDGET_EXCEEDED`。这些是探测明细分类，不改变 REST 十大错误码；不回显上游错误正文、密钥或提示词。任何验证全部失败的档仍不保存。
 
 修改代码文件与作用清单：`backend/api/app/profile_probe.py` 保留 SDK 已脱敏的具体故障类别；`backend/api/app/routers/profiles.py` 显示可操作的修正提示；`backend/api/tests/test_newapi_reasoning.py` 通过真实 SDK 注入错误状态，核对分类及秘密不外泄。
+
+
+## 连通检查与 New API Responses 一致性修复（2026-09-17）
+
+列表连接测试沿用实际对话的 build_adapter / resolve_request，不再走旧非流式 call_protocol，不再把输出上限强设为 1，也不丢失保存的思考模板。使用 profile_reasoning 投影的已验证默认档位与实际输出上限；模板未验证或失效时返回 VALIDATION 并要求重新测试。探活等待首个有效正文、思考片段或合法终态，整段上限仍为 30 秒并关闭流及连接池。探活成功只说明本次模型接口可响应，不写回思考档位或工具能力。失败前端显示服务端安全 message，状态文案改为“测试未通过”，避免把参数拒绝、等待超时统称网络断开。
+
+GPT-5.6（含 sol/terra/luna 及快照）的统一最高档发送原生 max；已知旧型号继续 high/xhigh。New API Chat/Responses 模板版本升至 3，OpenAI Chat/通用 Responses 模板升至 4，旧探测结果须重新验证后开放档位，避免使用旧 xhigh 回执宣称 max 已验证。依据：https://developers.openai.com/api/docs/models/gpt-5.6-terra 。
+
+Responses 识别 response.reasoning_text.delta 与已有摘要增量，保留供应商返回的协议状态，不生成或推断隐藏推理。工具调用、加密推理回放与正常结束规则不变。依据：https://github.com/openai/openai-python/blob/main/src/openai/types/responses/response_reasoning_text_delta_event.py 。
+
+修改代码文件与作用清单：
+- backend/api/app/profile_check.py、routers/profiles.py：复用运行时适配器的单次流式探活与清理。
+- backend/shared/reasoning.py、backend/shared/responses.py、backend/api/app/llm/providers/{options,reasoning_templates}.py：原生 max 映射、版本失效与增量识别。
+- frontend/src/api/{types,http}.ts、views/AdminProfiles.vue、components/modals/CheckResultModal.vue：保留并展示安全诊断。
+- API 探活/Responses 回归测试：真实 SDK 请求、连接清理、档位映射与安全诊断；前端类型检查验证诊断字段贯通。

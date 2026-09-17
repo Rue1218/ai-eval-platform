@@ -186,6 +186,9 @@ export type ProfileProbeUpdateIn = ProfileProbeCreateIn
 
 export interface ProfileCheckOut {
   ok: boolean
+  /** 后端脱敏分类与说明；error 仅兼容前端传输异常。 */
+  code?: string
+  message?: string
   latency_ms?: number
   model?: string
   error?: string

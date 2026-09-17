@@ -22,7 +22,7 @@
           <line x1="15" y1="9" x2="9" y2="15"></line>
           <line x1="9" y1="9" x2="15" y2="15"></line>
         </svg>
-        <div style="font-size: 16px; font-weight: 600; margin-top: 8px">连接失败</div>
+        <div style="font-size: 16px; font-weight: 600; margin-top: 8px">测试未通过</div>
       </div>
 
       <div class="panel" style="text-align: left; background: var(--bg-elevated); font-size: 13px">
@@ -34,8 +34,8 @@
           <span style="color: var(--text-secondary)">接口延迟:</span>
           <span class="mono">{{ result?.latency_ms !== undefined ? result.latency_ms + ' ms' : '-' }}</span>
         </div>
-        <div v-if="result?.error" style="color: var(--accent-error); font-size: 12px; margin-top: 6px">
-          错误信息: {{ result.error }}
+        <div v-if="result?.message || result?.error" style="color: var(--accent-error); font-size: 12px; margin-top: 6px">
+          错误信息: {{ result.message || result.error }}
         </div>
       </div>
     </div>

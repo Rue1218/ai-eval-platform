@@ -2,7 +2,7 @@
 
 from types import SimpleNamespace
 
-from app.adapters import DEFAULT_TIMEOUT_S, AdapterResult
+from app.adapters import DEFAULT_TIMEOUT_S
 from app.routers import profiles
 
 
@@ -41,15 +41,17 @@ def test_profile_check_uses_shared_protocol_timeout(monkeypatch):
         """返回脱敏的固定测试连接配置。"""
         return ("https://example.test/v1", "example-model", "test-key")
 
-    def fake_call_protocol(**kwargs: object) -> AdapterResult:
+    def fake_check(config) -> dict:
         """记录超时参数，并模拟成功的最小上游响应。"""
-        captured.update(kwargs)
-        return AdapterResult(text="", usage={}, raw={}, latency_ms=12)
+        captured.update(timeout_s=config.timeout_s, max_tokens=config.max_tokens, reasoning_enabled=config.reasoning_enabled)
+        return {"ok": True, "latency_ms": 12, "model": "example-model"}
 
     monkeypatch.setattr(profiles, "_profile_connection", fake_connection)
-    monkeypatch.setattr(profiles, "call_protocol", fake_call_protocol)
+    monkeypatch.setattr(profiles, "check_model_connection", fake_check)
 
     response = profiles.check_profile("profile-id", _ProfileDb(profile), SimpleNamespace())
 
     assert response == {"ok": True, "latency_ms": 12, "model": "example-model"}
     assert captured["timeout_s"] == DEFAULT_TIMEOUT_S == 30.0
+
+    assert captured["max_tokens"] == 8192

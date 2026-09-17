@@ -110,7 +110,7 @@ class ResponsesStream:
             raise ValueError("Responses 上游响应失败")
         if kind in {"response.output_text.delta", "response.refusal.delta"}:
             return [("text", event.get("delta", ""))]
-        if kind == "response.reasoning_summary_text.delta":
+        if kind in {"response.reasoning_summary_text.delta", "response.reasoning_text.delta"}:
             return [("reasoning", event.get("delta", ""))]
         if kind in {"response.output_item.added", "response.output_item.done"}:
             item = event.get("item") or {}
