@@ -56,6 +56,31 @@ class ReasoningTemplate:
 
 TEMPLATES: tuple[ReasoningTemplate, ...] = (
     ReasoningTemplate(
+        "newapi-chat-effort-v1", "New API Chat · 思考强度", "*", "openai_chat",
+        "effort", _EFFORTS, "medium", "newapi_effort",
+        "发送网关 reasoning_effort，由 New API 转换上游参数；每档须验证思考证据。",
+    ),
+    ReasoningTemplate(
+        "newapi-responses-effort-v1", "New API Responses · 思考强度", "*", "openai_responses",
+        "effort", _EFFORTS, "medium", "newapi_effort",
+        "发送网关 reasoning.effort；通道、网关版本及模型决定有效档位。",
+    ),
+    ReasoningTemplate(
+        "newapi-messages-effort-v1", "New API Messages · 自适应思考强度", "*", "anthropic_messages",
+        "effort", _EFFORTS, "high", "anthropic_adaptive_effort",
+        "发送 adaptive thinking 与 output_config.effort，由网关转换；旧通道可改用预算模板。",
+    ),
+    ReasoningTemplate(
+        "newapi-messages-budget-v1", "New API Messages · 思考预算", "*", "anthropic_messages",
+        "budget", _EFFORTS, "high", "anthropic_budget",
+        "发送 thinking.budget_tokens，适用于需要显式预算的通道；预算必须小于输出上限。",
+    ),
+    ReasoningTemplate(
+        "newapi-no-reasoning-v1", "New API · 不启用思考", "*", "*",
+        "none", ("off",), "off", "none",
+        "不发送思考参数，适用于普通模型；仍须验证未返回思考内容。", requires_reasoning_evidence=False,
+    ),
+    ReasoningTemplate(
         "ollama-reasoning-effort-v1", "Ollama · 思考强度", "*", "openai_chat",
         "effort", _EFFORTS, "medium", "ollama_effort",
         "使用 Ollama 兼容接口 reasoning_effort；不同模型的档位以真实验证为准。",
@@ -241,20 +266,25 @@ def list_templates(provider: str, protocol: str, model: str) -> list[ReasoningTe
     normalized_provider = provider.strip().lower()
     normalized_protocol = protocol.strip()
     if normalized_provider == "newapi":
-        # 网关不是模型方言；与保存和运行时的模型回退规则保持一致。
-        from .catalog import detect_provider
-
-        normalized_provider = detect_provider("", model, protocol)
+        # 任意部署地址与模型别名都使用网关入口方言，不发送原厂扩展字段。
+        return [template for template in TEMPLATES if is_newapi_template(template.id)
+                and template.protocol in {normalized_protocol, "*"}]
     matched = [
         template for template in TEMPLATES
         if template.provider in {normalized_provider, "*"}
         and template.protocol in {normalized_protocol, "*"}
         # Ollama 可用任意部署地址；模板不依赖域名，目录仅在显式选择时推荐。
         and (template.adapter != "ollama_effort" or normalized_provider == "ollama")
+        and not is_newapi_template(template.id)
     ]
     return sorted(matched, key=lambda item: (
         item.provider == "*", not _matches_model(item, model), item.adapter == "aliyun_numeric",
     ))
+
+
+def is_newapi_template(template_id: str | None) -> bool:
+    """仅已登记的网关模板标识显式 New API 选择，不能凭任意前缀放宽回放。"""
+    return any(template.id == template_id and template.id.startswith("newapi-") for template in TEMPLATES)
 
 
 def get_template(template_id: str) -> ReasoningTemplate:
@@ -310,6 +340,11 @@ def resolve_template_options(request: LlmRequest, provider: str, protocol: str) 
         return {}
     if adapter == "ollama_effort":
         return {"reasoning_effort": effort if enabled else "none"}
+    if adapter == "newapi_effort":
+        # 网关支持统一强度；已知 OpenAI 型号保留其最高档拼写，未知别名交由探测裁定。
+        known_openai = any(re.match(r"^(?:gpt-|o[134](?:-|$))", item) for item in _model_id_variants(request.model))
+        selected = openai_effort(request.model, effort) if known_openai else effort
+        return {"reasoning_effort": selected if enabled else "none", "omit_temperature": True}
     if adapter == "openai_effort":
         return {"reasoning_effort": "none" if not enabled else openai_effort(request.model, effort),
                 "omit_temperature": True, "max_tokens_parameter": "max_completion_tokens"}

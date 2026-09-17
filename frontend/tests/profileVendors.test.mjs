@@ -77,3 +77,13 @@ test('Responses 和自建服务预设不会伪造公网端点或模型', () => {
   assert.equal(findPresetVendor('https://gateway.example/v1', 'openai_chat', 'New API (gpt-5.4)'), 'newapi')
   assert.equal(findPresetVendor('http://private.example:8080/v1', 'openai_chat', 'Ollama (qwen3:8b)'), 'ollama')
 })
+
+
+test('New API 档改名后仍按已保存模板恢复供应商和品牌', () => {
+  for (const id of ['newapi-chat-effort-v1', 'newapi-responses-effort-v1', 'newapi-messages-effort-v1', 'newapi-no-reasoning-v1']) {
+    const profile = { base_url: 'https://private.example/v1', name: '研发主模型', provider: 'anthropic', reasoning_template_id: id }
+    assert.equal(getProfileVendor(profile), 'newapi')
+    assert.equal(getServiceLogoKey(profile), 'newapi')
+    assert.equal(findPresetVendor(profile.base_url, 'openai_chat', profile.name, id), 'newapi')
+  }
+})

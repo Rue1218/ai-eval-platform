@@ -31,16 +31,18 @@ export function getModelLogoKey(modelId?: string | null): ProviderLogoKey {
 }
 
 /**
- * 仅按协议档的服务端点、展示名称识别供应商图标。
+ * 按协议档的显式网关模板、服务端点、展示名称识别供应商图标。
  *
  * provider 是后端的运行时适配器标识，可能为 openai 而非实际服务商，因此只在
  * 缺少可识别端点和名称时兜底使用。
  */
-export function getServiceLogoKey(profile: { base_url?: string; name?: string; provider?: string }): ProviderLogoKey {
+export function getServiceLogoKey(profile: { base_url?: string; name?: string; provider?: string; reasoning_template_id?: string | null }): ProviderLogoKey {
+  // 显式网关模板优先于域名和展示名，协议档改名后仍保持服务商身份。
+  if (profile.reasoning_template_id?.startsWith('newapi-')) return 'newapi'
   const url = (profile.base_url || '').toLowerCase()
   const name = (profile.name || '').toLowerCase()
 
-  // 端点为供应商识别唯一优先级，模型 ID 不参与此处的判断。
+  // 未选择显式网关模板时优先识别端点，模型 ID 不参与判断。
   if (url.includes('stepfun')) return 'stepfun'
   if (url.includes('nvidia')) return 'nvidia'
   if (url.includes('xiaomimimo')) return 'mimo'
