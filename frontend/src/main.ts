@@ -32,8 +32,8 @@ console.log(
 )
 console.log(`前端构建：版本 ${frontCommit} · 构建时间 ${frontBuildTime || '未知'}（北京时间）`)
 
-// 前后端版本对照：前端构建时间只在 frontend/ 变更时更新，用后端 /api/health 的
-// 运行版本判断线上是否已部署到最新提交；health 不可用时静默跳过，不影响启动。
+// 前后端版本对照：web 与 api 各自只在自己目录变更时重建（CI 增量计划），
+// 因此纯后端（或纯前端）部署时版本天然不同，属预期；这里只陈述事实不做告警。
 interface HealthPayload {
   commit?: string
   build_time?: string
@@ -44,11 +44,14 @@ fetch('/api/health')
     if (!health?.commit) return
     const backCommit = health.commit.slice(0, 8)
     const backBuildTime = health.build_time ? beijingTime(health.build_time) : ''
-    const detail = `后端运行：版本 ${backCommit}${backBuildTime ? ` · 构建时间 ${backBuildTime}（北京时间）` : ''}`
-    console.log(detail)
-    if (frontCommit !== 'unknown' && backCommit !== 'unknown' && backCommit !== frontCommit) {
-      console.warn(`前后端版本不一致（前端 ${frontCommit}），请确认部署是否完成`)
-    }
+    console.log(`后端运行：版本 ${backCommit} · 构建时间 ${backBuildTime || '未知'}（北京时间）`)
+    console.log(
+      frontCommit === 'unknown' || backCommit === 'unknown'
+        ? '无法对照前后端版本（本端版本未知）'
+        : backCommit === frontCommit
+          ? '前后端版本一致'
+          : '前后端版本不同（web 与 api 各自仅在自身目录变更时重建，属预期）',
+    )
   })
   .catch(() => {})
 
