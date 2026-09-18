@@ -1,6 +1,6 @@
 # 协议档供应商与思考强度适配
 
-版本：V1.8 ｜ 审查日期：2026-09-18
+版本：V1.9 ｜ 审查日期：2026-09-18
 
 ## 产品与接口增量
 
@@ -214,3 +214,11 @@ New API 的部分 Codex 通道会在流中发出 `response.output_text.done`，�
 这个兼容不改变供应商思考模板，也不把完成正文当作思考证据。思考强度必须仍由请求完成和可验证的思考证据逐档探测。该网关没有返回完整工具终态时，原生工具验证保持 `failed`，只能用于文本对话与评测，不能标记为 Agent 工具可用。
 
 修改代码文件与作用清单：`backend/shared/responses.py` 实现受限终态重建；`backend/api/tests/test_responses_protocol.py` 覆盖 SDK 事件、缺失完成正文和工具状态拒绝。
+
+## V1.9 Responses 兼容审查修复（2026-09-18）
+
+V1.8 的空终态兼容增加消息项、内容块及身份核对：已观察的额外输出不可忽略，三层完成事件发生冲突时拒绝成功终态；重复完成事件只允许完全一致。补齐缺少 ID 的回复不生成固定供应商身份，连续对话回放使用普通助手消息，并处理旧版保存的 `responses-fallback-0`。有真实身份的完整输出项继续保留。思考强度及原生工具的真实验证门禁不变。
+
+修改代码文件与作用清单：`backend/shared/responses.py` 完成事件与终态核验；`backend/api/app/llm/providers/responses.py` 新旧缺失身份历史转换；`backend/api/tests/test_responses_protocol.py` 冲突、额外项及 SDK 三轮续聊回归。
+
+本轮验证：新增 26 项回归；定向测试 267 passed，API 全量 1949 passed / 78 skipped，Worker 51 passed，Ruff、前端 typecheck/build 与 diff --check 通过。网关事件使用本地 HTTP 替身复现，未调用线上模型。

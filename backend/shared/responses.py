@@ -80,24 +80,63 @@ class ResponsesStream:
         self.response: dict | None = None
         self.text_parts: dict[tuple, str] = {}
         self.text_done_parts: dict[tuple, str] = {}
-        self.text_item_ids: dict[tuple, str] = {}
+        # 跟踪所有已观察到的项与内容块，空终态不能悄悄丢弃其他输出。
+        self.item_ids: dict[int, str] = {}
+        self.item_types: dict[int, str] = {}
+        self.completed_items: dict[int, dict] = {}
+        self.content_types: dict[tuple, str] = {}
+        self.completed_content: dict[tuple, dict] = {}
         self.emitted_text = ""
 
     @staticmethod
-    def _text_key(event: dict, kind: str) -> tuple:
+    def _index(value: object) -> int:
+        """索引必须是非负整数，避免布尔值或负索引混淆输出身份。"""
+        if type(value) is not int or value < 0:
+            raise ValueError("Responses 输出索引不合法")
+        return value
+
+    @classmethod
+    def _text_key(cls, event: dict, kind: str) -> tuple:
         """正文事件的索引是校验和重建终态的唯一定位键。"""
-        return event.get("output_index", 0), event.get("content_index", 0), kind
+        return cls._index(event.get("output_index", 0)), cls._index(event.get("content_index", 0)), kind
+
+    def _observe_item(self, index: int, kind: str, item_id: str | None) -> None:
+        """同一下标的类型和非空身份必须稳定，跨下标不能复用身份。"""
+        if not isinstance(kind, str) or not kind or self.item_types.get(index, kind) != kind:
+            raise ValueError("Responses 输出项类型发生变化")
+        self.item_types[index] = kind
+        if item_id is not None:
+            if not isinstance(item_id, str) or not item_id:
+                raise ValueError("Responses 输出项身份不合法")
+            if self.item_ids.get(index, item_id) != item_id or any(
+                previous == item_id and previous_index != index
+                for previous_index, previous in self.item_ids.items()
+            ):
+                raise ValueError("Responses 输出项身份发生变化或重复")
+            self.item_ids[index] = item_id
+
+    def _observe_content(self, event: dict, kind: str) -> tuple:
+        """将内容事件关联到同一消息，并拒绝内容块改变类型。"""
+        if not isinstance(kind, str) or not kind:
+            raise ValueError("Responses 内容块类型不合法")
+        key = self._text_key(event, kind)
+        self._observe_item(key[0], "message", event.get("item_id"))
+        pair = key[:2]
+        if self.content_types.get(pair, kind) != kind:
+            raise ValueError("Responses 内容块类型发生变化")
+        self.content_types[pair] = kind
+        return key
 
     def _record_text_done(self, event: dict, kind: str) -> None:
         """记录完成正文；它必须覆盖此前同一内容块的全部增量。"""
-        key = self._text_key(event, kind)
+        key = self._observe_content(event, kind)
         field = "text" if kind == "output_text" else "refusal"
-        text = event.get(field, "")
+        text = event.get(field)
         if not isinstance(text, str) or not text.startswith(self.text_parts.get(key, "")):
             raise ValueError("Responses 完成正文与增量不一致")
+        if key in self.text_done_parts and self.text_done_parts[key] != text:
+            raise ValueError("Responses 重复完成正文不一致")
         self.text_done_parts[key] = text
-        if isinstance(event.get("item_id"), str):
-            self.text_item_ids[key] = event["item_id"]
 
     def _repair_empty_terminal_output(self, response: dict) -> dict:
         """仅修复已由正文完成事件证明、但网关遗漏 output 的单文本终态。
@@ -115,16 +154,48 @@ class ResponsesStream:
         (output_index, content_index, kind), text = next(iter(self.text_done_parts.items()))
         if output_index != 0 or content_index != 0 or set(self.text_parts) - set(self.text_done_parts):
             return response
+        if self.item_types != {0: "message"} or self.content_types != {(0, 0): kind}:
+            raise ValueError("Responses 空终态包含额外输出项或内容块")
         field = "text" if kind == "output_text" else "refusal"
-        content = {"type": kind, field: text}
+        content = deepcopy(self.completed_content.get((0, 0), {"type": kind, field: text}))
+        if content.get("type") != kind or content.get(field) != text:
+            raise ValueError("Responses 完成内容块与正文不一致")
         if kind == "output_text":
-            content["annotations"] = []
-        repaired = deepcopy(response)
-        repaired["output"] = [{
-            "id": self.text_item_ids.get((output_index, content_index, kind), "responses-fallback-0"),
+            content.setdefault("annotations", [])
+        item = deepcopy(self.completed_items.get(0, {
             "type": "message", "role": "assistant", "status": "completed", "content": [content],
-        }]
+        }))
+        if (item.get("role") != "assistant" or item.get("status") != "completed"
+                or len(item.get("content", [])) != 1):
+            raise ValueError("Responses 完成消息不满足单文本兼容条件")
+        # 缺少供应商身份时不伪造固定 ID；下一轮使用普通助手消息回放。
+        if 0 in self.item_ids:
+            item["id"] = self.item_ids[0]
+        repaired = deepcopy(response)
+        repaired["output"] = [item]
         return repaired
+
+    def _validate_output(self, output: list[dict]) -> None:
+        """终态必须覆盖所有已观察项，并与消息和内容块的完成快照一致。"""
+        if not isinstance(output, list) or not all(isinstance(item, dict) for item in output):
+            raise ValueError("Responses 完成快照输出结构不合法")
+        for index, kind in self.item_types.items():
+            if index >= len(output) or output[index].get("type") != kind:
+                raise ValueError("Responses 完成快照缺少正文或工具输出项")
+            item = output[index]
+            if index in self.item_ids and item.get("id") != self.item_ids[index]:
+                raise ValueError("Responses 完成快照输出项身份不一致")
+            if any(item.get(key) != value for key, value in self.completed_items.get(index, {}).items()):
+                raise ValueError("Responses 完成快照与完成输出项不一致")
+        for (index, content_index), kind in self.content_types.items():
+            content = output[index].get("content", [])
+            if (not isinstance(content, list) or content_index >= len(content)
+                    or not isinstance(content[content_index], dict)
+                    or content[content_index].get("type") != kind):
+                raise ValueError("Responses 完成快照缺少正文内容块")
+            if any(content[content_index].get(key) != value
+                   for key, value in self.completed_content.get((index, content_index), {}).items()):
+                raise ValueError("Responses 完成快照与完成内容块不一致")
 
     def _complete_text(self, output: list[dict]) -> list[tuple]:
         """按输出项和内容项核对正文，仅补齐可安全追加的后缀，拒绝回退或错序。"""
@@ -186,7 +257,9 @@ class ResponsesStream:
             if not isinstance(delta, str):
                 raise ValueError("Responses 正文增量不是文本")
             # 兼容省略索引的单正文网关；标准多项响应仍使用各自索引，不能混淆拒绝与正文。
-            key = self._text_key(event, "refusal" if kind == "response.refusal.delta" else "output_text")
+            key = self._observe_content(event, "refusal" if kind == "response.refusal.delta" else "output_text")
+            if key in self.text_done_parts:
+                raise ValueError("Responses 正文完成后出现增量")
             self.text_parts[key] = self.text_parts.get(key, "") + delta
             self.emitted_text += delta
             return [("text", delta)]
@@ -197,8 +270,21 @@ class ResponsesStream:
             return [("reasoning", event.get("delta", ""))]
         if kind in {"response.output_item.added", "response.output_item.done"}:
             item = event.get("item") or {}
+            index = self._index(event["output_index"])
+            self._observe_item(index, item.get("type"), item.get("id"))
+            if kind.endswith(".done"):
+                if index in self.completed_items and self.completed_items[index] != item:
+                    raise ValueError("Responses 重复完成输出项不一致")
+                self.completed_items[index] = deepcopy(item)
             if item.get("type") == "function_call":
                 return self._call(event["output_index"], item, complete=kind.endswith(".done"))
+        if kind in {"response.content_part.added", "response.content_part.done"}:
+            part = event.get("part") or {}
+            pair = self._observe_content(event, part.get("type"))[:2]
+            if kind.endswith(".done"):
+                if pair in self.completed_content and self.completed_content[pair] != part:
+                    raise ValueError("Responses 重复完成内容块不一致")
+                self.completed_content[pair] = deepcopy(part)
         if kind == "response.function_call_arguments.delta":
             index, delta = event["output_index"], event["delta"]
             if index not in self.calls or not isinstance(delta, str):
@@ -211,6 +297,7 @@ class ResponsesStream:
             if response.get("status") != expected or response.get("error"):
                 raise ValueError("Responses 终态不一致")
             response = self._repair_empty_terminal_output(response)
+            self._validate_output(response["output"])
             events = self._complete_text(response["output"])
             final_calls = set()
             for index, item in enumerate(response["output"]):
