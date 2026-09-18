@@ -79,7 +79,52 @@ class ResponsesStream:
         self.calls: dict[int, dict] = {}
         self.response: dict | None = None
         self.text_parts: dict[tuple, str] = {}
+        self.text_done_parts: dict[tuple, str] = {}
+        self.text_item_ids: dict[tuple, str] = {}
         self.emitted_text = ""
+
+    @staticmethod
+    def _text_key(event: dict, kind: str) -> tuple:
+        """正文事件的索引是校验和重建终态的唯一定位键。"""
+        return event.get("output_index", 0), event.get("content_index", 0), kind
+
+    def _record_text_done(self, event: dict, kind: str) -> None:
+        """记录完成正文；它必须覆盖此前同一内容块的全部增量。"""
+        key = self._text_key(event, kind)
+        field = "text" if kind == "output_text" else "refusal"
+        text = event.get(field, "")
+        if not isinstance(text, str) or not text.startswith(self.text_parts.get(key, "")):
+            raise ValueError("Responses 完成正文与增量不一致")
+        self.text_done_parts[key] = text
+        if isinstance(event.get("item_id"), str):
+            self.text_item_ids[key] = event["item_id"]
+
+    def _repair_empty_terminal_output(self, response: dict) -> dict:
+        """仅修复已由正文完成事件证明、但网关遗漏 output 的单文本终态。
+
+        该分支为 New API 等兼容网关保留。工具、多个正文块或非空终态都不能
+        推断协议状态，仍由后续严格校验拒绝，避免伪造工具回放或思考状态。
+        """
+        if response.get("status") != "completed":
+            return response
+        output = response.get("output")
+        if not isinstance(output, list):
+            raise ValueError("Responses 完成快照输出结构不合法")
+        if output or self.calls or len(self.text_done_parts) != 1:
+            return response
+        (output_index, content_index, kind), text = next(iter(self.text_done_parts.items()))
+        if output_index != 0 or content_index != 0 or set(self.text_parts) - set(self.text_done_parts):
+            return response
+        field = "text" if kind == "output_text" else "refusal"
+        content = {"type": kind, field: text}
+        if kind == "output_text":
+            content["annotations"] = []
+        repaired = deepcopy(response)
+        repaired["output"] = [{
+            "id": self.text_item_ids.get((output_index, content_index, kind), "responses-fallback-0"),
+            "type": "message", "role": "assistant", "status": "completed", "content": [content],
+        }]
+        return repaired
 
     def _complete_text(self, output: list[dict]) -> list[tuple]:
         """按输出项和内容项核对正文，仅补齐可安全追加的后缀，拒绝回退或错序。"""
@@ -95,6 +140,9 @@ class ResponsesStream:
                 if not isinstance(text, str):
                     raise ValueError("Responses 完成正文不是文本")
                 final_parts[(output_index, content_index, kind)] = text
+        for key, done_text in self.text_done_parts.items():
+            if final_parts.get(key) != done_text:
+                raise ValueError("Responses 完成正文与完成事件不一致")
         for key, streamed in self.text_parts.items():
             if key not in final_parts or not final_parts[key].startswith(streamed):
                 raise ValueError("Responses 完成正文与增量不一致")
@@ -138,11 +186,13 @@ class ResponsesStream:
             if not isinstance(delta, str):
                 raise ValueError("Responses 正文增量不是文本")
             # 兼容省略索引的单正文网关；标准多项响应仍使用各自索引，不能混淆拒绝与正文。
-            key = (event.get("output_index", 0), event.get("content_index", 0),
-                   "refusal" if kind == "response.refusal.delta" else "output_text")
+            key = self._text_key(event, "refusal" if kind == "response.refusal.delta" else "output_text")
             self.text_parts[key] = self.text_parts.get(key, "") + delta
             self.emitted_text += delta
             return [("text", delta)]
+        if kind in {"response.output_text.done", "response.refusal.done"}:
+            self._record_text_done(event, "refusal" if kind == "response.refusal.done" else "output_text")
+            return []
         if kind in {"response.reasoning_summary_text.delta", "response.reasoning_text.delta"}:
             return [("reasoning", event.get("delta", ""))]
         if kind in {"response.output_item.added", "response.output_item.done"}:
@@ -160,6 +210,7 @@ class ResponsesStream:
             expected = "completed" if kind.endswith(".completed") else "incomplete"
             if response.get("status") != expected or response.get("error"):
                 raise ValueError("Responses 终态不一致")
+            response = self._repair_empty_terminal_output(response)
             events = self._complete_text(response["output"])
             final_calls = set()
             for index, item in enumerate(response["output"]):

@@ -4,10 +4,10 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V2.15 |
-| 本轮审查日期 | 2026-09-17（Responses / New API / Ollama） |
+| 文档版本 | V2.16 |
+| 本轮审查日期 | 2026-09-18（New API Responses 终态兼容） |
 | WS v2 修订日期 | 2026-09-13（§4A，模型错误安全摘要） |
-| 对应 PRD | V1.35（功能唯一权威） |
+| 对应 PRD | V1.37（功能唯一权威） |
 | 对应设计规范 | V1.12（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.7.8（AgentLoop 单入口；JSON 仍以本文为准） |
 | 对应前端计划 | AgentLoop 前端计划 V0.5 |
@@ -3548,3 +3548,14 @@ Responses 事件字段依据：[OpenAI 官方流式响应示例](https://develop
 
 
 本轮验证：API 全量 1918 passed / 78 skipped；随后补充端口 0 边界并重跑凭据安全测试。Worker 51 passed，前端 99 passed；Ruff、typecheck、生产构建通过。所有新增供应商用例使用虚构凭据及本地替身，未使用生产密钥。
+
+
+## V2.16 New API Responses 空终态兼容（2026-09-18）
+
+部分兼容网关会按流式事件发送 `response.output_text.done` 或 `response.refusal.done`，却在 `response.completed.response.output` 返回空数组。平台只在完成状态为 `completed`、终态 `output=[]`、没有工具调用、正文恰为一个 `(output_index=0, content_index=0)` 内容块，并且完成正文严格覆盖此前全部增量时，以完成正文重建最小助手消息快照。该快照仅用于文本续聊和持久回放；不生成、推断或保存隐藏推理。
+
+工具调用、多个正文/拒绝块、非空终态、缺少完成正文、完成正文与增量不一致、`incomplete` 终态及工具状态缺失都继续返回响应协议错误。工具能力仍须通过独立的原生工具往返验证，不能因文本兼容而显示为已支持。该限制与 [OpenAI Responses 流式事件契约](https://developers.openai.com/api/reference/typescript/resources/beta/subresources/responses/methods/create) 对终态输出和正文完成事件的要求保持一致。
+
+修改代码文件与作用清单：
+- `backend/shared/responses.py`：记录并核验正文完成事件；仅在严格限定的单文本空终态下重建助手输出。
+- `backend/api/tests/test_responses_protocol.py`：覆盖完成正文重建、缺少完成正文拒绝、工具状态拒绝及 SDK 流式回归。

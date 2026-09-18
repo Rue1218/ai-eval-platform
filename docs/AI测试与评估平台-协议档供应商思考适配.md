@@ -1,6 +1,6 @@
 # 协议档供应商与思考强度适配
 
-版本：V1.7 ｜ 审查日期：2026-09-17
+版本：V1.8 ｜ 审查日期：2026-09-18
 
 ## 产品与接口增量
 
@@ -205,3 +205,12 @@ Responses 事件字段依据：[OpenAI 官方流式响应示例](https://develop
 - `backend/api/tests/test_{profile_credential_scope,replay_connection_scope,reasoning_templates,responses_protocol,newapi_reasoning,fetch_models}.py`：凭据边界、连接迁移、限流预算与正文一致性回归。
 
 本轮验证：API 全量 1918 passed / 78 skipped；随后补充端口 0 边界并重跑凭据安全测试。Worker 51 passed，前端 99 passed；Ruff、typecheck、生产构建通过。所有新增供应商用例使用虚构凭据及本地替身，未使用生产密钥。
+
+
+## V1.8 New API Responses 空终态兼容（2026-09-18）
+
+New API 的部分 Codex 通道会在流中发出 `response.output_text.done`，但在 `response.completed` 省略 `response.output` 中的助手消息。平台为该缺陷提供文本兼容：只有成功终态为空、没有工具调用、只有一个正文或拒绝内容块，并且完成正文严格覆盖所有既有增量时，才恢复一个最小助手消息快照。
+
+这个兼容不改变供应商思考模板，也不把完成正文当作思考证据。思考强度必须仍由请求完成和可验证的思考证据逐档探测。该网关没有返回完整工具终态时，原生工具验证保持 `failed`，只能用于文本对话与评测，不能标记为 Agent 工具可用。
+
+修改代码文件与作用清单：`backend/shared/responses.py` 实现受限终态重建；`backend/api/tests/test_responses_protocol.py` 覆盖 SDK 事件、缺失完成正文和工具状态拒绝。

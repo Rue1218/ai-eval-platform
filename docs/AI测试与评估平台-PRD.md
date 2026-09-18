@@ -4,8 +4,8 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.36 |
-| 本轮审查日期 | 2026-09-17（Responses / New API / Ollama） |
+| 文档版本 | V1.37 |
+| 本轮审查日期 | 2026-09-18（New API Responses 终态兼容） |
 | 文档状态 | V1.31 已实现三类准备专家与受控草稿；V1.30 的完整计划/报告连接仍待实现，后台恢复与专家通讯仍待 P2/P3 |
 | 撰写日期 | 2026-08-17 |
 | 本轮修订 | 2026-09-16：V1.31 实现三类准备专家、固定版本引用交接、严格成果验收与前端草稿标识；完整修订链、资产/报告引用、冻结计划入队与真实供应商试点尚未交付。 |
@@ -997,3 +997,12 @@ Responses 事件字段依据：[OpenAI 官方流式响应示例](https://develop
 - `backend/api/tests/test_{profile_credential_scope,replay_connection_scope,reasoning_templates,responses_protocol,newapi_reasoning,fetch_models}.py`：凭据边界、连接迁移、限流预算与正文一致性回归。
 
 本轮验证：API 全量 1918 passed / 78 skipped；随后补充端口 0 边界并重跑凭据安全测试。Worker 51 passed，前端 99 passed；Ruff、typecheck、生产构建通过。所有新增供应商用例使用虚构凭据及本地替身，未使用生产密钥。
+
+
+## V1.37 New API Responses 空终态兼容（2026-09-18）
+
+当兼容网关已在流中提供一段可核验的完成正文、却遗漏成功终态的 `output` 数组时，平台可以保存并继续该段文本对话。此能力只适用于没有工具调用的单段助手正文；完成事件必须与前序增量一致。多段输出、拒绝与正文混合、工具调用、缺少完成正文、内容冲突或不完整终态必须明确失败，不能以推断数据继续会话。
+
+工具能力的状态独立于文本兼容：该网关未提供可回放工具终态时，Agent 工具探测保持未通过，不对用户宣称支持工具。思考强度也仍以实际探测证据为准，空终态兼容不会授权任何未验证档位。
+
+修改代码文件与作用清单：`backend/shared/responses.py` 限定重建空终态的安全边界；`backend/api/tests/test_responses_protocol.py` 覆盖单文本成功与工具/缺失完成正文拒绝。

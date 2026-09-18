@@ -72,6 +72,35 @@ def test_terminal_snapshot_rejects_missing_or_conflicting_text(output, prefix):
     assert stream.response is None
 
 
+def test_empty_terminal_snapshot_rebuilds_verified_single_text():
+    """兼容网关遗漏 output 时，仅以完成正文事件重建单一助手文本。"""
+    stream = ResponsesStream()
+    assert stream.feed({"type": "response.output_text.delta", "delta": "你", "item_id": "msg_gateway"}) == [("text", "你")]
+    assert stream.feed({"type": "response.output_text.done", "text": "你好", "item_id": "msg_gateway"}) == []
+    assert stream.feed({"type": "response.completed", "response": completed([])}) == [("text", "好")]
+    assert stream.response["output"] == [{
+        "id": "msg_gateway", "type": "message", "role": "assistant", "status": "completed",
+        "content": [{"type": "output_text", "text": "你好", "annotations": []}],
+    }]
+
+
+def test_empty_terminal_snapshot_without_verified_done_remains_invalid():
+    """不能只凭增量伪造终态，缺少完成正文时继续拒绝兼容网关响应。"""
+    stream = ResponsesStream()
+    stream.feed({"type": "response.output_text.delta", "delta": "你好"})
+    with pytest.raises(ValueError, match="正文"):
+        stream.feed({"type": "response.completed", "response": completed([])})
+
+
+def test_empty_terminal_snapshot_never_rebuilds_tool_state():
+    """工具调用必须以完成快照回放，文本完成事件不能越权补建工具状态。"""
+    stream = ResponsesStream()
+    stream.feed({"type": "response.output_item.added", "output_index": 0,
+                 "item": {"type": "function_call", "call_id": "call_gateway", "name": "lookup"}})
+    with pytest.raises(ValueError, match="工具"):
+        stream.feed({"type": "response.completed", "response": completed([])})
+
+
 def test_text_reconciliation_uses_content_indexes_and_refusals():
     """按内容索引独立核对拒绝文本，不能把后一个分块的文本挪到前面。"""
     output = [{"type": "message", "content": [
@@ -98,6 +127,33 @@ async def test_sdk_partial_stream_matches_persisted_snapshot(monkeypatch):
         return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=wire([
             {"type": "response.output_text.delta", "delta": "你", "output_index": 0, "content_index": 0},
             {"type": "response.completed", "response": completed()},
+        ]))
+
+    transport(monkeypatch, handler, asynchronous=True)
+    config = ModelConfig("openai_responses", "https://unit.invalid", "unit", api_key="fake", reasoning_enabled=False)
+    adapter, _ = build_adapter(config)
+    attempt = AssistantAttempt()
+    try:
+        async for chunk in adapter.stream(resolve_request(config, messages=[])):
+            attempt.push(chunk)
+        assert attempt.done.finish_reason == "stop"
+        assert attempt.text == attempt.protocol_state["items"][0]["content"][0]["text"] == "你好"
+    finally:
+        await close_adapter(adapter)
+
+
+@pytest.mark.asyncio
+async def test_sdk_empty_terminal_snapshot_replays_verified_done_text(monkeypatch):
+    """真实 SDK 收到兼容网关的空终态时，持久状态仍保留已核验正文。"""
+    from app.agent.stream import AssistantAttempt
+    from app.llm.resolver import close_adapter
+
+    def handler(request):
+        """模拟 New API 的正文完成事件存在、response.completed.output 为空。"""
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=wire([
+            {"type": "response.output_text.delta", "delta": "你", "item_id": "msg_gateway", "output_index": 0, "content_index": 0},
+            {"type": "response.output_text.done", "text": "你好", "item_id": "msg_gateway", "output_index": 0, "content_index": 0},
+            {"type": "response.completed", "response": completed([])},
         ]))
 
     transport(monkeypatch, handler, asynchronous=True)
