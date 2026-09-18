@@ -1,6 +1,6 @@
 # 协议档供应商与思考强度适配
 
-版本：V1.9 ｜ 审查日期：2026-09-18
+版本：V1.10 ｜ 审查日期：2026-09-18
 
 ## 产品与接口增量
 
@@ -222,3 +222,13 @@ V1.8 的空终态兼容增加消息项、内容块及身份核对：已观察的
 修改代码文件与作用清单：`backend/shared/responses.py` 完成事件与终态核验；`backend/api/app/llm/providers/responses.py` 新旧缺失身份历史转换；`backend/api/tests/test_responses_protocol.py` 冲突、额外项及 SDK 三轮续聊回归。
 
 本轮验证：新增 26 项回归；定向测试 267 passed，API 全量 1949 passed / 78 skipped，Worker 51 passed，Ruff、前端 typecheck/build 与 diff --check 通过。网关事件使用本地 HTTP 替身复现，未调用线上模型。
+
+## V1.10 New API 完整工具输出项兼容（2026-09-18）
+
+真实无副作用探测确认：该类 Codex 通道能够返回完整的 `function_call` 完成项，失败发生于随后空的 `response.completed.output`。现在允许从全量、连续、身份稳定的 `output_item.done` 恢复工具/推理输出；工具参数必须是合法对象并与参数完成事件一致，推理必须保留原始加密回放状态。缺项、断流、截断、冲突和不完整参数仍不能执行工具。
+
+已通过同一网关、同一模型的关闭思考档真实工具往返验证；仍不授权其他未经验证的思考档。线上旧工具失败状态不会自动改为成功，须在部署后编辑协议档并重新测试更新。
+
+修改代码文件与作用清单：`backend/shared/responses.py` 完整项恢复与参数事件核验；`backend/api/tests/test_responses_gateway_tools.py` SDK 实际序列化的双向回填与安全边界；`backend/api/tests/test_responses_protocol.py` 单/多工具只执行一次、后续回合及非法工具禁止调度。
+
+本轮验证：新增 22 项回归，定向 289 passed，API 全量 1971 passed / 78 skipped，Worker 51 passed；Ruff、前端 typecheck/build 通过。真实网关关闭思考档工具往返返回 passed；只运行无副作用回显探测，未执行业务工具，未保存密钥、模型正文或工具参数。
