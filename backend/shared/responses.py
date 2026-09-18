@@ -77,6 +77,7 @@ class ResponsesStream:
 
     def __init__(self):
         self.calls: dict[int, dict] = {}
+        self.call_done_arguments: dict[int, str] = {}
         self.response: dict | None = None
         self.text_parts: dict[tuple, str] = {}
         self.text_done_parts: dict[tuple, str] = {}
@@ -139,16 +140,20 @@ class ResponsesStream:
         self.text_done_parts[key] = text
 
     def _repair_empty_terminal_output(self, response: dict) -> dict:
-        """仅修复已由正文完成事件证明、但网关遗漏 output 的单文本终态。
+        """从已核验完成事件恢复网关遗漏的终态，绝不依据工具增量推断完成。
 
-        该分支为 New API 等兼容网关保留。工具、多个正文块或非空终态都不能
-        推断协议状态，仍由后续严格校验拒绝，避免伪造工具回放或思考状态。
+        工具或推理必须具有全量、连续的 output_item.done 快照；纯文本仍沿用
+        单内容块兼容。非空终态不修改，所有分支仍须通过后续一致性校验。
         """
         if response.get("status") != "completed":
             return response
         output = response.get("output")
         if not isinstance(output, list):
             raise ValueError("Responses 完成快照输出结构不合法")
+        if not output and (self.calls or "reasoning" in self.item_types.values()):
+            repaired = deepcopy(response)
+            repaired["output"] = self._completed_output_items()
+            return repaired
         if output or self.calls or len(self.text_done_parts) != 1:
             return response
         (output_index, content_index, kind), text = next(iter(self.text_done_parts.items()))
@@ -174,6 +179,39 @@ class ResponsesStream:
         repaired = deepcopy(response)
         repaired["output"] = [item]
         return repaired
+
+    def _completed_output_items(self) -> list[dict]:
+        """仅回放逐项完成的原始快照，工具身份、参数和推理状态不补造。"""
+        indexes = set(self.item_types)
+        if (not indexes or indexes != set(self.completed_items)
+                or sorted(indexes) != list(range(len(indexes)))):
+            raise ValueError("Responses 空终态缺少完整工具或推理输出项")
+        output = [deepcopy(self.completed_items[index]) for index in range(len(indexes))]
+        call_ids = set()
+        for item in output:
+            kind = item.get("type")
+            if kind not in {"message", "function_call", "reasoning"}:
+                raise ValueError("Responses 空终态包含不支持的输出项")
+            if item.get("status", "completed") != "completed":
+                raise ValueError("Responses 输出项未成功完成")
+            if not isinstance(item.get("id"), str) or not item["id"]:
+                raise ValueError("Responses 完成输出项身份缺失")
+            if kind == "function_call":
+                if any(not isinstance(item.get(key), str) or not item[key] for key in ("call_id", "name", "arguments")):
+                    raise ValueError("Responses 完成工具身份或参数缺失")
+                if item["call_id"] in call_ids:
+                    raise ValueError("Responses 完成工具调用身份重复")
+                call_ids.add(item["call_id"])
+                # 错误参数不能因补齐空终态变成可执行工具，解析后仍回放原串。
+                if not isinstance(json.loads(item["arguments"]), dict):
+                    raise ValueError("Responses 完成工具参数不是对象")
+            elif kind == "message":
+                if item.get("role") != "assistant" or not isinstance(item.get("content"), list) or not item["content"]:
+                    raise ValueError("Responses 完成消息结构不完整")
+            elif not isinstance(item.get("encrypted_content"), str) or not item["encrypted_content"]:
+                # store=false 下不把展示摘要伪装成可回放的私有推理状态。
+                raise ValueError("Responses 完成推理项缺少回放状态")
+        return output
 
     def _validate_output(self, output: list[dict]) -> None:
         """终态必须覆盖所有已观察项，并与消息和内容块的完成快照一致。"""
@@ -237,6 +275,8 @@ class ResponsesStream:
             raise ValueError("Responses 工具身份发生变化")
         if complete:
             arguments = item.get("arguments", "")
+            if index in self.call_done_arguments and arguments != self.call_done_arguments[index]:
+                raise ValueError("Responses 完成工具参数与完成事件不一致")
             if not isinstance(arguments, str) or not arguments.startswith(previous["arguments"]):
                 raise ValueError("Responses 工具参数发生回退")
             tail = arguments[len(previous["arguments"]):]
@@ -289,8 +329,22 @@ class ResponsesStream:
             index, delta = event["output_index"], event["delta"]
             if index not in self.calls or not isinstance(delta, str):
                 raise ValueError("Responses 工具增量缺少起始项")
+            if index in self.call_done_arguments or index in self.completed_items:
+                raise ValueError("Responses 工具完成后出现参数增量")
             self.calls[index]["arguments"] += delta
             return [("tool_delta", index, delta)]
+        if kind == "response.function_call_arguments.done":
+            index = self._index(event["output_index"])
+            self._observe_item(index, "function_call", event.get("item_id"))
+            arguments = event.get("arguments")
+            if (index not in self.calls or not isinstance(arguments, str)
+                    or not arguments.startswith(self.calls[index]["arguments"])):
+                raise ValueError("Responses 工具完成参数与增量不一致")
+            if index in self.call_done_arguments and self.call_done_arguments[index] != arguments:
+                raise ValueError("Responses 重复工具完成参数不一致")
+            if index in self.completed_items and self.completed_items[index].get("arguments") != arguments:
+                raise ValueError("Responses 工具完成参数与输出项不一致")
+            self.call_done_arguments[index] = arguments
         if kind in {"response.completed", "response.incomplete"}:
             response = event["response"]
             expected = "completed" if kind.endswith(".completed") else "incomplete"

@@ -478,7 +478,8 @@ def test_sync_non_success_is_rejected(monkeypatch, status):
 
 
 @pytest.mark.parametrize("call_count", [1, 2])
-def test_responses_agent_tool_roundtrip_and_next_turn(monkeypatch, call_count):
+@pytest.mark.parametrize("empty_terminal", [False, True])
+def test_responses_agent_tool_roundtrip_and_next_turn(monkeypatch, call_count, empty_terminal):
     """真实 Agent 图执行工具，后续请求正确回填并在下一轮继续携带协议状态。"""
     from app.agent.loop import build_agent
     from app.agent.loop_settings import LoopSettings
@@ -496,6 +497,11 @@ def test_responses_agent_tool_roundtrip_and_next_turn(monkeypatch, call_count):
         sent.append(json.loads(request.content))
         events = ([{"type": "response.completed", "response": completed([reasoning, *calls])}]
                   if len(sent) == 1 else text_events())
+        if len(sent) == 1 and empty_terminal:
+            # 网关虽省略终态 output，完整完成项仍必须原样回放且只执行一次。
+            events = [{"type": "response.output_item.done", "output_index": index, "item": item}
+                      for index, item in enumerate([reasoning, *calls])]
+            events.append({"type": "response.completed", "response": completed([])})
         return httpx.Response(200, content=wire(events), headers={"content-type": "text/event-stream"})
 
     transport(monkeypatch, handler, True)
@@ -635,7 +641,7 @@ def test_responses_interleaved_tools_keep_arguments_separate():
     assert len([item for item in emitted if item[0] == "tool_start"]) == 2
 
 
-@pytest.mark.parametrize("failure", ["eof", "failed", "incomplete", "duplicate_ids"])
+@pytest.mark.parametrize("failure", ["eof", "failed", "incomplete", "duplicate_ids", "empty_missing_done", "empty_bad_json"])
 def test_agent_never_dispatches_tools_from_invalid_responses(monkeypatch, failure):
     """真实 Agent 图只结算异常工具，断流、失败、截断、重复身份均不可调度执行。"""
     from app.agent.loop import build_agent
@@ -654,6 +660,11 @@ def test_agent_never_dispatches_tools_from_invalid_responses(monkeypatch, failur
         events.append({"type": "response.failed", "response": completed(status="failed")})
     elif failure == "duplicate_ids":
         events.append({"type": "response.completed", "response": completed([call, {**call, "id": "fc_other"}])})
+    elif failure in {"empty_missing_done", "empty_bad_json"}:
+        if failure == "empty_bad_json":
+            # 非法 JSON 即使带完成项也不可下发真实工具。
+            events = [{"type": "response.output_item.done", "output_index": 0, "item": {**call, "arguments": '{'}}]
+        events.append({"type": "response.completed", "response": completed([])})
     transport(monkeypatch, lambda request: httpx.Response(200, content=wire(events),
               headers={"content-type": "text/event-stream"}), True)
     config = ModelConfig("openai_responses", "https://unit.invalid/v1", "unit", api_key="unit", reasoning_enabled=False)

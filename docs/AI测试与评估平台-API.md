@@ -4,10 +4,10 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V2.17 |
-| 本轮审查日期 | 2026-09-18（Responses 终态完整性审查修复） |
+| 文档版本 | V2.18 |
+| 本轮审查日期 | 2026-09-18（Responses 完整工具输出项兼容） |
 | WS v2 修订日期 | 2026-09-13（§4A，模型错误安全摘要） |
-| 对应 PRD | V1.38（功能唯一权威） |
+| 对应 PRD | V1.39（功能唯一权威） |
 | 对应设计规范 | V1.12（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.7.8（AgentLoop 单入口；JSON 仍以本文为准） |
 | 对应前端计划 | AgentLoop 前端计划 V0.5 |
@@ -3570,3 +3570,16 @@ Responses 事件字段依据：[OpenAI 官方流式响应示例](https://develop
 - `backend/shared/responses.py`：跟踪并校验输出项、内容块和身份；禁止冲突完成事件覆盖；补齐消息不伪造 ID。
 - `backend/api/app/llm/providers/responses.py`：无 ID 及旧固定 ID 历史转换为普通助手消息。
 - `backend/api/tests/test_responses_protocol.py`：覆盖额外输出、快照冲突、重复完成、身份变化及真实 SDK 连续三轮新旧历史回放。
+
+## V2.18 Responses 完整工具输出项兼容（2026-09-18）
+
+扩展 V2.16/V2.17 的空终态兼容：New API 可能已发送完整 `response.output_item.done` 工具项，却在 `response.completed.output` 返回空数组。工具或推理响应仅在全体已观察项都有完成快照、索引从零连续、成功终态无错误时恢复原始输出数组。工具必须具有真实 `id/call_id/name` 和合法 JSON 对象参数；调用身份不能重复。推理项必须具有可回放的 `encrypted_content`，不从摘要或增量推断私有状态。消息项必须为完整助手消息。
+
+`response.function_call_arguments.done` 与已收参数、完成工具项及终态互相核对；冲突、重复完成参数变化、完成后新增参数均拒绝。恢复后仍经过既有输出项、内容块和正文一致性校验；非空终态不修补，断流、失败、截断及缺少完整项仍不能调度工具。只具备单文本完成证据时继续使用原先受限文本兼容。
+
+协议档工具探测继续执行真实两次模型调用，只有正确调用测试工具并准确消费随机结果才标记 passed，不自动改变旧档的失败回执；部署后需重新测试更新。真实网关验证确认关闭思考档可完成工具往返，不据此宣称所有思考档位已支持。依据：[OpenAI 函数调用与流式工具事件](https://developers.openai.com/api/docs/guides/function-calling)。
+
+修改代码文件与作用清单：
+- `backend/shared/responses.py`：从完整工具/推理项恢复空终态，核验参数完成事件与调用身份。
+- `backend/api/tests/test_responses_gateway_tools.py`：SDK 工具往返、加密项回放、交错工具以及缺项/冲突拒绝测试。
+- `backend/api/tests/test_responses_protocol.py`：真实 Agent 图空终态工具往返、续聊与异常禁止调度回归。
