@@ -2,6 +2,8 @@
 
 import asyncio
 import json
+from copy import deepcopy
+from dataclasses import replace
 
 import httpx
 import pytest
@@ -9,7 +11,106 @@ from shared.responses import ResponsesStream
 
 from app.agent.events import project_fact
 from app.agent.loop_presentation import tool_display
+from app.llm.loop_contracts import LlmRequest, LlmRequestError
+from app.llm.providers.anthropic import to_anthropic_messages
+from app.llm.providers.common import make_state
+from app.llm.providers.openai import to_openai_messages
+from app.llm.providers.responses import to_responses_input
 from tests.test_responses_protocol import completed, transport, wire
+
+
+@pytest.mark.parametrize("phase", ["commentary", "final_answer"])
+@pytest.mark.parametrize("item_id", [None, "msg", "responses-fallback-0"])
+@pytest.mark.parametrize("completion", ["text", "item", "terminal"])
+def test_verified_phase_survives_gateway_repair_and_replay(phase, item_id, completion):
+    """空终态、终态漏字段及旧版无身份消息均保留阶段，且不修改输入快照。"""
+    decoder = ResponsesStream()
+    message = {"type": "message", "role": "assistant", "status": "completed",
+               "content": [{"type": "output_text", "text": "正文", "annotations": []}]}
+    if item_id is not None:
+        message["id"] = item_id
+    decoder.feed({"type": "response.output_item.added", "output_index": 0,
+                  "item": {**message, "phase": phase, "content": []}})
+    decoder.feed({"type": "response.output_text.delta", "delta": "正", "item_id": item_id})
+    decoder.feed({"type": "response.output_text.done", "text": "正文", "item_id": item_id})
+    if completion == "item":
+        decoder.feed({"type": "response.output_item.done", "output_index": 0, "item": message})
+    terminal = completed([message] if completion == "terminal" else [])
+    original = deepcopy(terminal)
+    decoder.feed({"type": "response.completed", "response": terminal})
+    assert terminal == original
+    assert decoder.response["output"][0]["phase"] == phase
+    assert decoder.response["output"][0].get("id") == item_id
+    request = LlmRequest("unit", [], "", [], 64, provider="newapi", protocol="openai_responses")
+    state = make_state(request, "newapi", "openai_responses", decoder.response["output"])
+    history = [{"role": "assistant", "content": "正文", "protocol_state": state}]
+    replay = to_responses_input(replace(request, messages=history))
+    assert replay[0]["phase"] == phase
+    assert replay[0].get("id") == (item_id if item_id == "msg" else None)
+
+
+@pytest.mark.parametrize("completion", ["item", "terminal"])
+def test_conflicting_phase_remains_invalid(completion):
+    """兼容遗漏不等于接受冲突阶段，必须在形成可执行结果之前拒绝。"""
+    decoder = ResponsesStream()
+    item = {"type": "message", "id": "msg", "role": "assistant", "content": []}
+    decoder.feed({"type": "response.output_item.added", "output_index": 0,
+                  "item": {**item, "phase": "commentary"}})
+    changed = {**item, "phase": "final_answer"}
+    event = ({"type": "response.output_item.done", "output_index": 0, "item": changed}
+             if completion == "item" else {"type": "response.completed", "response": completed([changed])})
+    with pytest.raises(ValueError, match="阶段"):
+        decoder.feed(event)
+    assert decoder.response is None
+
+
+def test_terminal_can_declare_previously_unknown_phase():
+    """item.done 的显式空阶段不阻止终态首次声明阶段。"""
+    decoder = ResponsesStream()
+    item = {**completed()["output"][0], "phase": None}
+    decoder.feed({"type": "response.output_item.done", "output_index": 0, "item": item})
+    decoder.feed({"type": "response.completed", "response": completed([{**item, "phase": "commentary"}])})
+    assert decoder.response["output"][0]["phase"] == "commentary"
+    assert decoder.display_text_parts()[0]["phase"] == "commentary"
+
+
+def protocol_wire(request):
+    """使用三种生产编码器检查状态隔离，而不是复制适配逻辑。"""
+    if request.protocol == "openai_chat":
+        return to_openai_messages(request.messages, "", request=request)
+    if request.protocol == "anthropic_messages":
+        return to_anthropic_messages(request.messages, request=request)
+    return to_responses_input(request)
+
+
+PROTOCOL_NAMES = ["openai_chat", "openai_responses", "anthropic_messages"]
+
+
+@pytest.mark.parametrize("source", PROTOCOL_NAMES)
+@pytest.mark.parametrize("target", PROTOCOL_NAMES)
+def test_protocol_history_isolation_matrix(source, target):
+    """全部六种跨协议方向都拒绝原始状态串用，展示分段不进入其他协议线格式。"""
+    request = LlmRequest("unit", [], "", [], 64, provider="newapi", protocol=target)
+    message = {"role": "assistant", "content": "正文", "text_parts": [
+        {"output_index": 0, "phase": "commentary", "text": "正文"}]}
+    plain_wire = protocol_wire(replace(request, messages=[message]))
+    assert "text_parts" not in str(plain_wire) and "phase" not in str(plain_wire)
+    if source == target:
+        return
+    message["protocol_state"] = make_state(request, "newapi", source, [{"type": "reasoning"}])
+    with pytest.raises(LlmRequestError) as caught:
+        protocol_wire(replace(request, messages=[message]))
+    assert caught.value.code == "protocol_state_incompatible"
+    from app.agent.loop_wiring import _drop_incompatible_protocol_state
+
+    # 用户切换协议时，生产迁移只移除不透明状态，保留完整工具往返和公开正文。
+    message["tool_calls"] = [{"id": "call", "name": "read", "args": {"path": "a"}}]
+    tool_result = {"role": "tool", "tool_call_id": "call", "name": "read", "content": "工具结果"}
+    migrated, dropped = _drop_incompatible_protocol_state(replace(request, messages=[message, tool_result]))
+    assert dropped == [0] and "protocol_state" in message
+    encoded = json.dumps(protocol_wire(migrated), ensure_ascii=False)
+    assert "工具结果" in encoded and "call" in encoded and "正文" in encoded
+    assert "protocol_state" not in encoded and "text_parts" not in encoded and "phase" not in encoded
 
 
 def reasoning_item(text="标题\n\n完整摘要"):

@@ -4,10 +4,10 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V2.19 |
-| 本轮审查日期 | 2026-09-18（Responses AgentLoop 展示与文件交付） |
+| 文档版本 | V2.20 |
+| 本轮审查日期 | 2026-09-18（Responses 取消阶段持久化与协议隔离回归） |
 | WS v2 修订日期 | 2026-09-13（§4A，模型错误安全摘要） |
-| 对应 PRD | V1.40（功能唯一权威） |
+| 对应 PRD | V1.41（功能唯一权威） |
 | 对应设计规范 | V1.12（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.7.8（AgentLoop 单入口；JSON 仍以本文为准） |
 | 对应前端计划 | AgentLoop 前端计划 V0.5 |
@@ -3593,3 +3593,17 @@ Responses 事件字段依据：[OpenAI 官方流式响应示例](https://develop
 - `tool.result.display.file_path` 是成功且非 synthetic 的 write 回执路径，来自实际结果而非模型文本。当前绑定工作区内成功且非 synthetic 的 write 结果可展示下载入口；从真实结果 path 与会话 scope_path 生成现有 `/api/workspaces/{id}/files/raw?path=...&download=true` 请求。无绑定、失败、绝对路径及越界路径不生成链接。模型 sandbox 链接仅能映射本轮真实成功产物的精确相对路径；下载仍校验登录、工作区属主、存在性与路径边界。
 
 修改代码文件与作用清单：`shared/responses.py` 和公开推理辅助模块补齐摘要与阶段；`llm/providers/responses.py`、`agent/{stream,loop,loop_service,events}.py` 传递展示快照；前端 AgentLoop 分段、思考渲染与工作区文件链接；对应解析、事件、浏览器和路径回归测试。
+
+
+## V2.20 修订：取消阶段持久化与协议隔离（2026-09-18）
+
+取消时 `assistant/message` 与 `assistant.message` 使用已有可选字段 `text_parts` 保存已显示的正文阶段；只保存公开正文，不把半成品工具、签名或加密状态作为可回放协议状态。Responses 的阶段可在输出项完成时补报，实时与重连展示保持一致；普通 Chat/Messages 仍为 `text_parts=null`。字段结构不变，事实目录版本保持 7。
+
+Responses 空终态兼容与无 ID/旧兼容 ID 消息回放必须保留同一输出项已核验的 `phase`。补字段仅允许已观测的值，冲突阶段继续拒绝；正文、身份、工具参数和完成性校验继续生效。跨协议不透明状态仍按现有兼容键校验，不透传到其他协议。
+
+### 修改代码文件与作用清单
+
+- `backend/api/app/agent/{stream,loop}.py`：累积定位增量并持久化取消时的展示分段。
+- `backend/shared/responses.py`、`backend/api/app/llm/providers/responses.py`：保留已核验阶段、及时投影完成项补报阶段，无身份消息回放保留 phase。
+- `backend/api/tests/{test_loop_llm_sdk,test_responses_protocol,test_responses_presentation}.py`：三协议 SDK 取消、六向协议状态隔离及多轮阶段回放回归。
+- `frontend/tests/responsePresentation.test.mjs`：三协议实时/重连与下一轮隔离回归。

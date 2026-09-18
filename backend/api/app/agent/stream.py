@@ -73,6 +73,18 @@ class AssistantAttempt:
             self._text.append(chunk.text)
             if chunk.text_parts is not None:
                 self.text_parts = deepcopy(chunk.text_parts)
+            elif chunk.output_index is not None:
+                # 终态前取消也须持久化已显示的阶段；其他协议没有索引，仍保持普通正文。
+                if self.text_parts is None:
+                    self.text_parts = []
+                part = next((part for part in self.text_parts
+                             if part["output_index"] == chunk.output_index), None)
+                if part is None:
+                    part = {"output_index": chunk.output_index, "phase": None, "text": ""}
+                    self.text_parts.append(part)
+                part["text"] += chunk.text
+                if chunk.phase is not None:
+                    part["phase"] = chunk.phase
         elif isinstance(chunk, ReasoningDelta):
             # Provider 的 reasoning 与正文分开保存，避免被拼进最终 answer text。
             self._reasoning.append(chunk.text)
