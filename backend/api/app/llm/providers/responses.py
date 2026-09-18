@@ -42,7 +42,12 @@ def to_responses_input(request: LlmRequest) -> list[dict]:
         if items is not None:
             if any(item.get("type") not in {"message", "function_call", "reasoning"} for item in items):
                 raise invalid("Responses 历史包含不支持的输出项")
-            wire.extend(items)
+            for item in items:
+                # 同时迁移旧版固定补齐 ID，避免已保存的兼容会话继续产生重复身份。
+                if item.get("type") == "message" and item.get("id") in {None, "responses-fallback-0"}:
+                    wire.append({"role": "assistant", "content": item.get("content", [])})
+                else:
+                    wire.append(item)
         else:
             try:
                 wire.extend(response_input([message]))

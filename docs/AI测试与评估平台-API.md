@@ -4,10 +4,10 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V2.16 |
-| 本轮审查日期 | 2026-09-18（New API Responses 终态兼容） |
+| 文档版本 | V2.17 |
+| 本轮审查日期 | 2026-09-18（Responses 终态完整性审查修复） |
 | WS v2 修订日期 | 2026-09-13（§4A，模型错误安全摘要） |
-| 对应 PRD | V1.37（功能唯一权威） |
+| 对应 PRD | V1.38（功能唯一权威） |
 | 对应设计规范 | V1.12（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.7.8（AgentLoop 单入口；JSON 仍以本文为准） |
 | 对应前端计划 | AgentLoop 前端计划 V0.5 |
@@ -3559,3 +3559,14 @@ Responses 事件字段依据：[OpenAI 官方流式响应示例](https://develop
 修改代码文件与作用清单：
 - `backend/shared/responses.py`：记录并核验正文完成事件；仅在严格限定的单文本空终态下重建助手输出。
 - `backend/api/tests/test_responses_protocol.py`：覆盖完成正文重建、缺少完成正文拒绝、工具状态拒绝及 SDK 流式回归。
+
+## V2.17 Responses 终态完整性审查修复（2026-09-18）
+
+空终态补齐前核验流中全部已观察到的输出项与内容块，包括 `output_item.added/done` 和 `content_part.added/done`。额外消息、推理项、工具项或内容块不能被静默丢弃；正文完成事件必须与消息项及内容块的完成快照一致。非空终态同样复核这些证据。重复完成事件只允许相同内容，消息身份或类型漂移、正文完成后的增量均拒绝，不发布成功终态或回放状态。
+
+缺少供应商消息 ID 时，补齐快照不再生成 `responses-fallback-0`。回放阶段将无 ID 的文本消息转为普通助手消息，同时兼容已持久化的旧固定 ID，避免多轮请求携带重复的伪造身份。真实供应商 ID、工具及推理快照保持原样回放；不新增 REST/WS 字段或数据库迁移。
+
+修改代码文件与作用清单：
+- `backend/shared/responses.py`：跟踪并校验输出项、内容块和身份；禁止冲突完成事件覆盖；补齐消息不伪造 ID。
+- `backend/api/app/llm/providers/responses.py`：无 ID 及旧固定 ID 历史转换为普通助手消息。
+- `backend/api/tests/test_responses_protocol.py`：覆盖额外输出、快照冲突、重复完成、身份变化及真实 SDK 连续三轮新旧历史回放。

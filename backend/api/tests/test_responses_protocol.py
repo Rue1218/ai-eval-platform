@@ -101,6 +101,149 @@ def test_empty_terminal_snapshot_never_rebuilds_tool_state():
         stream.feed({"type": "response.completed", "response": completed([])})
 
 
+@pytest.mark.parametrize("kind,field", [("output_text", "text"), ("refusal", "refusal")])
+@pytest.mark.parametrize("change", ["text", "id", "delta_id", "late_delta"])
+def test_text_completion_conflicts_are_rejected(kind, field, change):
+    """重复完成只能完全一致，正文身份漂移和完成后的增量均拒绝。"""
+    stream = ResponsesStream()
+    delta = {"type": f"response.{kind}.delta", "delta": "A", "item_id": "msg_a"}
+    done = {"type": f"response.{kind}.done", field: "AB", "item_id": "msg_a"}
+    stream.feed(delta)
+    with pytest.raises(ValueError):
+        if change == "delta_id":
+            stream.feed({**done, "item_id": "msg_b"})
+        else:
+            stream.feed(done)
+            if change == "late_delta":
+                stream.feed({**delta, "delta": "B"})
+            else:
+                stream.feed({**done, **({field: "AC"} if change == "text" else {"item_id": "msg_b"})})
+    assert stream.response is None
+
+
+@pytest.mark.parametrize("kind,field", [("output_text", "text"), ("refusal", "refusal")])
+def test_identical_completion_is_idempotent(kind, field):
+    """网关重复发送相同完成事件时只补齐一次正文。"""
+    stream = ResponsesStream()
+    stream.feed({"type": f"response.{kind}.delta", "delta": "A"})
+    done = {"type": f"response.{kind}.done", field: "AB"}
+    stream.feed(done)
+    stream.feed(done)
+    assert stream.feed({"type": "response.completed", "response": completed([])}) == [("text", "B")]
+    assert "id" not in stream.response["output"][0]
+
+
+@pytest.mark.parametrize("extra_kind", ["message", "reasoning", "function_call"])
+@pytest.mark.parametrize("stage", ["added", "done"])
+def test_empty_terminal_rejects_other_observed_items(extra_kind, stage):
+    """即使第二项没有文本增量，也不能补齐第一项后忽略其余输出。"""
+    stream = ResponsesStream()
+    stream.feed({"type": "response.output_text.done", "text": "first"})
+    item = {"type": extra_kind, "id": "item_extra", "call_id": "call_extra", "name": "lookup"}
+    stream.feed({"type": f"response.output_item.{stage}", "output_index": 1, "item": item})
+    with pytest.raises(ValueError):
+        stream.feed({"type": "response.completed", "response": completed([])})
+    assert stream.response is None
+
+
+@pytest.mark.parametrize("failure", ["item_text", "item_extra_content", "item_status", "part_text", "extra_part"])
+def test_empty_terminal_rejects_conflicting_item_or_part(failure):
+    """正文完成、内容块完成及消息完成三层证据必须一致。"""
+    stream = ResponsesStream()
+    stream.feed({"type": "response.output_text.done", "text": "你好", "item_id": "msg_unit"})
+    item = completed()["output"][0]
+    if failure.startswith("item_"):
+        if failure == "item_text":
+            item["content"][0]["text"] = "另一个答案"
+        elif failure == "item_extra_content":
+            item["content"].append({"type": "output_text", "text": "额外正文"})
+        else:
+            item["status"] = "incomplete"
+        stream.feed({"type": "response.output_item.done", "output_index": 0, "item": item})
+    else:
+        stream.feed({"type": "response.content_part.done", "output_index": 0,
+                     "content_index": 1 if failure == "extra_part" else 0, "item_id": "msg_unit",
+                     "part": {"type": "output_text", "text": "另一个答案"}})
+    with pytest.raises(ValueError):
+        stream.feed({"type": "response.completed", "response": completed([])})
+    assert stream.response is None
+
+
+def test_empty_terminal_preserves_verified_complete_item():
+    """完整的消息事件可提供真实身份和注释，但不能改变完成正文。"""
+    stream = ResponsesStream()
+    item = completed()["output"][0]
+    item["content"][0]["annotations"] = [{"type": "url_citation", "url": "https://unit.invalid"}]
+    stream.feed({"type": "response.output_item.added", "output_index": 0,
+                 "item": {**item, "status": "in_progress", "content": []}})
+    stream.feed({"type": "response.output_text.delta", "delta": "你"})
+    stream.feed({"type": "response.output_text.done", "text": "你好"})
+    stream.feed({"type": "response.content_part.done", "output_index": 0, "content_index": 0,
+                 "part": item["content"][0]})
+    stream.feed({"type": "response.output_item.done", "output_index": 0, "item": item})
+    assert stream.feed({"type": "response.completed", "response": completed([])}) == [("text", "好")]
+    assert stream.response["output"] == [item]
+
+
+@pytest.mark.parametrize("event_kind", ["response.output_item.done", "response.content_part.done"])
+def test_nonempty_terminal_also_checks_completed_snapshots(event_kind):
+    """非空终态同样不得篡改已经结束的消息或内容块。"""
+    stream = ResponsesStream()
+    item = completed()["output"][0]
+    event = {"type": event_kind, "output_index": 0, "content_index": 0,
+             "item": item, "part": item["content"][0]}
+    stream.feed(event)
+    changed = completed()
+    changed["output"][0]["content"][0]["text"] = "不同内容"
+    with pytest.raises(ValueError):
+        stream.feed({"type": "response.completed", "response": changed})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy_id", [False, True])
+async def test_sdk_missing_id_replays_three_turns_without_synthetic_identity(monkeypatch, legacy_id):
+    """真实 SDK 连续三轮回放，无 ID 新消息和旧固定 ID 历史均转换为普通助手消息。"""
+    from app.agent.stream import AssistantAttempt
+    from app.llm.resolver import close_adapter
+
+    sent = []
+
+    def handler(request):
+        """按真实请求检查历史正文及身份，避免只校验中间快照。"""
+        body = json.loads(request.content)
+        previous = [item for item in body["input"] if item.get("role") == "assistant"]
+        assert len(previous) == len(sent)
+        assert all(set(item) == {"role", "content"} for item in previous)
+        assert [item["content"][0]["text"] for item in previous] == [f"answer {i}" for i in range(len(sent))]
+        answer = f"answer {len(sent)}"
+        sent.append(body)
+        return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=wire([
+            {"type": "response.output_text.delta", "delta": answer, "output_index": 0, "content_index": 0},
+            {"type": "response.output_text.done", "text": answer, "output_index": 0, "content_index": 0},
+            {"type": "response.completed", "response": completed([])},
+        ]))
+
+    transport(monkeypatch, handler, asynchronous=True)
+    config = ModelConfig("openai_responses", "https://unit.invalid", "unit", api_key="fake", reasoning_enabled=False)
+    adapter, _ = build_adapter(config)
+    messages = []
+    try:
+        for _ in range(3):
+            messages.append({"role": "user", "content": "continue"})
+            attempt = AssistantAttempt()
+            async for chunk in adapter.stream(resolve_request(config, messages=messages)):
+                attempt.push(chunk)
+            assert attempt.done.finish_reason == "stop"
+            assert attempt.protocol_errors() == []
+            message = attempt.message()
+            if legacy_id:
+                message["protocol_state"]["items"][0]["id"] = "responses-fallback-0"
+            messages.append(message)
+        assert len(sent) == 3
+    finally:
+        await close_adapter(adapter)
+
+
 def test_text_reconciliation_uses_content_indexes_and_refusals():
     """按内容索引独立核对拒绝文本，不能把后一个分块的文本挪到前面。"""
     output = [{"type": "message", "content": [
