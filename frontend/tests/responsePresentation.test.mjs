@@ -7,6 +7,33 @@ import { applyFrame, createLoopState } from '../src/agent/loop/reducer.ts'
 const parts = [{output_index:0,phase:'commentary',text:'过程。'}, {output_index:1,phase:'final_answer',text:'答案。'}]
 const row = {key:'a',role:'assistant',text:'过程。答案。',text_parts:parts,ended:true,correlation:{turn:1,turn_id:'s:1'},tool_calls:[]}
 
+for (const protocol of ['openai_chat', 'openai_responses', 'anthropic_messages']) {
+  test(`${protocol} 取消前缀实时与重连一致，下一轮不会继承旧阶段`, () => {
+    const state = createLoopState('s')
+    const replay = createLoopState('s')
+    const correlation = {turn:1,turn_id:'s:1',attempt_id:'a'}
+    const frame = {protocol_version:2,session_id:'s',ts:'',correlation}
+    const textParts = protocol === 'openai_responses' ? [parts[0]] : null
+    const metadata = textParts ? {output_index:0,phase:'commentary'} : {}
+    applyFrame(state,{...frame,type:'assistant.text.delta',durability:'transient',data:{chunk_index:0,text:'过程。',...metadata}})
+    const message = {...frame,type:'assistant.message',durability:'persistent',cursor:1,
+      data:{content:'过程。',text_parts:textParts,interrupted:true}}
+    applyFrame(state,message)
+    applyFrame(replay,message)
+    const live = Object.values(state.attempts)[0]
+    const saved = Object.values(replay.attempts)[0]
+    assert.deepEqual(responseParts(live),responseParts(saved))
+    assert.equal(calculateTurnSummaries([live]).size,protocol === 'openai_responses' ? 0 : 1)
+    assert.equal(calculateTurnSummaries([saved]).size,calculateTurnSummaries([live]).size)
+    const next = {...frame,correlation:{turn:2,turn_id:'s:2',attempt_id:'b'}}
+    applyFrame(state,{...next,type:'assistant.text.delta',durability:'transient',data:{chunk_index:0,text:'答案。'}})
+    applyFrame(state,{...next,type:'assistant.message',durability:'persistent',cursor:2,data:{content:'答案。',text_parts:null}})
+    const nextAttempt = Object.values(state.attempts)[1]
+    assert.equal(finalResponseText(nextAttempt),'答案。')
+    assert.equal(calculateTurnSummaries([nextAttempt]).size,1)
+  })
+}
+
 test('阶段快照在实时与重连后相同，复制总结只包含最终答案', () => {
   const state = createLoopState('s')
   const replay = createLoopState('s')

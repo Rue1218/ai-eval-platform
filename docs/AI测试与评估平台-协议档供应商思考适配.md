@@ -1,6 +1,6 @@
 # 协议档供应商与思考强度适配
 
-版本：V1.11 ｜ 审查日期：2026-09-18
+版本：V1.12 ｜ 审查日期：2026-09-18
 
 ## 产品与接口增量
 
@@ -243,3 +243,16 @@ Responses 公开摘要兼容 `reasoning_summary_text.done`、`reasoning_summary_
 修改代码文件与作用清单：`backend/shared/responses{,_reasoning}.py`（摘要与分段）、`backend/api/app/llm/{loop_contracts,providers/responses}.py`（流展示元数据）、`backend/api/app/agent/{stream,loop,loop_service,events,loop_presentation,loop_wiring}.py`（事件/下载投影和文件交付提示）、`backend/api/app/harness/contracts/loop_events.py`（目录 V7）、前端 `responsePresentation.ts`、reducer、turnSummary、MarkdownView、ReasoningBlock、AgentWorkspace 及对应测试。
 
 本轮验证：新增后端 15 项回归，API 全量 1986 passed / 78 skipped、Worker 51 passed、前端 116 项通过；新增浏览器用例通过，Ruff、前端 lint（0 错误）、typecheck/build 与 diff 检查通过。本轮采用本地协议/真实 SDK/Agent 图和浏览器夹具验证，未新增真实供应商请求。
+
+
+## V1.12 修订：阶段回放与三协议隔离（2026-09-18）
+
+New API Responses 在终态省略 phase 时，只恢复同一输出项先前明确声明的 commentary/final_answer；无 ID 与旧兼容 ID 历史去除身份时保留阶段，冲突仍失败。输出项完成才补报阶段时立即同步展示，取消也保存已收到的分段。此兼容不修改 Chat 的 reasoning_effort 或 Messages 的 thinking/output_config 参数。
+
+回归覆盖平台全部三种协议：OpenAI Chat、OpenAI Responses、Anthropic Messages。Gemini/Ollama 等供应商使用所选兼容协议，不额外假定原生协议支持。真实 SDK 配合本地 HTTP 替身验证线格式、取消资源关闭、工具回填与历史回放；不等同于对所有线上供应商实测。
+
+### 修改代码文件与作用清单
+
+- `backend/shared/responses.py`、`backend/api/app/llm/providers/responses.py`：阶段补齐、校验及安全回放。
+- `backend/api/app/agent/{stream,loop}.py`：取消时保存公开展示分段。
+- `backend/api/tests/{test_loop_llm_sdk,test_responses_protocol,test_responses_presentation}.py`、`frontend/tests/responsePresentation.test.mjs`：三协议及阶段回归。

@@ -445,6 +445,7 @@ async def build_agent(
                         "attempt_id": attempt_id,
                         "message": prefix,
                         "content": attempt.text,
+                        "text_parts": attempt.text_parts,
                         "reasoning_content": attempt.reasoning_content,
                         "interrupted": True,
                         "latency_ms": attempt_latency_ms(),
@@ -461,6 +462,7 @@ async def build_agent(
                     tool_calls=[],
                     usage={},
                     finish_reason="cancelled",
+                    text_parts=attempt.text_parts,
                     interrupted=True,
                     latency_ms=attempt_latency_ms(),
                 )

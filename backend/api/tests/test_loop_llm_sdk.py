@@ -13,11 +13,13 @@ import pytest
 from app.llm.loop_contracts import Done, LlmRequest, LlmRequestError, TextDelta
 from app.llm.providers.anthropic import AnthropicAdapter
 from app.llm.providers.openai import OpenAiAdapter
+from app.llm.providers.responses import ResponsesAdapter
 from app.llm.resolver import close_adapter
 
 PROTOCOLS = [
     (OpenAiAdapter, "openai", "/v1/chat/completions"),
     (AnthropicAdapter, "anthropic", "/v1/messages"),
+    (ResponsesAdapter, "openai", "/v1/responses"),
 ]
 
 
@@ -260,7 +262,12 @@ def test_real_sdk_decoding_and_resource_path(monkeypatch, adapter_type, sdk, pat
         adapter = adapter_type(api_key="unit-test", base_url="https://unit.invalid/v1")
         try:
             chunks = await consume(adapter)
-            assert [chunk for chunk in chunks if isinstance(chunk, TextDelta)] == [TextDelta("ok")]
+            text_chunks = [chunk for chunk in chunks if isinstance(chunk, TextDelta)]
+            assert "".join(chunk.text for chunk in text_chunks) == "ok"
+            if adapter_type is ResponsesAdapter:
+                assert text_chunks[-1].text_parts == [{"output_index": 0, "phase": None, "text": "ok"}]
+            else:
+                assert text_chunks == [TextDelta("ok")]
             assert chunks[-1].finish_reason == "stop"
             assert chunks[-1].usage["prompt_tokens"] == 3
             assert chunks[-1].usage["completion_tokens"] == 1
@@ -376,11 +383,13 @@ def test_real_sdk_cancel_body_closes_http_stream(monkeypatch, adapter_type, sdk,
 
 
 @pytest.mark.parametrize("adapter_type,sdk,path", PROTOCOLS)
+@pytest.mark.parametrize("phase_at", ["added", "done", "stream"])
 def test_runtime_cancel_prefix_next_request_has_no_opaque_or_partial_tools(
     monkeypatch,
     adapter_type,
     sdk,
     path,
+    phase_at,
 ):
     """真实 Runtime 与 SDK：取消留下正文，下一轮经严格本地 HTTP 接收端校验。"""
 
@@ -512,6 +521,7 @@ def test_runtime_cancel_prefix_next_request_has_no_opaque_or_partial_tools(
             "id": "msg_1",
             "type": "message",
             "role": "assistant",
+            "phase": "commentary",
             "status": "completed",
             "content": [{"type": "output_text", "text": "安全前缀", "annotations": []}],
         }
@@ -532,7 +542,8 @@ def test_runtime_cancel_prefix_next_request_has_no_opaque_or_partial_tools(
             {
                 "type": "response.output_item.added",
                 "output_index": 1,
-                "item": {**message, "status": "in_progress", "content": []},
+                "item": {**message, "status": "in_progress", "content": [],
+                         "phase": "commentary" if phase_at != "done" else None},
             },
             {
                 "type": "response.output_text.delta",
@@ -561,6 +572,10 @@ def test_runtime_cancel_prefix_next_request_has_no_opaque_or_partial_tools(
                 "delta": '{"path":',
             },
         ]
+        if phase_at == "stream":
+            # 正文项尚未完成就取消，验证阶段直接由定位增量保存，而非依赖完成快照。
+            events = [event for event in events
+                      if not (event["type"] == "response.output_item.done" and event["output_index"] == 1)]
         prefix = b"".join(sse({**event, "sequence_number": i}) for i, event in enumerate(events))
 
     async def scenario():
@@ -592,7 +607,7 @@ def test_runtime_cancel_prefix_next_request_has_no_opaque_or_partial_tools(
                 return httpx.Response(
                     200, headers={"content-type": "text/event-stream"}, stream=body
                 )
-            history = payload["messages"]
+            history = payload["input" if adapter_type is ResponsesAdapter else "messages"]
             assert len(history) == 3
             assert history[0]["role"] == history[-1]["role"] == "user"
             assert history[1]["role"] == "assistant"
@@ -633,6 +648,15 @@ def test_runtime_cancel_prefix_next_request_has_no_opaque_or_partial_tools(
                 "content": "安全前缀",
                 "reasoning_content": "思考",
             }
+            from app.agent.events import project_fact
+
+            fact = next(event for event in runtime.log.read() if event["type"] == "assistant/message")
+            expected_parts = ([{"output_index": 1, "phase": "commentary", "text": "安全前缀"}]
+                              if adapter_type is ResponsesAdapter else None)
+            assert fact["data"]["text_parts"] == expected_parts
+            projected = project_fact({**fact, "session_id": "s"})[0]["data"]
+            assert projected["text_parts"] == expected_parts
+            assert "opaque" not in str(projected)
             await runtime.start_turn("下一轮")
             await runtime.wait()
             assert len(requests) == 2

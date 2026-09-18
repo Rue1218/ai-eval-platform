@@ -45,7 +45,10 @@ def to_responses_input(request: LlmRequest) -> list[dict]:
             for item in items:
                 # 同时迁移旧版固定补齐 ID，避免已保存的兼容会话继续产生重复身份。
                 if item.get("type") == "message" and item.get("id") in {None, "responses-fallback-0"}:
-                    wire.append({"role": "assistant", "content": item.get("content", [])})
+                    replay = {"role": "assistant", "content": item.get("content", [])}
+                    if item.get("phase") is not None:
+                        replay["phase"] = item["phase"]
+                    wire.append(replay)
                 else:
                     wire.append(item)
         else:
@@ -94,8 +97,9 @@ class ResponsesAdapter:
         try:
             stream = await self._client.responses.create(**kwargs)
             async for event in stream:
+                raw_event = plain(event)
                 try:
-                    parts = decoder.feed(plain(event))
+                    parts = decoder.feed(raw_event)
                 except (KeyError, TypeError, ValueError) as exc:
                     # 流自身损坏属于响应协议错误，不能归因为用户请求参数被拒绝。
                     raise invalid("Responses 流与完成快照不一致") from exc
@@ -113,6 +117,13 @@ class ResponsesAdapter:
                         yield ToolCallStart(*part[1:])
                     elif part[0] == "tool_delta":
                         yield ToolCallDelta(*part[1:])
+                # 阶段可能到 item.done 才声明；立即校正展示，取消时也能保存该信息。
+                if (raw_event.get("type") in {"response.output_item.added", "response.output_item.done"}
+                        and (raw_event.get("item") or {}).get("type") == "message"):
+                    display_parts = decoder.display_text_parts()
+                    if display_parts and display_parts != last_text_parts:
+                        last_text_parts = display_parts
+                        yield TextDelta("", display_parts)
             response = decoder.response
             if response is not None:
                 # 终态可能补报阶段且没有正文后缀，仍须校正实时展示与持久快照。

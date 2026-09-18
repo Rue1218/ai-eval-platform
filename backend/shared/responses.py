@@ -114,6 +114,15 @@ class ResponsesStream:
             raise ValueError("Responses 消息阶段发生变化")
         self.message_phases[index] = phase or previous
 
+    def _with_verified_phase(self, index: int, item: dict) -> dict:
+        """仅补回同一输出项已声明的阶段；展示与模型回放使用一致的语义。"""
+        if not isinstance(item, dict):
+            raise ValueError("Responses 完成输出项结构不合法")
+        self._record_phase(index, item)
+        if item.get("type") == "message" and self.message_phases.get(index) is not None:
+            return {**item, "phase": self.message_phases[index]}
+        return item
+
     @staticmethod
     def _index(value: object) -> int:
         """索引必须是非负整数，避免布尔值或负索引混淆输出身份。"""
@@ -248,7 +257,9 @@ class ResponsesStream:
             item = output[index]
             if index in self.item_ids and item.get("id") != self.item_ids[index]:
                 raise ValueError("Responses 完成快照输出项身份不一致")
-            if any(item.get(key) != value for key, value in self.completed_items.get(index, {}).items()):
+            # 消息阶段已单独校验，允许终态补报此前未知的值；其他完成字段仍严格一致。
+            if any(item.get(key) != value for key, value in self.completed_items.get(index, {}).items()
+                   if key != "phase" or kind != "message"):
                 raise ValueError("Responses 完成快照与完成输出项不一致")
         for (index, content_index), kind in self.content_types.items():
             content = output[index].get("content", [])
@@ -349,7 +360,7 @@ class ResponsesStream:
             item = event.get("item") or {}
             index = self._index(event["output_index"])
             self._observe_item(index, item.get("type"), item.get("id"))
-            self._record_phase(index, item)
+            item = self._with_verified_phase(index, item)
             if kind.endswith(".done"):
                 if index in self.completed_items and self.completed_items[index] != item:
                     raise ValueError("Responses 重复完成输出项不一致")
@@ -392,11 +403,13 @@ class ResponsesStream:
             if response.get("status") != expected or response.get("error"):
                 raise ValueError("Responses 终态不一致")
             response = self._repair_empty_terminal_output(response)
+            # 网关可能在终态省略阶段；先校验冲突再补回，绝不推断新的阶段或供应商身份。
+            response = {**response, "output": [self._with_verified_phase(index, item)
+                                              for index, item in enumerate(response["output"])]}
             self._validate_output(response["output"])
             events = self._complete_text(response["output"])
             final_calls = set()
             for index, item in enumerate(response["output"]):
-                self._record_phase(index, item)
                 if item.get("type") == "reasoning":
                     self.reasoning.snapshot(index, item)
                 if item.get("type") == "function_call":

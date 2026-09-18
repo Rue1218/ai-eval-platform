@@ -201,7 +201,8 @@ def test_nonempty_terminal_also_checks_completed_snapshots(event_kind):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("legacy_id", [False, True])
-async def test_sdk_missing_id_replays_three_turns_without_synthetic_identity(monkeypatch, legacy_id):
+@pytest.mark.parametrize("phase", [None, "commentary", "final_answer"])
+async def test_sdk_missing_id_replays_three_turns_without_synthetic_identity(monkeypatch, legacy_id, phase):
     """真实 SDK 连续三轮回放，无 ID 新消息和旧固定 ID 历史均转换为普通助手消息。"""
     from app.agent.stream import AssistantAttempt
     from app.llm.resolver import close_adapter
@@ -213,11 +214,14 @@ async def test_sdk_missing_id_replays_three_turns_without_synthetic_identity(mon
         body = json.loads(request.content)
         previous = [item for item in body["input"] if item.get("role") == "assistant"]
         assert len(previous) == len(sent)
-        assert all(set(item) == {"role", "content"} for item in previous)
+        assert all(set(item) == ({"role", "content", "phase"} if phase else {"role", "content"}) for item in previous)
+        assert all(item.get("phase") == phase for item in previous)
         assert [item["content"][0]["text"] for item in previous] == [f"answer {i}" for i in range(len(sent))]
         answer = f"answer {len(sent)}"
         sent.append(body)
         return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=wire([
+            {"type": "response.output_item.added", "output_index": 0,
+             "item": {"type": "message", "role": "assistant", "content": [], "phase": phase}},
             {"type": "response.output_text.delta", "delta": answer, "output_index": 0, "content_index": 0},
             {"type": "response.output_text.done", "text": answer, "output_index": 0, "content_index": 0},
             {"type": "response.completed", "response": completed([])},
