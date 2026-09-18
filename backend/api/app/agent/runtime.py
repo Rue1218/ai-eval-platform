@@ -48,6 +48,7 @@ class AgentRuntime:
         self._task: asyncio.Task[None] | None = None
         self._active_turn: int | None = None
         self._cancelling = False
+        self._cancel_reason = "cancelled"
         self._closed = False
         self._approval_gate: ApprovalGate | None = None
         self._started_turn_here = False
@@ -312,7 +313,7 @@ class AgentRuntime:
             pass
         await self._settle_cancelled_task(task)
 
-    async def close(self) -> None:
+    async def close(self, *, reason: str = "cancelled") -> None:
         """禁止新输入并恰好一次地结算活动任务。"""
         async with self._lock:
             if self._closed:
@@ -321,6 +322,7 @@ class AgentRuntime:
             task = self._task
             if task is not None and not task.done() and not self._cancelling:
                 self._cancelling = True
+                self._cancel_reason = reason
                 task.cancel()
         if task is not None:
             try:
@@ -353,7 +355,7 @@ class AgentRuntime:
             return []
         if self._children is not None:
             await self._children.close(propagate_cancel=False)
-        committed = self._append_recovery("cancelled")
+        committed = self._append_recovery(self._cancel_reason)
         self._task = None
         self._active_turn = None
         self._cancelling = False
@@ -420,7 +422,7 @@ class AgentRuntime:
             # 图流中断前可能已写入助手消息或工具事实。先补发这些记录，再统一追加
             # 取消收尾，避免 UI 已经收到取消却漏掉 assistant_end 或 tool_result。
             self._publish_unpublished_events(turn=turn, after_seq=last_published_seq)
-            self._append_recovery("cancelled")
+            self._append_recovery(self._cancel_reason)
             raise
         except Exception:
             if self._children is not None:

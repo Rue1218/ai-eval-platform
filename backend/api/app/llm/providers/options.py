@@ -173,6 +173,9 @@ def request_options(request: LlmRequest, provider: str, protocol: str) -> dict:
     """把已经校验的解析结果转 SDK 参数，不暴露模型请求任意覆盖入口。"""
     resolved = resolve_options(request, provider, protocol)
     result = {}
+    if request.tool_choice == "none":
+        # 三协议各用原生关闭形式，不清空历史工具 schema 或污染思考参数。
+        result["tool_choice"] = {"type": "none"} if protocol == "anthropic_messages" else "none"
     if request.timeout_s is not None:
         result["timeout"] = request.timeout_s
     if request.temperature is not None and not resolved.get("omit_temperature"):

@@ -176,6 +176,7 @@ test('phaseStatusText：取消中 > 连接待同步 > phase 映射 > 原始值 >
   assert.equal(phaseStatusText({ connection: 'connecting', phase: 'thinking' }), '连接待同步')
   assert.equal(phaseStatusText({ connection: 'online', phase: 'thinking' }), '正在思考')
   assert.equal(phaseStatusText({ connection: 'online', phase: 'max_tokens' }), '达到输出上限，本轮已结束')
+  assert.equal(phaseStatusText({ connection: 'online', phase: 'service_restart' }), '服务更新中断了本轮，已有结果已保留。服务恢复后可发送“继续”。')
   assert.equal(phaseStatusText({ connection: 'online', phase: 'custom_phase' }), 'custom_phase')
   assert.equal(phaseStatusText({ connection: 'online' }), '就绪')
   assert.equal(phaseStatusText(undefined), '就绪')

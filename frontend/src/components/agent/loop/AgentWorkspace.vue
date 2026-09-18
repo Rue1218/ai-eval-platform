@@ -130,7 +130,7 @@
               </div>
             </div>
           </template>
-          <p v-if="!busy && state?.phase && ['max_tokens','max_steps','cancelled','interrupted','error'].includes(state.phase)" class="loop-notice">{{ finishLabels[state.phase] }}</p>
+          <p v-if="!busy && state?.phase && ['max_tokens','max_steps','cancelled','service_restart','interrupted','error'].includes(state.phase)" class="loop-notice">{{ finishLabels[state.phase] }}</p>
           </div>
           <div class="loop-composer-wrap">
             <div class="composer-top-bar" :style="workspacePopoverOpen ? { marginBottom: `${workspacePopoverSpace}px` } : undefined">

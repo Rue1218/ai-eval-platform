@@ -306,6 +306,11 @@ if [ "${#RECONCILED_SERVICES[@]}" -gt 0 ] \
     docker logout ghcr.io >/dev/null 2>&1 || true
 fi
 
+# 在任何基础设施或业务容器更新之前阻止新回合，并等待活动回合退出。
+# Actions 与本地回退均经此入口；检查失败由 set -e 中止，退出自动释放文件锁。
+source "$APP_DIR/deploy/drain-agents.sh"
+drain_agent_turns
+
 # 基础设施目标镜像以 docker-compose.yml 插值结果为准（唯一事实源），脚本不再重复定义默认值；
 # 若环境显式设置 POSTGRES_IMAGE/REDIS_IMAGE，compose 插值会自然生效。单次调用减少部署耗时。
 INFRA_IMAGES=$(docker compose config --format json | python3 -c \

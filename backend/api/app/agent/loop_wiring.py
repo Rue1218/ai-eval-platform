@@ -754,6 +754,8 @@ def _drop_incompatible_protocol_state(request):
 
 def _window_request(profile, segments, specs, messages, effort, context_window):
     """纯函数预检和裁剪完整 user 回合；换模型仅降级不可移植的签名块。"""
+    from .loop import STEP_NOTICE_TOKEN_RESERVE
+
     if type(context_window) is not int or context_window <= 0:
         raise AppError(ErrorCode.VALIDATION, "模型上下文窗口配置非法")
     config = replace(profile.config, reasoning_enabled=effort != "off",
@@ -761,9 +763,9 @@ def _window_request(profile, segments, specs, messages, effort, context_window):
     request = resolve_request(replace(profile, config=config), messages=messages,
                               system_segments=segments, tools=specs)
     request, protocol_state_dropped_indices = _drop_incompatible_protocol_state(request)
-    budget = context_window - request.max_tokens
+    budget = context_window - request.max_tokens - STEP_NOTICE_TOKEN_RESERVE
     if budget <= 0:
-        raise AppError(ErrorCode.BUDGET_EXCEEDED, "模型输出预算占满上下文窗口")
+        raise AppError(ErrorCode.BUDGET_EXCEEDED, "模型输出预算与平台收尾预留占满上下文窗口")
     groups = []
     for message in request.messages:
         if message["role"] == "user" or not groups:
@@ -784,6 +786,7 @@ def _window_request(profile, segments, specs, messages, effort, context_window):
         "window_start": dropped, "window_end": len(messages),
         "messages_fingerprint": _hash({"messages": selected.messages}),
         "estimated_input_tokens": tokens, "reserved_output_tokens": request.max_tokens,
+        "reserved_step_notice_tokens": STEP_NOTICE_TOKEN_RESERVE,
         "protocol_state_dropped": len(protocol_state_dropped_indices),
         "protocol_state_dropped_indices": protocol_state_dropped_indices,
     }
