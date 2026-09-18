@@ -28,6 +28,8 @@ const props = withDefaults(
     content: string
     customClass?: string
     isStreaming?: boolean
+    /** 平台核验的产物引用映射，不接受模型自造下载地址。 */
+    fileLinks?: Record<string, string>
   }>(),
   {
     content: '',
@@ -314,6 +316,12 @@ function formatLanguageName(rawLang: string): string {
  * 将 Markdown 格式文本转换为安全且样式优化的 HTML（支持实时流式解析）
  */
 function renderMarkdown(raw: string): string {
+  // 仅已确认工作区文件可转换伪协议；普通 Markdown 仍只放行 HTTP(S)。
+  raw = raw.replace(/\[([^\]]+)\]\((sandbox:[^\s)]+)\)/g, (match, label: string, reference: string) => {
+    const target = props.fileLinks?.[reference]
+    if (!target || !/^\/api\/workspaces\/[A-Za-z0-9%_-]+\/files\/raw\?path=[A-Za-z0-9%_.!~*'()-]+&download=true$/.test(target)) return match
+    return `[${label}](${window.location.origin}${target})`
+  })
   if (!raw) return ''
 
   // 保留流式文本末尾的换行与未闭合围栏，避免每个增量帧改变 Markdown 边界。

@@ -131,6 +131,36 @@ test('工作台初始化不再预加载旧栈偏好、模型和确认卡选项',
   expect(ctx.requests).toContain('/api/sessions/s/agent-ui')
 })
 
+test('Responses 摘要 Markdown、阶段分段与真实文件下载入口', async ({page}) => {
+  const ctx = await setup(page)
+  await expect.poll(() => ctx.sockets.has('s')).toBe(true)
+  let cursor = 0
+  const correlation = {turn:1,turn_id:'s:1',step:1,attempt_id:'responses-a',call_id:'write-a'}
+  const send = (type: string, data: Record<string, unknown>) => ctx.sockets.get('s').send(JSON.stringify({
+    protocol_version:2,type,durability:'persistent',cursor:++cursor,session_id:'s',
+    ts:'2026-09-18T00:00:00Z',correlation,data,
+  }))
+  send('turn.start',{})
+  send('tool.call',{name:'write',display:{registry_name:'write',target:'plan.md'}})
+  send('tool.result',{name:'write',status:'succeeded',display:{registry_name:'write',file_path:'plan.md'}})
+  send('assistant.start',{request_summary:{model:'gpt-5.6-luna',protocol:'openai_responses',reasoning_effort:'medium'}})
+  const finalText = '[打开文件](sandbox:/mnt/data/plan.md)\n\n[未知文件](sandbox:/mnt/data/unknown.md)'
+  send('assistant.message',{content:'已创建。'+finalText,reasoning_preview:'**创建 Markdown 文件**\n\n补齐后的完整摘要。',text_parts:[
+    {output_index:0,phase:'commentary',text:'已创建。'},
+    {output_index:1,phase:'final_answer',text:finalText},
+  ]})
+  send('turn.end',{reason:'completed'})
+  await expect(page.locator('[data-response-phase="commentary"]')).toContainText('已创建。')
+  await expect(page.locator('[data-response-phase="final_answer"]')).toContainText('本轮总结')
+  await page.locator('.reasoning-summary').click()
+  await expect(page.locator('.reasoning-content strong')).toHaveText('创建 Markdown 文件')
+  await expect(page.locator('.reasoning-content')).toContainText('补齐后的完整摘要。')
+  await expect(page.locator('.reasoning-label')).toHaveText('思考摘要 · 已结束')
+  await expect(page.getByRole('link',{name:'打开文件'})).toHaveAttribute('href',/\/api\/workspaces\/ws-default\/files\/raw\?path=plan.md&download=true$/)
+  await expect(page.getByRole('link',{name:'下载 plan.md'})).toHaveAttribute('href','/api/workspaces/ws-default/files/raw?path=plan.md&download=true')
+  await expect(page.getByRole('link',{name:'未知文件'})).toHaveCount(0)
+})
+
 for (const [status, label] of Object.entries({failed:'失败',denied:'已拒绝',cancelled:'已取消',not_started:'未启动',outcome_unknown:'结果未知'})) test(`任务规划 ${status} 可见且保留最后成功计划`, async ({page}) => {
   const ctx = await setup(page)
   await expect.poll(() => ctx.sockets.has('s')).toBe(true)

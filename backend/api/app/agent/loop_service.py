@@ -199,6 +199,10 @@ class LoopService:
         if kind is None:
             return
         data = {"text": payload.get("content", ""), "chunk_index": payload.get("chunk_index")}
+        if kind == "assistant.text.delta" and payload.get("text_parts") is not None:
+            data["text_parts"] = payload["text_parts"]
+        if kind == "assistant.text.delta" and payload.get("output_index") is not None:
+            data.update(output_index=payload["output_index"], phase=payload.get("phase"))
         correlation = {key: payload[key] for key in ("turn", "step", "attempt_id") if key in payload}
         if "turn" in correlation:
             correlation["turn_id"] = f"{session_id}:{correlation['turn']}"

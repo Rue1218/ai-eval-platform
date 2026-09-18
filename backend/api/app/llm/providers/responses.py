@@ -90,6 +90,7 @@ class ResponsesAdapter:
             kwargs["tools"] = to_responses_tools(request.tools)
         stream = None
         decoder = ResponsesStream()
+        last_text_parts = None
         try:
             stream = await self._client.responses.create(**kwargs)
             async for event in stream:
@@ -100,7 +101,12 @@ class ResponsesAdapter:
                     raise invalid("Responses 流与完成快照不一致") from exc
                 for part in parts:
                     if part[0] == "text":
-                        yield TextDelta(part[1])
+                        if decoder.response is None:
+                            index = decoder.current_text_index
+                            yield TextDelta(part[1], output_index=index, phase=decoder.message_phases.get(index))
+                        else:
+                            last_text_parts = decoder.display_text_parts()
+                            yield TextDelta(part[1], last_text_parts)
                     elif part[0] == "reasoning":
                         yield ReasoningDelta(part[1])
                     elif part[0] == "tool_start":
@@ -109,6 +115,10 @@ class ResponsesAdapter:
                         yield ToolCallDelta(*part[1:])
             response = decoder.response
             if response is not None:
+                # 终态可能补报阶段且没有正文后缀，仍须校正实时展示与持久快照。
+                final_parts = decoder.display_text_parts()
+                if final_parts and final_parts != last_text_parts:
+                    yield TextDelta("", final_parts)
                 items = response["output"]
                 # 原始项只进入受控协议状态，不混入可展示文本或工具参数。
                 for index, item in enumerate(items):

@@ -235,7 +235,7 @@ def test_catalog_matches_runtime_history_selection_and_legacy_attempts():
                {"role": "user", "content": "latest"}]
     selection = _history_selection(history, history[2:])
     catalog = event_schema_catalog()
-    assert catalog["catalog_version"] == 6
+    assert catalog["catalog_version"] == 7
     assert "task_plan/updated" in catalog["events"]
     validator = Draft202012Validator(catalog["events"]["assistant/attempt_start"]["schema"])
     legacy = {"turn": 1, "step": 1, "attempt_id": "a", "header_seq": 0,

@@ -3,6 +3,8 @@
 import json
 from copy import deepcopy
 
+from .responses_reasoning import ReasoningText
+
 
 def response_input(messages: list[dict]) -> list[dict]:
     """把平台消息转换为独立消息项、函数调用项和函数结果项。"""
@@ -88,6 +90,29 @@ class ResponsesStream:
         self.content_types: dict[tuple, str] = {}
         self.completed_content: dict[tuple, dict] = {}
         self.emitted_text = ""
+        self.reasoning = ReasoningText()
+        self.message_phases: dict[int, str | None] = {}
+        self.current_text_index: int | None = None
+
+    def display_text_parts(self) -> list[dict]:
+        """展示只携带公开正文和阶段，原始协议身份及加密状态留在内部。"""
+        grouped = {}
+        for (index, content_index, kind), text in sorted(self.text_parts.items()):
+            grouped[index] = grouped.get(index, "") + text
+        return [{"output_index": index, "phase": self.message_phases.get(index), "text": text}
+                for index, text in grouped.items()]
+
+    def _record_phase(self, index: int, item: dict) -> None:
+        """阶段可在完成时补报，已声明的阶段不能被改写。"""
+        if item.get("type") != "message":
+            return
+        phase = item.get("phase")
+        if phase not in {None, "commentary", "final_answer"}:
+            raise ValueError("Responses 消息阶段不合法")
+        previous = self.message_phases.get(index)
+        if previous is not None and phase is not None and phase != previous:
+            raise ValueError("Responses 消息阶段发生变化")
+        self.message_phases[index] = phase or previous
 
     @staticmethod
     def _index(value: object) -> int:
@@ -259,6 +284,7 @@ class ResponsesStream:
         if not final_text.startswith(self.emitted_text):
             raise ValueError("Responses 正文顺序不一致")
         tail = final_text[len(self.emitted_text):]
+        self.text_parts = final_parts
         return [("text", tail)] if tail else []
 
     def _call(self, index: int, item: dict, *, complete: bool) -> list[tuple]:
@@ -298,6 +324,7 @@ class ResponsesStream:
                 raise ValueError("Responses 正文增量不是文本")
             # 兼容省略索引的单正文网关；标准多项响应仍使用各自索引，不能混淆拒绝与正文。
             key = self._observe_content(event, "refusal" if kind == "response.refusal.delta" else "output_text")
+            self.current_text_index = key[0]
             if key in self.text_done_parts:
                 raise ValueError("Responses 正文完成后出现增量")
             self.text_parts[key] = self.text_parts.get(key, "") + delta
@@ -306,16 +333,30 @@ class ResponsesStream:
         if kind in {"response.output_text.done", "response.refusal.done"}:
             self._record_text_done(event, "refusal" if kind == "response.refusal.done" else "output_text")
             return []
-        if kind in {"response.reasoning_summary_text.delta", "response.reasoning_text.delta"}:
-            return [("reasoning", event.get("delta", ""))]
+        if kind in {"response.reasoning_summary_text.delta", "response.reasoning_text.delta",
+                    "response.reasoning_summary_text.done", "response.reasoning_text.done",
+                    "response.reasoning_summary_part.done"}:
+            index = self._index(event.get("output_index", 0))
+            self._observe_item(index, "reasoning", event.get("item_id"))
+            summary = "reasoning_summary" in kind
+            part_index = self._index(event.get("summary_index" if summary else "content_index", 0))
+            complete = kind.endswith(".done")
+            text = (event.get("part") or {}).get("text") if "_part.done" in kind else event.get("text" if complete else "delta")
+            self.reasoning.record((index, "summary_text" if summary else "reasoning_text", part_index),
+                                  text, complete=complete)
+            return self.reasoning.flush()
         if kind in {"response.output_item.added", "response.output_item.done"}:
             item = event.get("item") or {}
             index = self._index(event["output_index"])
             self._observe_item(index, item.get("type"), item.get("id"))
+            self._record_phase(index, item)
             if kind.endswith(".done"):
                 if index in self.completed_items and self.completed_items[index] != item:
                     raise ValueError("Responses 重复完成输出项不一致")
                 self.completed_items[index] = deepcopy(item)
+                if item.get("type") == "reasoning":
+                    self.reasoning.snapshot(index, item)
+                    return self.reasoning.flush()
             if item.get("type") == "function_call":
                 return self._call(event["output_index"], item, complete=kind.endswith(".done"))
         if kind in {"response.content_part.added", "response.content_part.done"}:
@@ -355,9 +396,13 @@ class ResponsesStream:
             events = self._complete_text(response["output"])
             final_calls = set()
             for index, item in enumerate(response["output"]):
+                self._record_phase(index, item)
+                if item.get("type") == "reasoning":
+                    self.reasoning.snapshot(index, item)
                 if item.get("type") == "function_call":
                     final_calls.add(index)
                     events.extend(self._call(index, item, complete=True))
+            events.extend(self.reasoning.flush())
             if set(self.calls) != final_calls:
                 raise ValueError("Responses 完成快照缺少工具项")
             self.response = deepcopy(response)

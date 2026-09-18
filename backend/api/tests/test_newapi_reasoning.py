@@ -171,10 +171,17 @@ def test_responses_probe_recognizes_both_reasoning_events(monkeypatch, event_typ
         data = completed()
         data["output"][0]["content"][0]["text"] = "answer"
         data["usage"]["output_tokens_details"]["reasoning_tokens"] = 0
+        # 推理和正文各自占用真实输出下标，终态必须覆盖已观察推理项。
+        summary = "summary" in event_type
+        reasoning = {"type": "reasoning", "id": "rs_1", "summary": []}
+        reasoning["summary" if summary else "content"] = [
+            {"type": "summary_text" if summary else "reasoning_text", "text": "reasoning evidence"},
+        ]
+        data["output"].insert(0, reasoning)
         return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=wire([
             {"type": event_type, "delta": "reasoning evidence", "item_id": "rs_1", "output_index": 0,
              "content_index": 0, "summary_index": 0, "sequence_number": 1},
-            {"type": "response.output_text.delta", "delta": "answer", "sequence_number": 2},
+            {"type": "response.output_text.delta", "delta": "answer", "output_index": 1, "sequence_number": 2},
             {"type": "response.completed", "response": data, "sequence_number": 3},
         ]))
 

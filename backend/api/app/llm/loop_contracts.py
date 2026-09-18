@@ -285,6 +285,11 @@ class TextDelta:
     """正文增量。"""
 
     text: str
+    # 可选公开正文分段快照；与模型回放的原始协议状态分离。
+    text_parts: list[dict] | None = None
+    # 流式阶段只发送定位元数据，避免每个 token 重传完整正文快照。
+    output_index: int | None = None
+    phase: str | None = None
 
 
 @dataclass(frozen=True)

@@ -63,13 +63,22 @@
                       <time v-if="formatTimestamp(row.timestamp)" :datetime="row.timestamp">{{ formatTimestamp(row.timestamp) }}</time>
                       <small v-if="row.request_summary">第 {{ row.correlation.turn ?? '—' }} 轮 · {{ row.request_summary.reasoning_effort }} · step {{ row.correlation.step }}</small>
                     </template>
-                    <span v-if="isSummaryAssistantRow(row)" class="turn-segment-label summary">本轮总结</span>
+                    <span v-if="isSummaryAssistantRow(row) && !responseParts(row).some(part => part.phase === 'commentary')" class="turn-segment-label summary">本轮总结</span>
                     <span v-else class="turn-segment-label process">执行过程 · step {{ row.correlation.step ?? '—' }}</span>
                   </div>
                 </header>
-                <ReasoningBlock v-if="row.reasoning && ui?.permissions.reasoning" :content="row.reasoning" :ended="row.ended" :interrupted="row.interrupted"/>
-                <MarkdownView v-if="row.text" :content="row.text"/>
+                <ReasoningBlock v-if="row.reasoning && ui?.permissions.reasoning" :content="row.reasoning" :ended="row.ended" :interrupted="row.interrupted" :summary-mode="row.request_summary?.protocol === 'openai_responses'"/>
+                <template v-if="row.text">
+                  <section v-for="part in responseParts(row)" :key="part.output_index" :data-response-phase="part.phase || undefined">
+                    <p v-if="part.phase === 'commentary'" class="turn-segment-label process">过程说明</p>
+                    <p v-else-if="part.phase === 'final_answer' && isSummaryAssistantRow(row) && responseParts(row).some(item => item.phase === 'commentary')" class="turn-segment-label summary">本轮总结</p>
+                    <MarkdownView :content="part.text" :file-links="artifactLinks(filesForRow(row))"/>
+                  </section>
+                </template>
                 <p v-else-if="!row.ended" class="muted">正在响应…</p>
+                <div v-if="isSummaryAssistantRow(row) && filesForRow(row).length" class="generated-files" aria-label="本轮生成文件">
+                  <a v-for="file in filesForRow(row)" :key="file.path" :href="file.url">下载 {{ file.path }}</a>
+                </div>
                 <small v-if="row.interrupted || row.error_code || row.error_message" class="attempt-error">
                   {{ row.interrupted ? '本次输出已中断' : `${row.error_code ? `[${row.error_code}] ` : ''}${row.error_message || '模型调用未完成'}` }}
                 </small>
@@ -386,6 +395,7 @@ import { getModelLogoKey } from '../../../utils/providerLogo'
 import { copyText } from '../../../utils/clipboard'
 import ProviderLogo from '../../ProviderLogo.vue'
 import MarkdownView from '../MarkdownView.vue'
+import { artifactLinks, responseParts, writtenFiles } from '../../../agent/loop/responsePresentation'
 import AttachmentPreview from '../AttachmentPreview.vue'
 import CollaborationPanel from './CollaborationPanel.vue'
 import AgentComposer from './AgentComposer.vue'
@@ -571,6 +581,11 @@ const taskPlan = computed<TaskPlanDisplay | null>(() => state.value?.taskPlan ||
 
 /** 轮次分组与首条判定抽离到 workspaceDerived（纯函数可单测）；此处仅保留 computed 缓存。 */
 const firstAssistantKeyByTurn = computed<Map<string, string>>(() => assistantKeysByTurn(rows.value))
+
+/** 绑定范围来自会话元数据，成功文件路径来自持久工具回执。 */
+function filesForRow(row: LoopRecord) {
+  return writtenFiles(rows.value, row, props.session?.workspace_id, props.session?.scope_path)
+}
 
 function isFirstAssistantInTurn(row: LoopRecord): boolean {
   return firstAssistantInTurn(row, firstAssistantKeyByTurn.value)
@@ -933,6 +948,8 @@ async function hydrateAttachments() {
 .loop-control{background:transparent;color:inherit;border:1px solid transparent;border-radius:7px;padding:7px 9px;font-size:12px;cursor:pointer}.loop-control:hover{background:#eaf3ee}.loop-primary{background:#174a3a!important;color:#fff!important}.loop-workspace button:focus-visible,.loop-workspace input:focus-visible,.loop-workspace summary:focus-visible{outline:2px solid #16977a;outline-offset:2px}
 </style>
 <style scoped>
+.generated-files{display:flex;flex-wrap:wrap;gap:10px;margin:12px 0}.generated-files a{padding:6px 10px;border:1px solid #d5e5db;border-radius:8px;color:#175a40;text-decoration:none;overflow-wrap:anywhere}
+
 .loop-workspace{display:flex;flex:1;flex-direction:column;min-height:0;min-width:0;background:var(--bg-main,#f8faf8)}.loop-tabs{display:flex;align-items:center;gap:8px;padding:8px 20px;border-bottom:1px solid #e0e8e2}.loop-tabs button{padding:7px 12px;border:0;border-radius:7px;background:transparent;color:#61776a;cursor:pointer}.loop-tabs .active{background:#e2eee6;color:#154834}.loop-status{margin-left:auto;font-size:12px;display:flex;align-items:center;gap:6px}.loop-status i{width:7px;height:7px;border-radius:50%;background:#93a99c}.loop-status .running{background:#21a37e;animation:pulse 1.5s ease-in-out infinite}.loop-content{display:flex;flex:1;min-height:0;position:relative}.loop-center{display:flex;flex-direction:column;flex:1;min-width:0;position:relative;min-height:0}.loop-conversation{overflow:auto;flex:1;padding:24px max(20px,calc((100% - 800px)/2));scrollbar-gutter:stable}.loop-message{margin:0 0 22px;min-width:0;overflow-wrap:anywhere}.loop-message header{display:flex;gap:8px;align-items:center;font-size:13px;font-weight:600;margin-bottom:8px}.loop-message header small{font-weight:400;color:#7b8e82}.assistant-header{display:flex;align-items:center}.assistant-identity{display:flex;min-width:0;align-items:center;gap:8px;flex-wrap:wrap}.assistant-identity strong{font-weight:650}.assistant-identity time{color:#8390a0;font-size:11px;font-weight:400;font-variant-numeric:tabular-nums}.loop-message.assistant.is-continuation{margin-top:12px}.loop-message.user{background:#eaf3ed;padding:16px 20px;border-radius:12px}.loop-message.user p{white-space:pre-wrap;margin:0;line-height:1.7}.history-files{display:flex;gap:8px;flex-wrap:wrap}.loop-composer-wrap{padding:12px 24px 18px;max-width:950px;width:100%;box-sizing:border-box;margin:0 auto}.loop-runtime{width:240px;overflow:auto;padding:18px;border-left:1px solid #e0e8e2;font-size:12px;background:#f5f8f5}.loop-runtime dd{margin:5px 0 14px;overflow-wrap:anywhere}.loop-runtime dt{color:#7d9081}.runtime-close{float:right;border:0;background:transparent;cursor:pointer}.loop-notice{padding:8px 16px;margin:4px 10px;background:#f6f0e2;color:#866934;font-size:12px}.loop-notice.error{color:#a24d43}.loop-notice button,.history-more{border:0;background:transparent;text-decoration:underline;cursor:pointer}.jump-bottom{position:absolute;bottom:10px;right:20px;border:1px solid #caddcf;background:#fff;border-radius:20px;padding:8px 15px;cursor:pointer}.muted{color:#86968b}@keyframes pulse{50%{opacity:.35}}@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}@media(max-width:768px){.loop-runtime{position:absolute;inset:0 0 0 auto;max-width:calc(100% - 35px);z-index:30;box-shadow:-20px 0 50px #173e2520}.loop-composer-wrap{padding:8px}.loop-conversation{padding:16px 12px}.loop-tabs{padding:6px;gap:0}.loop-tabs button{padding:7px}.loop-status{font-size:11px}.loop-message header{flex-wrap:wrap}}
 
 .attempt-error { display: block; margin-top: 8px; color: #a24d43; line-height: 1.5; }
