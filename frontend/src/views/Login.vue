@@ -25,7 +25,7 @@
             <span class="brand-mark">A</span>
             <span class="brand-name">SECURE ACCESS</span>
           </div>
-          <span class="brand-ver-tag">v1.6.3</span>
+          <span class="brand-ver-tag" :title="buildTooltip">{{ buildTag }}</span>
         </div>
 
         <!-- 主标题 -->
@@ -170,7 +170,7 @@
               <span class="brand-mark">A</span>
               <span class="brand-name">SECURE ACCESS</span>
             </div>
-            <span class="brand-ver-tag">v1.6.3</span>
+            <span class="brand-ver-tag" :title="buildTooltip">{{ buildTag }}</span>
           </div>
           <h1 class="mobile-brand-title">
             <span class="ai-text">AI</span> 测试与评估平台
@@ -524,6 +524,21 @@ import { useAuthStore } from '../stores/auth'
 const router = useRouter()
 const message = useMessage()
 const auth = useAuthStore()
+
+/** 构建版本标识：短哈希 + 构建日期（北京时间），悬停查看完整信息 */
+const buildCommit = __BUILD_VERSION__
+const buildDate = new Date(__BUILD_TIME__)
+const buildTimeLabel = Number.isNaN(buildDate.getTime())
+  ? ''
+  : buildDate.toLocaleString('zh-CN', {
+      timeZone: 'Asia/Shanghai',
+      hour12: false,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    })
+const buildTag = buildTimeLabel ? `${buildCommit.slice(0, 8)} · ${buildTimeLabel.slice(5, 10)}` : buildCommit.slice(0, 8)
+const buildTooltip = `前端构建\n版本：${buildCommit}\n构建时间：${buildTimeLabel || '未知'}（北京时间）`
 
 /** 表单输入数据 */
 const username = ref('admin')

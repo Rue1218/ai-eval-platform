@@ -29,6 +29,9 @@ export default tseslint.config(
       globals: {
         ...globals.browser,
         ...globals.node,
+        // vite.config.js define 注入的构建常量（类型声明见 src/env.d.ts）
+        __BUILD_VERSION__: 'readonly',
+        __BUILD_TIME__: 'readonly',
       },
     },
     rules: {

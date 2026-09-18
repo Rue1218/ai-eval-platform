@@ -43,6 +43,9 @@ services:
     build:
       context: ./backend
       dockerfile: api/Dockerfile
+      args:
+        BUILD_VERSION: ${BUILD_VERSION:-unknown}
+        BUILD_TIME: ${BUILD_TIME:-}
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-aieval}:${POSTGRES_PASSWORD:-aieval_pass}@postgres:5432/${POSTGRES_DB:-aieval}

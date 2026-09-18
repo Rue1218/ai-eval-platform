@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager, suppress
 
 from fastapi import FastAPI
@@ -45,6 +46,9 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ai-eval")
 
 APP_VERSION = "0.1.0"
+# 镜像构建时注入的运行版本（CI / deploy.sh 的 build-arg），本地源码直跑时为 unknown。
+BUILD_VERSION = os.environ.get("BUILD_VERSION", "").strip() or "unknown"
+BUILD_TIME = os.environ.get("BUILD_TIME", "").strip()
 
 
 def _bootstrap_admin() -> None:
@@ -241,4 +245,11 @@ app.include_router(ws_v2.router)
 @app.get("/api/health")
 def health():
     # H5 批次 2：暴露实例标识，供网关按 session_id 粘性路由健康检查识别副本。
-    return {"status": "ok", "version": app.version, "instance_id": _resolve_instance_id()}
+    # commit/build_time 为镜像构建版本，供前端控制台与运维核查前后端版本一致性。
+    return {
+        "status": "ok",
+        "version": app.version,
+        "commit": BUILD_VERSION,
+        "build_time": BUILD_TIME,
+        "instance_id": _resolve_instance_id(),
+    }
