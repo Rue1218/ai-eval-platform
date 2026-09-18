@@ -60,18 +60,21 @@
 
     <!-- 展开后的思考详情内容（无外边框、无底色背景） -->
     <div class="reasoning-content">
-      <pre>{{ content }}</pre>
+      <MarkdownView :content="content" :is-streaming="!ended" />
     </div>
   </details>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue'
+import MarkdownView from '../MarkdownView.vue'
 
 const props = defineProps<{
   content: string
   ended: boolean
   interrupted?: boolean
+  /** Responses 展示公开摘要，不将它描述为完整内部思考。 */
+  summaryMode?: boolean
 }>()
 
 const expanded = ref(!props.ended)
@@ -80,9 +83,10 @@ let automatic = false
 
 /** 状态文案：未结束时展示“正在思考”，结束后展示“思考 · 已结束” */
 const statusLabel = computed(() => {
-  if (!props.ended) return '正在思考'
-  if (props.interrupted) return '思考 · 已中断'
-  return '思考 · 已结束'
+  const label = props.summaryMode ? '思考摘要' : '思考'
+  if (!props.ended) return props.summaryMode ? '正在生成思考摘要' : '正在思考'
+  if (props.interrupted) return `${label} · 已中断`
+  return `${label} · 已结束`
 })
 
 /** 提取思考内容的单行精简摘要（参考图1与图3） */
@@ -90,7 +94,7 @@ const previewSnippet = computed(() => {
   if (!props.content) return ''
   const trimmed = props.content.trim()
   const firstLine = trimmed.split('\n').find(line => line.trim().length > 0) || ''
-  return firstLine.trim()
+  return firstLine.trim().replace(/\*\*|__|`/g, '')
 })
 
 /** 流结束自动折叠；用户已经手动展开时保留选择。 */

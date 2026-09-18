@@ -60,6 +60,7 @@ class AssistantAttempt:
         self._identity_errors: list[str] = []
         self._chunk_index = 0
         self.done: Done | None = None
+        self.text_parts: list[dict] | None = None
 
     def push(self, chunk: StreamChunk) -> int:
         """累积片段并返回本 Attempt 的瞬态下标，不占持久序号。"""
@@ -70,6 +71,8 @@ class AssistantAttempt:
         if isinstance(chunk, TextDelta):
             # 用户可见正文；graph.py 会选择是否马上推送给浏览器。
             self._text.append(chunk.text)
+            if chunk.text_parts is not None:
+                self.text_parts = deepcopy(chunk.text_parts)
         elif isinstance(chunk, ReasoningDelta):
             # Provider 的 reasoning 与正文分开保存，避免被拼进最终 answer text。
             self._reasoning.append(chunk.text)

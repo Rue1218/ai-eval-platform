@@ -4,10 +4,10 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V2.18 |
-| 本轮审查日期 | 2026-09-18（Responses 完整工具输出项兼容） |
+| 文档版本 | V2.19 |
+| 本轮审查日期 | 2026-09-18（Responses AgentLoop 展示与文件交付） |
 | WS v2 修订日期 | 2026-09-13（§4A，模型错误安全摘要） |
-| 对应 PRD | V1.39（功能唯一权威） |
+| 对应 PRD | V1.40（功能唯一权威） |
 | 对应设计规范 | V1.12（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.7.8（AgentLoop 单入口；JSON 仍以本文为准） |
 | 对应前端计划 | AgentLoop 前端计划 V0.5 |
@@ -3583,3 +3583,13 @@ Responses 事件字段依据：[OpenAI 官方流式响应示例](https://develop
 - `backend/shared/responses.py`：从完整工具/推理项恢复空终态，核验参数完成事件与调用身份。
 - `backend/api/tests/test_responses_gateway_tools.py`：SDK 工具往返、加密项回放、交错工具以及缺项/冲突拒绝测试。
 - `backend/api/tests/test_responses_protocol.py`：真实 Agent 图空终态工具往返、续聊与异常禁止调度回归。
+
+
+## V2.19 Responses AgentLoop 展示与文件交付（2026-09-18）
+
+- `assistant.text.delta` 增量与 `assistant.message` 持久事实可携带 `text_parts`：按输出顺序排列的 `{output_index, phase, text}` 完整展示快照。`phase` 为 `commentary`、`final_answer` 或 `null`（供应商未声明）。旧客户端继续读取 `text/content`；该字段不包含原始协议项、加密思考或工具参数，不改变工具调度与回合终态。
+- 正文瞬态增量可携带 `output_index` 与 `phase`，前端据此按项追加；仅校正/完成时发送 `text_parts` 完整快照，避免每个 token 重传全文。瞬态快照可被最终持久快照替换；重连按持久 `text_parts` 恢复分段。仅 `final_answer` 内容进入有阶段声明的最终总结复制/记忆；无阶段声明沿用现有判断，不能把只有 commentary 的响应展示成最终答案。
+- Responses 公开思考文本从增量、完成事件及输出快照核验补齐，重复一致完成幂等，冲突或回退报协议错误；不解密、不展示 encrypted_content。思考区渲染安全 Markdown。
+- `tool.result.display.file_path` 是成功且非 synthetic 的 write 回执路径，来自实际结果而非模型文本。当前绑定工作区内成功且非 synthetic 的 write 结果可展示下载入口；从真实结果 path 与会话 scope_path 生成现有 `/api/workspaces/{id}/files/raw?path=...&download=true` 请求。无绑定、失败、绝对路径及越界路径不生成链接。模型 sandbox 链接仅能映射本轮真实成功产物的精确相对路径；下载仍校验登录、工作区属主、存在性与路径边界。
+
+修改代码文件与作用清单：`shared/responses.py` 和公开推理辅助模块补齐摘要与阶段；`llm/providers/responses.py`、`agent/{stream,loop,loop_service,events}.py` 传递展示快照；前端 AgentLoop 分段、思考渲染与工作区文件链接；对应解析、事件、浏览器和路径回归测试。

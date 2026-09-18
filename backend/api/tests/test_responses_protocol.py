@@ -376,7 +376,8 @@ def test_sdk_request_usage_and_exact_url(monkeypatch, asynchronous, full_url):
             finally:
                 await adapter.close()
         events = asyncio.run(run())
-        assert [event.text for event in events if isinstance(event, TextDelta)] == ["你好"]
+        # 完成事件可以携带空正文的阶段校正快照，但不能重复正文。
+        assert "".join(event.text for event in events if isinstance(event, TextDelta)) == "你好"
         result = events[-1]
         assert isinstance(result, Done) and result.finish_reason == "stop"
     else:

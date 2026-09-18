@@ -1,4 +1,5 @@
 import type { Attempt, LoopRecord, LoopUsage, ToolRun } from '../../api/agentLoopTypes.ts'
+import { finalResponseText, responseParts } from './responsePresentation.ts'
 
 export interface TurnSummary {
   turnKey: string
@@ -128,7 +129,9 @@ export function calculateTurnSummaries(
     // 不能回退到更早的过程文字并把它冒充总结。
     const summaryRow = attempts[attempts.length - 1]
     if (hasToolCalls(summaryRow) || summaryRow.outcome === 'failed' || summaryRow.error_code) continue
-    const summaryText = typeof summaryRow.text === 'string' ? summaryRow.text.trim() : ''
+    const parts = responseParts(summaryRow)
+    if (parts.length && parts.every(part => part.phase === 'commentary')) continue
+    const summaryText = finalResponseText(summaryRow)
     const processRows = attempts.filter(attempt => attempt.key !== summaryRow.key)
 
     result.set(lastRow.key, {

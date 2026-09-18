@@ -80,7 +80,21 @@ export function applyFrame(state: LoopState, frame: LoopFrame): 'applied' | 'dup
     if (a.ended || !Number.isSafeInteger(d.chunk_index) || d.chunk_index < 0) return 'duplicate'
     if (d.chunk_index <= (a.chunks[kind] ?? -1)) return 'duplicate'
     a.chunks[kind] = d.chunk_index
-    if (kind === 'assistant.text.delta') { a.text += d.text ?? ''; state.phase = 'answering' }
+    if (kind === 'assistant.text.delta') {
+      a.text += d.text ?? ''
+      if (Array.isArray(d.text_parts)) a.text_parts = d.text_parts
+      else if (Number.isSafeInteger(d.output_index) && d.output_index >= 0) {
+        a.text_parts ??= []
+        let part = a.text_parts.find((item: Data) => item.output_index === d.output_index)
+        if (!part) {
+          part = {output_index:d.output_index,phase:d.phase ?? null,text:''}
+          a.text_parts.push(part)
+        }
+        part.text += d.text ?? ''
+        if (d.phase != null) part.phase = d.phase
+      }
+      state.phase = 'answering'
+    }
     if (kind === 'assistant.reasoning.delta') { a.reasoning += d.text ?? ''; state.phase = 'thinking' }
     return 'applied'
   }

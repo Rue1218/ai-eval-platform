@@ -71,6 +71,8 @@ export interface TaskPlanDisplay {
   counts: { pending: number; in_progress: number; completed: number }
 }
 export interface ToolDisplay {
+  /** 成功 write 回执中的实际路径，下载仍由后端鉴权。 */
+  file_path?: string
   version?: number; title?: string; target?: string; registry_name?: string; wire_name?: string
   arguments_preview?: string; result_preview?: string; format?: string; truncated?: boolean; unavailable_reason?: string
 }

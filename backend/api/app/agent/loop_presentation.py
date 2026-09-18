@@ -103,6 +103,14 @@ def tool_display(source: dict, *, result: bool = False) -> dict:
             except (ValueError, RecursionError):
                 pass
         preview = redact_for_transport(value)
+        # 文件入口只依据成功写入回执，不能从模型正文或截断的参数预览猜路径。
+        if name == "write" and not source.get("synthetic"):
+            # 原生 write 模型正文是摘要，真正结构化路径保存在结果 display.write。
+            result_display = source.get("display") or {}
+            write = result_display.get("write") if isinstance(result_display, dict) else None
+            path = write.get("path") if isinstance(write, dict) else None
+            if isinstance(path, str):
+                display["file_path"] = path
         text = preview if isinstance(preview, str) else json.dumps(preview, ensure_ascii=False)
         display.update(result_preview=text[:PREVIEW_LIMIT], truncated=len(text) > PREVIEW_LIMIT)
     else:

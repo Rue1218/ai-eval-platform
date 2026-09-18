@@ -1,6 +1,6 @@
 # 协议档供应商与思考强度适配
 
-版本：V1.10 ｜ 审查日期：2026-09-18
+版本：V1.11 ｜ 审查日期：2026-09-18
 
 ## 产品与接口增量
 
@@ -232,3 +232,14 @@ V1.8 的空终态兼容增加消息项、内容块及身份核对：已观察的
 修改代码文件与作用清单：`backend/shared/responses.py` 完整项恢复与参数事件核验；`backend/api/tests/test_responses_gateway_tools.py` SDK 实际序列化的双向回填与安全边界；`backend/api/tests/test_responses_protocol.py` 单/多工具只执行一次、后续回合及非法工具禁止调度。
 
 本轮验证：新增 22 项回归，定向 289 passed，API 全量 1971 passed / 78 skipped，Worker 51 passed；Ruff、前端 typecheck/build 通过。真实网关关闭思考档工具往返返回 passed；只运行无副作用回显探测，未执行业务工具，未保存密钥、模型正文或工具参数。
+
+
+## V1.11 Responses AgentLoop 展示闭环（2026-09-18）
+
+Responses 公开摘要兼容 `reasoning_summary_text.done`、`reasoning_summary_part.done`、`output_item.done` 与完整终态补齐；保留多段边界，校验身份、重复完成与文本前缀。`encrypted_content` 仍仅供回放，不投影到页面。普通摘要仍可能短于其他供应商思考文本，不代表未启用思考。
+
+正文 `phase=commentary/final_answer` 经独立展示字段贯穿流式和持久历史，模型回放继续保留原始协议项；流式只发定位和增量，终态才校正完整展示快照。思考区渲染安全 Markdown，文件产物链接来自成功 write 的结构化回执与会话绑定目录，非模型自造路径。
+
+修改代码文件与作用清单：`backend/shared/responses{,_reasoning}.py`（摘要与分段）、`backend/api/app/llm/{loop_contracts,providers/responses}.py`（流展示元数据）、`backend/api/app/agent/{stream,loop,loop_service,events,loop_presentation,loop_wiring}.py`（事件/下载投影和文件交付提示）、`backend/api/app/harness/contracts/loop_events.py`（目录 V7）、前端 `responsePresentation.ts`、reducer、turnSummary、MarkdownView、ReasoningBlock、AgentWorkspace 及对应测试。
+
+本轮验证：新增后端 15 项回归，API 全量 1986 passed / 78 skipped、Worker 51 passed、前端 116 项通过；新增浏览器用例通过，Ruff、前端 lint（0 错误）、typecheck/build 与 diff 检查通过。本轮采用本地协议/真实 SDK/Agent 图和浏览器夹具验证，未新增真实供应商请求。
