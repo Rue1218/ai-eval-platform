@@ -353,6 +353,8 @@ def test_window_keeps_tool_group_and_applies_effort(wired):
     assert "reasoning_effort" not in request.provider_options
     assert window["window_start"] == 2 and window["window_end"] == 5
     assert window["reserved_output_tokens"] == 128
+    assert window["reserved_step_notice_tokens"] == 256
+    assert window["estimated_input_tokens"] + 128 + 256 <= 1000
     with pytest.raises(loop_service.AppError):
         loop_wiring._window_request(wired.profile, (), [], messages[2:], "off", 129)
 
@@ -503,10 +505,11 @@ def test_window_retains_images_and_checks_protocol_state(wired, protocol):
                                                   model="claude-sonnet-4" if protocol == "anthropic_messages" else "gpt-4o"))
     message = {"role": "user", "content": [{"type": "text", "text": "image"},
                  {"type": "image_url", "image_url": {"url": "data:image/png;base64,aGVsbG8="}}]}
-    request, _ = loop_wiring._window_request(profile, (), [], [message], "off", 2000)
+    # 原图片预算之外预留平台收尾系统提示，仍须完整保留图片和工具历史。
+    request, _ = loop_wiring._window_request(profile, (), [], [message], "off", 2256)
     assert request.messages == [message]
     with pytest.raises(LlmRequestError):
-        loop_wiring._window_request(profile, (), [], [message, {"role": "assistant", "content": "x", "protocol_state": {}}], "off", 2000)
+        loop_wiring._window_request(profile, (), [], [message, {"role": "assistant", "content": "x", "protocol_state": {}}], "off", 2256)
 
 
 @pytest.mark.asyncio
@@ -823,6 +826,33 @@ async def test_permission_revoked_during_build_does_not_accept_input(wired):
         await wired.service._submit(wired.entry, "actor", "connection", command)
     wired.entry.runtime.submit.assert_not_awaited()
     assert wired.closed == ["sdk"] and not wired.entry.log.events
+
+
+@pytest.mark.asyncio
+async def test_deploy_rejection_releases_resources_without_accepting_input(wired, monkeypatch):
+    """部署屏障拒绝发生在持久提交前，并归还 SDK、写者与控制权。"""
+    from app.agent.loop import TurnDependencies
+
+    async def builder(*args):
+        """模拟已经完成外部连接装配。"""
+        return TurnDependencies(adapter=None, scheduler=None), [_Resource("sdk", wired.closed)]
+
+    @contextmanager
+    def blocked(_data_dir):
+        """在准入时模拟部署进程已取得排他锁。"""
+        raise AppError(ErrorCode.CONCURRENCY, "服务正在部署，当前回合可继续，请稍后发起新回合")
+        yield  # pragma: no cover
+
+    wired.service.dependency_builder = builder
+    monkeypatch.setattr(loop_service, "turn_admission", blocked)
+    command = SimpleNamespace(data={"content": "new", "client_message_id": "message"},
+                              request_id="req", session_id="session", fingerprint="fp")
+    with pytest.raises(AppError, match="服务正在部署"):
+        await wired.service._submit(wired.entry, "actor", "connection", command)
+    wired.entry.runtime.submit.assert_not_awaited()
+    assert wired.closed == ["sdk"] and not wired.entry.log.events
+    assert wired.entry.controller is None and wired.entry.controller_client_id is None
+    assert wired.pool["active"] == 0
 
 
 @pytest.mark.asyncio

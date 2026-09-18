@@ -349,7 +349,10 @@ class WsV2Connection:
         )
         message = (
             error.message
-            if known_validation
+            if known_validation or error.message in {
+                "服务正在部署，当前回合可继续，请稍后发起新回合",
+                "部署状态不可用，请稍后重试",
+            }
             else messages.get(error.code, "命令暂时无法处理，请稍后重试")
         )
         self.control("command.rejected", {

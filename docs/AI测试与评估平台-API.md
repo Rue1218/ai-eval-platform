@@ -4,10 +4,10 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V2.20 |
-| 本轮审查日期 | 2026-09-18（Responses 取消阶段持久化与协议隔离回归） |
+| 文档版本 | V2.21 |
+| 本轮审查日期 | 2026-09-18（步骤预算收尾、重启原因与部署回合保护） |
 | WS v2 修订日期 | 2026-09-13（§4A，模型错误安全摘要） |
-| 对应 PRD | V1.41（功能唯一权威） |
+| 对应 PRD | V1.42（功能唯一权威） |
 | 对应设计规范 | V1.12（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.7.8（AgentLoop 单入口；JSON 仍以本文为准） |
 | 对应前端计划 | AgentLoop 前端计划 V0.5 |
@@ -3607,3 +3607,21 @@ Responses 空终态兼容与无 ID/旧兼容 ID 消息回放必须保留同一�
 - `backend/shared/responses.py`、`backend/api/app/llm/providers/responses.py`：保留已核验阶段、及时投影完成项补报阶段，无身份消息回放保留 phase。
 - `backend/api/tests/{test_loop_llm_sdk,test_responses_protocol,test_responses_presentation}.py`：三协议 SDK 取消、六向协议状态隔离及多轮阶段回放回归。
 - `frontend/tests/responsePresentation.test.mjs`：三协议实时/重连与下一轮隔离回归。
+
+## V2.21 步骤预算收尾与部署回合保护（2026-09-18）
+
+AgentLoop 的 `dsh_max_steps` 仍为每轮硬上限（默认 16），最后一次模型请求保留给总结，保留工具定义并设置原生 tool_choice=none（Messages 为 {type: none}），且禁止调度供应商违规返回的新调用；前面至多三次回复附带剩余预算提示。总结读取真实历史与最后工具结果，要求交代已完成、文件路径、未完成/未验证事项及下一步，不新增模型调用次数或自动续轮。到达该步骤的正常终态仍为 `max_steps`，模型错误、输出截断与用户取消保留其真实原因。窗口预检额外预留 256 个估算 token 给动态系统提示，`context/trimmed` 元信息增加 `reserved_step_notice_tokens`；实际请求头仍记录完整系统段，并以可选 tool_choice 字段记录收尾约束；下一轮恢复普通请求策略。参数依据：[OpenAI](https://developers.openai.com/api/docs/guides/function-calling) 与 [Anthropic](https://platform.claude.com/docs/en/agents-and-tools/tool-use/define-tools) 官方工具选择文档。
+
+`turn.end.data.reason` 增加 `service_restart`：服务正常关闭时终止的活动回合使用此原因，已受理的用户取消仍为 `cancelled`；强杀后恢复仍为 `interrupted`。不新增事件类型、REST 路径或数据库字段，事实目录版本保持 7。公开前缀和已完成工具结果继续持久化，前端区分提示，不承诺后台自动恢复。
+
+Linux Compose 部署使用共享 `/data/.agent-deploy.lock`：`turn.submit` 持共享锁完成 `turn/start` 提交；部署持排他锁后统计 `agent_runtime_state.active_turn`，全部为空才更新任何容器。现有回合及其交互回复可继续，新回合拒绝码为 `CONCURRENCY`，文案为“服务正在部署，当前回合可继续，请稍后发起新回合”。准入锁不可用时同码返回“部署状态不可用，请稍后重试”。等待期限 `DEPLOY_AGENT_DRAIN_TIMEOUT` 默认 600 秒；单次活动计数查询最多 15 秒。失败或超时退出并释放锁，不强制取消回合、不推进成功部署基准。窗口保护要求全部 Agent 入口经当前 LoopService，并使用同一 Linux 本机共享数据卷；Windows 本地开发不启用此部署文件锁。
+
+首次从旧版本升级时旧 API 尚无准入锁，部署脚本明确拒绝直接热更新。须在维护窗口阻止新请求，确认没有活动回合后停止旧 API，再运行标准部署脚本。脚本遵从既有“保留手动停止服务”行为，因此升级后需加载新的 `.deploy-images.env` 镜像映射并显式启动 API，验证健康后再恢复入口。不得为通过部署而清空活动回合字段或绕过等待。
+
+### 修改代码文件与作用清单
+
+- `backend/api/app/agent/{loop,loop_wiring}.py`、`llm/loop_contracts.py`、`llm/providers/options.py`：预留收尾回复、预算提示和上下文空间，按协议关闭新工具调用并保持历史配对。
+- `backend/api/app/agent/{runtime,loop_service,deploy_guard}.py`、`routers/ws_v2.py`：区分服务关闭与用户取消；锁住新回合持久提交，拒绝信息安全透传。
+- `deploy/{deploy,drain-agents}.sh`、`.github/workflows/ci.yml`：容器更新前等待回合完成，失败关闭及 CI 语法/隔离数据目录检查。
+- `frontend/src/agent/loop/workspaceDerived.ts`、`frontend/src/components/agent/loop/AgentWorkspace.vue`：服务更新中断的独立状态与续聊提示。
+- `backend/api/tests/{test_loop_runtime,test_loop_wiring,test_loop_llm_sdk,test_deploy_guard}.py`、`deploy/tests/test_drain_agents.py`、`frontend/tests/workspaceDerived.test.mjs`：预算、协议历史、取消竞态、准入锁和部署失败路径回归。

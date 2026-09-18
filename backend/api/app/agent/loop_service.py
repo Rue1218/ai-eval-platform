@@ -18,6 +18,7 @@ from app.models import Session, User
 from app.routers.ws_v2 import CommandReceipt, StreamSnapshot, WsAccess
 from app.session_access import require_visible_session
 
+from .deploy_guard import turn_admission
 from .events import frame, scrub
 from .experts import resolve_expert
 from .log import agent_trace
@@ -343,9 +344,11 @@ class LoopService:
             effort = data.get("reasoning_effort")
             if effort is None and dependencies.request is not None:
                 effort = dependencies.request.reasoning_effort
-            await entry.runtime.submit(content, dependencies=dependencies, actor_id=actor_id,
-                                       client_message_id=data["client_message_id"],
-                                       reasoning_effort=effort, command_context=context)
+            # 共享锁覆盖 turn/start 的持久提交；部署取得排他锁后才统计活动回合。
+            with turn_admission(settings.data_dir):
+                await entry.runtime.submit(content, dependencies=dependencies, actor_id=actor_id,
+                                           client_message_id=data["client_message_id"],
+                                           reasoning_effort=effort, command_context=context)
         except BaseException:
             try:
                 await self._close_resources(resources)
@@ -607,7 +610,7 @@ class LoopService:
                     if entry.disconnect_cleanup is not None:
                         entry.disconnect_cleanup.cancel()
                         entry.disconnect_cleanup = None
-                    await entry.runtime.close()
+                    await entry.runtime.close(reason="service_restart")
                 except Exception as exc:
                     logger.warning("运行时关闭失败 type=%s", type(exc).__name__)
                 finally:

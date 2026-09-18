@@ -2,6 +2,7 @@
 
 import asyncio
 from copy import deepcopy
+from dataclasses import replace
 
 import pytest
 
@@ -310,9 +311,97 @@ async def test_max_steps_exceeds_langgraph_default_and_settles_once():
     await runtime.start_turn("请求")
     await runtime.wait()
     assert len(adapter.requests) == 16
+    assert adapter.requests[-1].tool_choice == "none"
+    assert adapter.requests[-1].tools == adapter.requests[0].tools
+    assert "最后一次模型回复" in adapter.requests[-1].system
+    assert len([e for e in runtime.log.read() if e["type"] == "tool/dispatch"]) == 15
     ends = [e for e in runtime.log.read() if e["type"] == "turn/end"]
     assert len(ends) == 1 and ends[0]["data"]["reason"] == "max_steps"
     await runtime.close()
+
+
+@pytest.mark.parametrize("protocol", ["openai_chat", "openai_responses", "anthropic_messages"])
+async def test_step_budget_reserves_summary_and_preserves_tool_history(protocol):
+    """所有协议均在硬预算内读取最后工具结果并总结，不重放已执行工具。"""
+    from app.llm.providers.common import validate_request
+
+    adapter = ScriptedAdapter(tool_chunks("first"), tool_chunks("second"),
+                              [TextDelta("已完成读取，剩余工作待继续。"), Done("stop")],
+                              [TextDelta("继续完成。"), Done("stop")])
+    template = replace(request(), protocol=protocol)
+    scheduler = RecordingScheduler()
+    graph = await build_agent(LoopSettings(dsh_max_steps=3), adapter=adapter,
+                              scheduler=scheduler, request=template)
+    runtime = AgentRuntime(MemoryLog(), graph)
+    try:
+        await runtime.start_turn("处理任务")
+        await runtime.wait()
+        assert len(adapter.requests) == 3 and len(scheduler.invocations) == 2
+        final = adapter.requests[-1]
+        validate_request(final, protocol)
+        assert final.tool_choice == "none" and final.tools == template.tools
+        assert final.messages[-1]["role"] == "tool"
+        from app.agent.loop import STEP_NOTICE_TOKEN_RESERVE
+        from app.agent.loop_wiring import _prompt_tokens
+
+        without_notice = replace(final, system=template.system, system_segments=template.system_segments)
+        assert 0 < _prompt_tokens(final) - _prompt_tokens(without_notice) <= STEP_NOTICE_TOKEN_RESERVE
+        assert final.messages[-1]["tool_call_id"] == "second"
+        assert "还剩 2 次回复" in adapter.requests[0].system
+        assert runtime.log.read()[-1]["data"]["reason"] == "max_steps"
+        assert derive_messages(runtime.log.read())[-1]["content"] == "已完成读取，剩余工作待继续。"
+        await runtime.start_turn("继续")
+        await runtime.wait()
+        assert adapter.requests[-1].tool_choice is None
+        assert adapter.requests[-1].tools == template.tools
+        assert runtime.log.read()[-1]["data"]["reason"] == "completed"
+        assert len(scheduler.invocations) == 2
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.parametrize("finish,reason", [("length", "max_tokens"), ("content_filter", "error")])
+async def test_summary_preserves_upstream_failure_reason(finish, reason):
+    """最后一步输出截断或过滤不能被预算终态掩盖，仍禁止工具执行。"""
+    adapter = ScriptedAdapter(tool_chunks(finish=finish))
+    scheduler = RecordingScheduler()
+    graph = await build_agent(LoopSettings(dsh_max_steps=1), adapter=adapter,
+                              scheduler=scheduler, request=request())
+    runtime = AgentRuntime(MemoryLog(), graph)
+    try:
+        await runtime.start_turn("处理任务")
+        await runtime.wait()
+        assert len(adapter.requests) == 1
+        assert runtime.log.read()[-1]["data"]["reason"] == reason
+        assert not any(event["type"] == "tool/dispatch" for event in runtime.log.read())
+    finally:
+        await runtime.close()
+
+
+@pytest.mark.parametrize("cancel_first", [False, True])
+async def test_service_restart_is_distinct_and_preserves_prior_user_cancel(cancel_first):
+    """服务关闭单独标记；已经受理的用户取消不会被随后的关闭改写。"""
+    entered = asyncio.Event()
+
+    class WaitingAdapter:
+        """等待取消的模型流，确保验证真实 Runtime 结算路径。"""
+
+        async def stream(self, request):
+            """发送公开前缀后挂起。"""
+            yield TextDelta("已有结果")
+            entered.set()
+            await asyncio.Event().wait()
+
+    runtime = await make_runtime(WaitingAdapter())
+    await runtime.start_turn("请求")
+    await entered.wait()
+    if cancel_first:
+        await runtime.cancel()
+    await runtime.close(reason="service_restart")
+    ends = [event for event in runtime.log.read() if event["type"] == "turn/end"]
+    assert len(ends) == 1
+    assert ends[0]["data"]["reason"] == ("cancelled" if cancel_first else "service_restart")
+    assert derive_messages(runtime.log.read())[-1]["content"] == "已有结果"
 
 
 async def test_protocol_state_survives_tool_roundtrip_and_runtime_restart():

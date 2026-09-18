@@ -23,6 +23,53 @@ PROTOCOLS = [
 ]
 
 
+@pytest.mark.parametrize("adapter_type,sdk,path", PROTOCOLS)
+def test_summary_tool_choice_keeps_history_and_does_not_leak(monkeypatch, adapter_type, sdk, path):
+    """真实 SDK 验证工具定义/结果不丢失，收尾禁用仅作用于本次请求。"""
+    from app.llm.contracts import ModelConfig
+    from app.llm.loop_contracts import ToolSpec
+    from app.llm.resolver import resolve_request
+
+    protocol = {OpenAiAdapter: "openai_chat", AnthropicAdapter: "anthropic_messages",
+                ResponsesAdapter: "openai_responses"}[adapter_type]
+    config = ModelConfig(protocol, "https://unit.invalid/v1", "test-model", api_key="unit", reasoning_enabled=False)
+    history = [{"role": "user", "content": "读取"},
+               {"role": "assistant", "content": "", "tool_calls": [{"id": "c1", "name": "read", "args": {}}]},
+               {"role": "tool", "tool_call_id": "c1", "name": "read", "content": "真实文件结果"}]
+    request = resolve_request(config, messages=history, tools=[ToolSpec("read", "读取", {"type": "object", "properties": {}})])
+    payloads = []
+
+    def handler(http_request):
+        """断言最终 HTTP JSON，不用 SDK create 替身绕过参数序列化。"""
+        assert http_request.url.path == path
+        payload = json.loads(http_request.content)
+        payloads.append(payload)
+        assert payload["tools"]
+        messages = payload.get("input", payload.get("messages"))
+        assert "真实文件结果" in json.dumps(messages, ensure_ascii=False)
+        if len(payloads) == 2:
+            assert payload["tool_choice"] == ({"type": "none"} if sdk == "anthropic" else "none")
+        else:
+            assert "tool_choice" not in payload
+        return httpx.Response(200, content=successful_wire(adapter_type), headers={"content-type": "text/event-stream"})
+
+    install_transport(monkeypatch, sdk, handler)
+
+    async def scenario():
+        """同一连接依次发送普通、收尾、下一轮请求，验证配置互不污染。"""
+        adapter = adapter_type(api_key="unit", base_url=config.base_url)
+        try:
+            for candidate in (request, replace(request, tool_choice="none"), request):
+                chunks = [chunk async for chunk in adapter.stream(candidate)]
+                assert any(isinstance(chunk, Done) for chunk in chunks)
+            assert len(payloads) == 3
+            assert payloads[0]["tools"] == payloads[1]["tools"] == payloads[2]["tools"]
+        finally:
+            await adapter.close()
+
+    asyncio.run(scenario())
+
+
 @pytest.mark.parametrize("model", ["deepseek-v4-flash-0731", "qwen3.6-flash", "qwen3.8-flash"])
 @pytest.mark.parametrize("effort", ["off", "high", "max"])
 def test_compatible_messages_sdk_loop_and_next_turn(monkeypatch, model, effort):

@@ -104,6 +104,7 @@ export const finishLabels: Record<string, string> = {
   max_tokens: '达到输出上限，本轮已结束',
   max_steps: '达到步骤上限，本轮已结束。如需继续，可发送“继续”接着处理。',
   cancelled: '本轮已取消',
+  service_restart: '服务更新中断了本轮，已有结果已保留。服务恢复后可发送“继续”。',
   interrupted: '本轮已中断',
   error: '本轮失败，请查看错误信息',
 }

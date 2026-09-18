@@ -189,9 +189,13 @@ class LlmRequest:
     compatibility_key: str | None = None
     # 模板 ID 进入无密钥请求头，确保历史回放可以追溯供应商参数方言。
     reasoning_template_id: str | None = None
+    # 平台收尾专用：保留历史工具定义，只禁止本次生成新的工具调用。
+    tool_choice: Literal["none"] | None = None
 
     def __post_init__(self) -> None:
         """持久请求禁止任意供应商透传，凭据字段在生成 header 前即被拒绝。"""
+        if self.tool_choice not in (None, "none"):
+            raise LlmRequestError("工具选择策略不合法", code="model_config")
         allowed = {
             "prompt_cache",
             "anthropic_version",
@@ -259,6 +263,7 @@ class LlmRequest:
             "reasoning_enabled",
             "compatibility_key",
             "reasoning_template_id",
+            "tool_choice",
         ):
             value = getattr(self, name)
             if value is not None:

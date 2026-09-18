@@ -27,6 +27,7 @@ from langgraph.graph import END, START, StateGraph
 from app.agent.loop_settings import LoopSettings
 from app.agent.stream import AssistantAttempt
 from app.harness.contracts.fact_log import FactLog
+from app.llm.contracts import SystemSegment
 from app.llm.loop_contracts import (
     LlmAdapter,
     LlmRequest,
@@ -44,6 +45,8 @@ if TYPE_CHECKING:
     from app.harness.execution.scheduler import ToolScheduler
 
 SYSTEM_PROMPT = "你是平台助手。按已提供的工具契约执行任务，如实报告工具结果。"
+# 请求窗口先预留系统收尾提示空间，避免动态预算提示挤占已选中的完整工具回合。
+STEP_NOTICE_TOKEN_RESERVE = 256
 
 # 工厂接收当前事实历史和每回合思考覆盖，返回完整且固定的模型请求。
 RequestFactory = Callable[[list[Message], ReasoningEffort | None], LlmRequest]
@@ -152,6 +155,7 @@ class AgentState(TypedDict, total=False):
     turn: int
     step: int
     steps_used: int
+    summary_only: bool  # 最后一步仅总结，任何供应商返回的新调用都不得执行。
     model_attempts: int
     phase: str
 
@@ -287,6 +291,7 @@ async def build_agent(
         _emit("step_start", event, turn=context.turn, step=step)
         return {
             "step": step,
+            "summary_only": state.get("steps_used", 0) + 1 == settings.dsh_max_steps,
             "steps_used": state.get("steps_used", 0) + 1,
             "model_attempts": 0,
             "phase": "model",
@@ -324,6 +329,22 @@ async def build_agent(
                 max_tokens=settings.dsh_max_tokens,
                 reasoning_effort=effort,
             )
+        remaining = settings.dsh_max_steps - state["steps_used"]
+        if remaining <= 3:
+            # 提示属于平台系统段，写入请求头供回放；不改写历史、不伪造工具观察。
+            notice = (
+                "【本轮预算】这是最后一次模型回复，工具已关闭。根据已得到的真实结果总结："
+                "已完成的工作、实际文件路径、未完成或未验证事项，以及继续所需的下一步。"
+                "不得把计划或未执行操作说成已完成。"
+                if state.get("summary_only") else
+                f"【本轮预算】本次之后还剩 {remaining} 次回复，最后一次仅用于总结。"
+                "停止扩展调研和重复检查，优先完成核心交付与必要验证；计划仅在实际进度变化时更新。"
+            )
+            segments = request.system_segments or ((SystemSegment(request.system),) if request.system else ())
+            segments = (*segments, SystemSegment(notice))
+            request = replace(request, system="\n\n".join(segment.text for segment in segments),
+                              system_segments=segments,
+                              tool_choice="none" if state.get("summary_only") else request.tool_choice)
         selection = _history_selection(state["messages"], request.messages)
         # 请求头变化时单独记录，让历史回放能知道模型当时看到的模型、系统提示词
         # 和工具 schema。messages 是历史主体，不会被这个 fingerprint 覆盖。
@@ -691,7 +712,7 @@ async def build_agent(
             "pending_calls": calls,
             "model_finish": attempt.done.finish_reason,
             "allow_tool_dispatch": not (
-                _truncated(attempt.done.finish_reason) or terminal_error
+                _truncated(attempt.done.finish_reason) or terminal_error or state.get("summary_only")
             ),
             "model_attempts": model_attempts,
             "retryable_error": False,
@@ -724,9 +745,10 @@ async def build_agent(
             emit=writer,
             allow_dispatch=state.get("allow_tool_dispatch", False),
             dispatch_block_code=(
-                "truncated_model_response"
-                if _truncated(state.get("model_finish", ""))
-                else "terminal_model_response"
+                "step_budget_exhausted" if state.get("summary_only") else (
+                    "truncated_model_response" if _truncated(state.get("model_finish", ""))
+                    else "terminal_model_response"
+                )
             ),
         )
         last_seq = context.log.read()[-1]["seq"]
@@ -802,6 +824,9 @@ async def build_agent(
         if has_model_error:
             # 模型错误已经在 call_model 中记录；当前 Turn 交给 finalize_turn 收尾。
             return {"continue_loop": False, "stop_reason": "error", "phase": "finalizing"}
+        if state.get("summary_only") and not response_was_truncated:
+            # 即使模型违背无工具约束返回调用，也只结算为未执行，不额外放大硬预算。
+            return {"continue_loop": False, "stop_reason": "max_steps", "phase": "finalizing"}
         if has_pending_calls and may_dispatch_tools:
             # 工具节点已经把观察追加到 messages；回到 pre_step 发起下一轮 ReAct。
             return {"continue_loop": True, "phase": "next_step"}
