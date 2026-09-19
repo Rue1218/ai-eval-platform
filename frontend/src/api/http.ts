@@ -1319,8 +1319,18 @@ export const api = {
   // 用户域 · 工作区（F1/G1：用户自管数据域）
   workspaces: {
     async list(params?: { include_deleted?: boolean }): Promise<UserWorkspaceList> {
-      const { data } = await http.get('/api/workspaces', { params })
-      return data
+      // 选择器需要完整目录；逐页读取，避免后端落实分页后丢失第 101 个工作区。
+      const items: UserWorkspace[] = []
+      let total: number
+      do {
+        const { data } = await http.get<UserWorkspaceList>('/api/workspaces', {
+          params: { ...params, offset: items.length, limit: 200 },
+        })
+        items.push(...data.items)
+        total = data.total
+        if (!data.items.length) break
+      } while (items.length < total)
+      return { items, total }
     },
     async create(name: string): Promise<UserWorkspace> {
       const { data } = await http.post('/api/workspaces', { name })

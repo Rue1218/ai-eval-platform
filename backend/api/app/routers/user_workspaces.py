@@ -24,6 +24,7 @@ from sqlalchemy import update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from ..config import settings
 from ..db import get_db
 from ..deps import get_current_user
 from ..errors import AppError, ErrorCode
@@ -40,7 +41,8 @@ from ..workspace_service import (
     rename_workspace_path,
     resolve_scope_dir,
     resolve_scope_file,
-    save_workspace_file_bytes,
+    save_workspace_file_stream,
+    validate_segment,
     workspace_dir_for,
     write_workspace_file,
 )
@@ -86,10 +88,14 @@ class _RenamePathBody(BaseModel):
 
 
 def _owned_workspace(
-    db: Session, user: User, workspace_id: str, *, require_active: bool = True
+    db: Session, user: User, workspace_id: str, *, require_active: bool = True, lock: bool = False
 ) -> Workspace:
     """按属主取工作区；非属主 403（UNAUTHORIZED），不存在 404。"""
-    row = db.query(Workspace).filter(Workspace.id == workspace_id).first()
+    query = db.query(Workspace).filter(Workspace.id == workspace_id)
+    if lock:
+        # 上传与注销共用行锁，避免并发上传各自通过同一份剩余容量检查。
+        query = query.with_for_update()
+    row = query.first()
     if row is None:
         raise AppError(ErrorCode.NOT_FOUND, "工作区不存在")
     if row.owner_id != user.id:
@@ -100,6 +106,7 @@ def _owned_workspace(
 
 
 def _workspace_item(row: Workspace) -> dict[str, Any]:
+    """投影工作区元数据、实际配置配额与目录用量。"""
     directory = workspace_dir_for(row.id)
     summary = folder_summary(directory)
     return {
@@ -109,6 +116,7 @@ def _workspace_item(row: Workspace) -> dict[str, Any]:
         "created_at": row.created_at.isoformat() if row.created_at else None,
         "updated_at": row.updated_at.isoformat() if row.updated_at else None,
         "deleted": row.deleted_at is not None,
+        "quota_bytes": settings.workspace_quota_bytes,
         "folder": summary,
     }
 
@@ -125,8 +133,9 @@ def list_workspaces(
     query = db.query(Workspace).filter(Workspace.owner_id == user.id)
     if not include_deleted:
         query = query.filter(Workspace.deleted_at.is_(None))
-    rows = query.order_by(Workspace.updated_at.desc()).all()
-    return {"items": [_workspace_item(row) for row in rows], "total": len(rows)}
+    total = query.count()
+    rows = query.order_by(Workspace.updated_at.desc(), Workspace.id.asc()).offset(offset).limit(limit).all()
+    return {"items": [_workspace_item(row) for row in rows], "total": total}
 
 
 @router.post("", status_code=201)
@@ -502,13 +511,15 @@ def get_raw_file(
     return FileResponse(
         abs_path,
         filename=os.path.basename(abs_path),
-        media_type=media_type,
+        media_type=media_type or "application/octet-stream",
         content_disposition_type=disposition,
+        # 用户文件可含 HTML/SVG；文档直接打开时禁止脚本与平台同源权限。
+        headers={"Content-Security-Policy": "sandbox", "X-Content-Type-Options": "nosniff"},
     )
 
 
 @router.post("/{workspace_id}/files/upload", status_code=201)
-async def upload_file(
+def upload_file(
     workspace_id: str,
     file: UploadFile = File(..., description="上传的文件对象"),
     path: str = Form(default="", description="保存的目标父目录相对路径"),
@@ -516,33 +527,31 @@ async def upload_file(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """上传文件至指定相对父目录下（支持音视频、图像、数据集等任意文件格式）。"""
-    row = _owned_workspace(db, user, workspace_id)
+    """在线程池中分块保存上传文件，工作区行锁保护上传配额核验与替换。"""
+    row = _owned_workspace(db, user, workspace_id, lock=True)
     directory = workspace_dir_for(row.id)
 
     raw_filename = file.filename or "uploaded_file"
     clean_name = os.path.basename(raw_filename.replace("\\", "/")).strip()
     if not clean_name or clean_name in (".", ".."):
         raise AppError(ErrorCode.VALIDATION, "非法的文件名称")
+    validate_segment(clean_name)
 
     clean_parent = (path or "").strip("/").replace("\\", "/")
 
-    content_bytes = await file.read()
-    file_size = len(content_bytes)
-
-    from ..config import settings
-
+    target_item = resolve_scope_file(directory, f"{clean_parent}/{clean_name}", must_exist=False)
+    if os.path.isdir(target_item):
+        raise AppError(ErrorCode.VALIDATION, "目标为目录而非文件")
     quota = int(getattr(settings, "workspace_quota_bytes", 1024 * 1024 * 1024))
+    available_bytes = None
     if quota > 0:
         summary = folder_summary(directory) or {"total_bytes": 0}
-        target_dir = resolve_scope_dir(directory, clean_parent)
-        target_item = os.path.join(target_dir, clean_name)
         existing_file_size = os.path.getsize(target_item) if os.path.isfile(target_item) else 0
-        projected_size = summary["total_bytes"] - existing_file_size + file_size
-        if projected_size > quota:
+        available_bytes = quota - summary["total_bytes"] + existing_file_size
+        if available_bytes < 0 or (file.size is not None and file.size > available_bytes):
             raise AppError(ErrorCode.VALIDATION, f"工作区容量超出配额上限（上限 {quota // (1024 * 1024)}MB）")
 
-    res = save_workspace_file_bytes(directory, clean_parent, clean_name, content_bytes, overwrite=True)
+    res = save_workspace_file_stream(directory, clean_parent, clean_name, file.file, max_bytes=available_bytes)
     write_audit(
         db,
         request,

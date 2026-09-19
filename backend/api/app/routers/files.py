@@ -150,6 +150,8 @@ def get_file_content(
         media_type=media,
         filename=stored.filename,
         content_disposition_type="inline",
+        # 团队共享附件同样不可信，防止 HTML/SVG 借平台登录态执行脚本。
+        headers={"Content-Security-Policy": "sandbox", "X-Content-Type-Options": "nosniff"},
     )
 
 

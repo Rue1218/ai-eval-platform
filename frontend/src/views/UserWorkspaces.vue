@@ -6,9 +6,9 @@
         <div class="workspace-selector-group">
           <label class="selector-label">当前工作区</label>
           <select
-            v-model="selectedWorkspaceId"
+            :value="selectedWorkspaceId"
             class="workspace-select"
-            :disabled="busy || loading"
+            :disabled="busy || loading || saving || uploading"
             @change="handleWorkspaceChange"
           >
             <option v-for="ws in items" :key="ws.id" :value="ws.id">
@@ -24,10 +24,10 @@
         <div v-if="currentWorkspace?.folder" class="storage-meter">
           <div class="meter-info">
             <span class="meter-title">容量用量:</span>
-            <span class="mono meter-value">{{ formatBytes(currentWorkspace.folder.total_bytes) }} / 100 MB</span>
+            <span class="mono meter-value">{{ formatBytes(currentWorkspace.folder.total_bytes) }}<template v-if="currentWorkspace.quota_bytes != null"> / {{ currentWorkspace.quota_bytes > 0 ? formatBytes(currentWorkspace.quota_bytes) : '不限' }}</template></span>
             <span class="meter-count">({{ currentWorkspace.folder.file_count }} 个文件)</span>
           </div>
-          <div class="meter-track">
+          <div v-if="(currentWorkspace.quota_bytes ?? 0) > 0" class="meter-track">
             <div
               class="meter-fill"
               :style="{ width: `${storagePercent}%` }"
@@ -576,6 +576,9 @@ const imageBlobUrl = ref<string | null>(null)
 const videoStreamUrl = ref<string | null>(null)
 const videoBlobUrl = ref<string | null>(null)
 const mdViewMode = ref<'split' | 'preview' | 'edit'>('split')
+// 请求序号在切换、关闭和卸载时失效，迟到响应不得恢复旧文件或 Blob。
+let fileRequestId = 0
+let treeRequestId = 0
 
 const currentWorkspace = computed(() => {
   return items.value.find((w) => w.id === selectedWorkspaceId.value) || items.value[0] || null
@@ -583,8 +586,8 @@ const currentWorkspace = computed(() => {
 
 const storagePercent = computed(() => {
   const bytes = currentWorkspace.value?.folder?.total_bytes ?? 0
-  const maxBytes = 100 * 1024 * 1024 // 100MB
-  return Math.min(100, Math.round((bytes / maxBytes) * 100))
+  const maxBytes = currentWorkspace.value?.quota_bytes ?? 0
+  return maxBytes > 0 ? Math.min(100, Math.round((bytes / maxBytes) * 100)) : 0
 })
 
 const isDirty = computed(() => {
@@ -693,15 +696,17 @@ async function loadWorkspaces(preferredId?: string): Promise<void> {
     items.value = data.items
     if (items.value.length > 0) {
       if (preferredId && items.value.some((w) => w.id === preferredId)) {
+        if (preferredId !== selectedWorkspaceId.value) closeActiveFile(true)
         selectedWorkspaceId.value = preferredId
       } else if (!items.value.some((w) => w.id === selectedWorkspaceId.value)) {
+        closeActiveFile(true)
         selectedWorkspaceId.value = items.value[0].id
       }
       await loadTree()
     } else {
       selectedWorkspaceId.value = ''
       rawTree.value = []
-      activeFile.value = null
+      closeActiveFile(true)
     }
   } catch (e) {
     message.error(e instanceof Error ? e.message : '工作区加载失败')
@@ -710,30 +715,41 @@ async function loadWorkspaces(preferredId?: string): Promise<void> {
   }
 }
 
-async function handleWorkspaceChange(): Promise<void> {
+async function handleWorkspaceChange(event: Event): Promise<void> {
+  // 原生 select 先改变 DOM 值；确认前立即还原，模型和文件归属保持一致。
+  const select = event.target as HTMLSelectElement
+  const nextId = select.value
+  select.value = selectedWorkspaceId.value
+  if (nextId === selectedWorkspaceId.value) return
+  const applyChange = async () => {
+    closeActiveFile(true)
+    selectedWorkspaceId.value = nextId
+    rawTree.value = []
+    expandedKeys.value.clear()
+    await loadTree()
+  }
   if (isDirty.value) {
     dialog.warning({
       title: '未保存修改',
       content: '当前文件尚未保存，切换工作区将放弃修改，是否继续？',
       positiveText: '放弃修改并切换',
       negativeText: '留在当前',
-      onPositiveClick: async () => {
-        closeActiveFile(true)
-        await loadTree()
-      },
+      onPositiveClick: applyChange,
     })
     return
   }
-  closeActiveFile(true)
-  await loadTree()
+  await applyChange()
 }
 
 // 加载文件树
 async function loadTree(): Promise<void> {
   if (!selectedWorkspaceId.value) return
+  const workspaceId = selectedWorkspaceId.value
+  const requestId = ++treeRequestId
   treeLoading.value = true
   try {
-    const res = await api.workspaces.getTree(selectedWorkspaceId.value)
+    const res = await api.workspaces.getTree(workspaceId)
+    if (requestId !== treeRequestId || workspaceId !== selectedWorkspaceId.value) return
     rawTree.value = res.tree || []
     // 默认展开一级目录
     for (const node of rawTree.value) {
@@ -742,9 +758,11 @@ async function loadTree(): Promise<void> {
       }
     }
   } catch (e) {
-    message.error(e instanceof Error ? e.message : '获取文件目录树失败')
+    if (requestId === treeRequestId && workspaceId === selectedWorkspaceId.value) {
+      message.error(e instanceof Error ? e.message : '获取文件目录树失败')
+    }
   } finally {
-    treeLoading.value = false
+    if (requestId === treeRequestId) treeLoading.value = false
   }
 }
 
@@ -802,6 +820,9 @@ async function handleNodeClick(node: UserWorkspaceTreeNode): Promise<void> {
 // 打开文件
 async function openFile(relPath: string): Promise<void> {
   if (!selectedWorkspaceId.value) return
+  const workspaceId = selectedWorkspaceId.value
+  const requestId = ++fileRequestId
+  const isCurrent = () => requestId === fileRequestId && workspaceId === selectedWorkspaceId.value
   contentLoading.value = true
   // 清理之前的图片与视频 blob 资源
   if (imageBlobUrl.value) {
@@ -815,7 +836,8 @@ async function openFile(relPath: string): Promise<void> {
   videoStreamUrl.value = null
 
   try {
-    const data = await api.workspaces.getFileContent(selectedWorkspaceId.value, relPath)
+    const data = await api.workspaces.getFileContent(workspaceId, relPath)
+    if (!isCurrent()) return
     activeFile.value = data
     editorContent.value = data.content || ''
     initialContent.value = data.content || ''
@@ -824,17 +846,19 @@ async function openFile(relPath: string): Promise<void> {
     // 如果是图片，加载二进制 blob
     if (['png', 'jpg', 'jpeg', 'svg', 'gif', 'webp', 'ico'].includes(ext)) {
       try {
-        const blob = await api.workspaces.getRawBlob(selectedWorkspaceId.value, relPath)
+        const blob = await api.workspaces.getRawBlob(workspaceId, relPath)
+        if (!isCurrent()) return
         imageBlobUrl.value = URL.createObjectURL(blob)
       } catch {
-        message.warning('图片流加载失败')
+        if (isCurrent()) message.warning('图片流加载失败')
       }
     } else if (['mp4', 'webm', 'ogg', 'mov', 'm4v', 'mkv', 'avi', 'flv', 'wmv'].includes(ext)) {
       // 视频文件：直接使用后端流 URL，利用 HTTP 206 Range 支持分段秒开
-      videoStreamUrl.value = api.workspaces.getRawFileUrl(selectedWorkspaceId.value, relPath, false)
+      videoStreamUrl.value = api.workspaces.getRawFileUrl(workspaceId, relPath, false)
       // 如果视频小于 50MB，后台预取 Blob 作为兼容容错备用
       if (data.size && data.size <= 50 * 1024 * 1024) {
-        api.workspaces.getRawBlob(selectedWorkspaceId.value, relPath).then((blob) => {
+        api.workspaces.getRawBlob(workspaceId, relPath).then((blob) => {
+          if (!isCurrent()) return
           videoBlobUrl.value = URL.createObjectURL(blob)
         }).catch(() => {
           // 忽略预取失败
@@ -842,21 +866,27 @@ async function openFile(relPath: string): Promise<void> {
       }
     }
   } catch (e) {
-    message.error(e instanceof Error ? e.message : '打开文件失败')
+    if (isCurrent()) message.error(e instanceof Error ? e.message : '打开文件失败')
   } finally {
-    contentLoading.value = false
+    if (isCurrent()) contentLoading.value = false
   }
 }
 
 // 保存当前文件
 async function saveCurrentFile(): Promise<void> {
   if (!selectedWorkspaceId.value || !activeFile.value) return
-  if (!isDirty.value) return
+  if (!isDirty.value || saving.value) return
+  const workspaceId = selectedWorkspaceId.value
+  const file = activeFile.value
+  const content = editorContent.value
   saving.value = true
   try {
-    await api.workspaces.saveFileContent(selectedWorkspaceId.value, activeFile.value.path, editorContent.value)
-    initialContent.value = editorContent.value
-    activeFile.value.size = new Blob([editorContent.value]).size
+    await api.workspaces.saveFileContent(workspaceId, file.path, content)
+    // 只确认实际提交的快照，保存期间继续输入的内容仍保持未保存状态。
+    if (workspaceId === selectedWorkspaceId.value && activeFile.value === file) {
+      initialContent.value = content
+      file.size = new Blob([content]).size
+    }
     message.success('已保存')
   } catch (e) {
     message.error(e instanceof Error ? e.message : '保存失败')
@@ -879,6 +909,8 @@ function closeActiveFile(force = false): void {
     })
     return
   }
+  ++fileRequestId
+  contentLoading.value = false
   if (imageBlobUrl.value) {
     URL.revokeObjectURL(imageBlobUrl.value)
     imageBlobUrl.value = null
@@ -896,17 +928,11 @@ function closeActiveFile(force = false): void {
 // 下载当前文件
 async function downloadActiveFile(): Promise<void> {
   if (!selectedWorkspaceId.value || !activeFile.value) return
-  try {
-    const blob = await api.workspaces.getRawBlob(selectedWorkspaceId.value, activeFile.value.path)
-    const url = URL.createObjectURL(blob)
-    const link = document.createElement('a')
-    link.href = url
-    link.download = activeFile.value.name
-    link.click()
-    URL.revokeObjectURL(url)
-  } catch (e) {
-    message.error(e instanceof Error ? e.message : '下载失败')
-  }
+  // 交给浏览器流式下载，避免大视频在前端重复占用整个文件大小的内存。
+  const link = document.createElement('a')
+  link.href = api.workspaces.getRawFileUrl(selectedWorkspaceId.value, activeFile.value.path, true)
+  link.download = activeFile.value.name
+  link.click()
 }
 
 // 快捷键监听
@@ -940,26 +966,30 @@ async function handleDropUpload(e: DragEvent): Promise<void> {
 }
 
 async function uploadFilesList(files: File[]): Promise<void> {
-  if (!selectedWorkspaceId.value || files.length === 0) return
+  if (!selectedWorkspaceId.value || files.length === 0 || uploading.value || currentWorkspace.value?.deleted) return
+  const workspaceId = selectedWorkspaceId.value
   uploading.value = true
   let successCount = 0
-  for (const file of files) {
-    try {
-      await api.workspaces.uploadFile(selectedWorkspaceId.value, '', file)
-      successCount++
-    } catch (err: any) {
-      message.error(`文件 ${file.name} 上传失败: ${err.message || '未知错误'}`)
+  try {
+    for (const file of files) {
+      try {
+        await api.workspaces.uploadFile(workspaceId, '', file)
+        successCount++
+      } catch (err: any) {
+        message.error(`文件 ${file.name} 上传失败: ${err.message || '未知错误'}`)
+      }
     }
-  }
-  if (successCount > 0) {
-    message.success(`成功上传 ${successCount} 个文件`)
-    await loadTree()
-    await loadWorkspaces(selectedWorkspaceId.value)
-    if (files.length === 1 && successCount === 1) {
-      await openFile(files[0].name)
+    if (successCount > 0) {
+      message.success(`成功上传 ${successCount} 个文件`)
+      if (selectedWorkspaceId.value !== workspaceId) return
+      await loadWorkspaces(workspaceId)
+      if (selectedWorkspaceId.value === workspaceId && files.length === 1 && successCount === 1 && !isDirty.value) {
+        await openFile(files[0].name)
+      }
     }
+  } finally {
+    uploading.value = false
   }
-  uploading.value = false
 }
 
 // 新建文件/文件夹
@@ -1158,12 +1188,8 @@ onMounted(() => {
 })
 
 onBeforeUnmount(() => {
-  if (imageBlobUrl.value) {
-    URL.revokeObjectURL(imageBlobUrl.value)
-  }
-  if (videoBlobUrl.value) {
-    URL.revokeObjectURL(videoBlobUrl.value)
-  }
+  ++treeRequestId
+  closeActiveFile(true)
 })
 </script>
 

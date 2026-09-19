@@ -81,6 +81,8 @@ def test_kernel_control_paths(monkeypatch, reason):
         return process
 
     monkeypatch.setattr(kernel.subprocess, "Popen", spawn)
+    # 本用例已替换进程和 killpg；Windows 缺少 SIGKILL，补齐测试替身的 POSIX 常量。
+    monkeypatch.setattr(kernel.signal, "SIGKILL", 9, raising=False)
     monkeypatch.setattr(kernel.os, "killpg", lambda *a: setattr(process, "returncode", -9), raising=False)
     if reason == "success":
         assert kernel.run_sandboxed("echo hi", sandbox_dir="scope", timeout_s=1, control=control) == "hello"
