@@ -10,7 +10,7 @@
 
 from __future__ import annotations
 
-import time
+from types import SimpleNamespace
 
 import pytest
 
@@ -156,8 +156,13 @@ def test_policy_allowlist_semantics(monkeypatch) -> None:
 
 
 def test_breaker_opens_after_threshold_and_recovers(monkeypatch, caplog) -> None:
+    """用可控时钟验证熔断冷却边界，不依赖 Windows 的短时 sleep 精度。"""
     import logging
 
+    from app.harness.execution import native_tools_policy
+
+    clock = [100.0]
+    monkeypatch.setattr(native_tools_policy, "time", SimpleNamespace(monotonic=lambda: clock[0]))
     monkeypatch.setattr(settings, "agent_native_tools_enabled", True)
     monkeypatch.setattr(settings, "agent_native_tools_profile_ids", "*")
     monkeypatch.setattr(settings, "circuit_failure_threshold", 2)
@@ -177,7 +182,7 @@ def test_breaker_opens_after_threshold_and_recovers(monkeypatch, caplog) -> None
         for record in caplog.records
     )
 
-    time.sleep(0.06)
+    clock[0] += 0.06
     assert native_tools_allowed("p-1") is True  # 冷却到期：半开放行探测
     assert any(
         record.getMessage().startswith("native_tools_breaker_halfopen profile=p-1")

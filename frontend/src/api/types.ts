@@ -1125,6 +1125,8 @@ export interface UserWorkspace {
   created_at?: string | null
   updated_at?: string | null
   deleted: boolean
+  /** 服务端实际字节配额；非正值表示不限，缺省表示旧后端尚未提供。 */
+  quota_bytes?: number
   folder: WorkspaceFolder | null
 }
 

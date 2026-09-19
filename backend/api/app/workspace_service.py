@@ -20,8 +20,9 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import tempfile
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, BinaryIO
 
 from app.errors import AppError, ErrorCode
 
@@ -387,28 +388,39 @@ def create_workspace_file(directory: str, parent_path: str, name: str, content: 
     }
 
 
-def save_workspace_file_bytes(
+def save_workspace_file_stream(
     directory: str,
     parent_path: str,
     name: str,
-    content: bytes,
+    source: BinaryIO,
     *,
-    overwrite: bool = True,
+    max_bytes: int | None = None,
 ) -> dict[str, Any]:
-    """在指定相对父目录下保存二进制或文本文件数据。"""
+    """分块写入同目录临时文件，校验配额后原子替换，失败时保留原文件。"""
     validate_segment(name)
     parent_dir = resolve_scope_dir(directory, parent_path)
     target = os.path.join(parent_dir, name)
-    if not overwrite and (os.path.exists(target) or os.path.islink(target)):
-        raise AppError(ErrorCode.VALIDATION, "同名文件或目录已存在")
     if os.path.islink(target):
         raise AppError(ErrorCode.VALIDATION, "目标为符号链接，拒绝写入")
+    if os.path.isdir(target):
+        raise AppError(ErrorCode.VALIDATION, "目标为目录而非文件")
+    temporary_path = None
     try:
-        with open(target, "wb") as f:
-            f.write(content)
+        with tempfile.NamedTemporaryFile(dir=parent_dir, prefix=".upload-", delete=False) as f:
+            temporary_path = f.name
+            total = 0
+            while chunk := source.read(1024 * 1024):
+                total += len(chunk)
+                if max_bytes is not None and total > max_bytes:
+                    raise AppError(ErrorCode.VALIDATION, "工作区容量超出配额上限")
+                f.write(chunk)
+        os.replace(temporary_path, target)
         st = os.stat(target)
     except OSError as exc:
         raise AppError(ErrorCode.INTERNAL, "保存文件失败") from exc
+    finally:
+        if temporary_path and os.path.exists(temporary_path):
+            os.unlink(temporary_path)
     rel = os.path.join(parent_path, name).replace("\\", "/").strip("/")
     return {
         "path": rel,

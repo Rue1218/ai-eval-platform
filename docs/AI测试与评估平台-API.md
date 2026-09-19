@@ -4,8 +4,8 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V2.21 |
-| 本轮审查日期 | 2026-09-18（步骤预算收尾、重启原因与部署回合保护） |
+| 文档版本 | V2.22 |
+| 本轮审查日期 | 2026-09-19（项目审查：文件隔离、上传与工作区状态一致性） |
 | WS v2 修订日期 | 2026-09-13（§4A，模型错误安全摘要） |
 | 对应 PRD | V1.42（功能唯一权威） |
 | 对应设计规范 | V1.12（错误码文案、确认卡字段名、调度中心规范） |
@@ -1581,7 +1581,9 @@ Prometheus 内置可观测性指标端点（内网 HTTP GET），输出前缀为
 
 #### `GET /api/workspaces?include_deleted=&offset=&limit=`
 
-列出当前用户工作区（默认仅活跃行）。响应 `{items:[{id,name,owner_id,created_at,updated_at,deleted,folder:{file_count,total_bytes,updated_at}|null}],total}`。
+列出当前用户工作区（默认仅活跃行）。响应 `{items:[{id,name,owner_id,created_at,updated_at,deleted,quota_bytes,folder:{file_count,total_bytes,updated_at}|null}],total}`。`offset` 默认 0；`limit` 默认 100、上限 200；按 `updated_at DESC, id ASC` 稳定排序，`total` 为属主/注销筛选后的总数，只统计当前页目录。前端选择器逐页读取完整目录。
+
+`quota_bytes` 为服务端实际 `workspace_quota_bytes` 配置（默认 1GiB；≤0 表示不限制），创建与改名返回的工作区对象同样携带。旧后端缺此字段时前端仅显示已用容量，不推测上限。
 
 #### `POST /api/workspaces` body `{name}`
 
@@ -1610,6 +1612,7 @@ Prometheus 内置可观测性指标端点（内网 HTTP GET），输出前缀为
 - 行为：
   - 当 `download=false`（默认）时，`Content-Disposition` 为 `inline`，并根据文件后缀识别准确的 MIME 类型（如 `video/mp4`、`video/webm`、`audio/mpeg`、`image/png`、`application/pdf` 等；未知按 `application/octet-stream`）。支持浏览器内置原生音视频播放器在线播放与 HTTP 206 Partial Content（Range 分段请求，拖拽进度秒开）。
   - 当 `download=true` 时，`Content-Disposition` 为 `attachment; filename="..."`，强制触发浏览器下载。
+  - 原始文件响应附带 `Content-Security-Policy: sandbox` 与 `X-Content-Type-Options: nosniff`，隔离 HTML/SVG 文档脚本及平台同源权限；`GET /api/files/{id}/content` 的用户附件响应同样隔离。媒体仍支持 Range，不改变文件字节。
 - 权限：仅工作区属主；非属主 → 401/403；文件不存在 → 404；路径越界/符号链接 → 400 `VALIDATION`。
 
 #### `POST /api/workspaces/{id}/files/upload`（`multipart/form-data`）
@@ -1620,8 +1623,8 @@ Prometheus 内置可观测性指标端点（内网 HTTP GET），输出前缀为
   - `path`: 目标父目录相对路径（可选，默认为空字符串即工作区根目录）。
 - 校验与行为：
   - 路径与文件名安全校验：拒相对越界（`..`、`/`、反斜杠、空文件名），只允许在合法父目录下写入；
-  - 配额核验：写入前统计工作区现存大小 + 上传文件字节，若超过用户工作区配额（默认 1GiB）则直接以 400 `QUOTA_EXCEEDED` 拒绝，防止磁盘耗尽；
-  - 写入工作区对应物理目录，若同名文件存在则覆盖；
+  - 配额核验：工作区行锁内统计现存大小，扣除被覆盖文件后加上传字节；超过配置配额（默认 1GiB）以 400 `VALIDATION` 拒绝。序列化同工作区 HTTP 上传与注销，不承诺覆盖 Agent 等其他写入通道的全局磁盘事务；
+  - 在线程池中每块最多 1MiB 复制到同目录临时文件，按实际累计字节再次检查配额，成功后原子替换；超限或复制失败清理临时文件，保留原文件。此限制针对应用复制阶段，不代表 multipart 接收阶段临时磁盘占用也受工作区配额限制；
   - 记录合规审计日志 `workspace_file_upload`。
 - 成功响应：
 ```json
@@ -3625,3 +3628,21 @@ Linux Compose 部署使用共享 `/data/.agent-deploy.lock`：`turn.submit` 持�
 - `deploy/{deploy,drain-agents}.sh`、`.github/workflows/ci.yml`：容器更新前等待回合完成，失败关闭及 CI 语法/隔离数据目录检查。
 - `frontend/src/agent/loop/workspaceDerived.ts`、`frontend/src/components/agent/loop/AgentWorkspace.vue`：服务更新中断的独立状态与续聊提示。
 - `backend/api/tests/{test_loop_runtime,test_loop_wiring,test_loop_llm_sdk,test_deploy_guard}.py`、`deploy/tests/test_drain_agents.py`、`frontend/tests/workspaceDerived.test.mjs`：预算、协议历史、取消竞态、准入锁和部署失败路径回归。
+
+## V2.22 项目审查：文件与工作区一致性（2026-09-19）
+
+工作区列表实际执行分页，仅扫描当前页目录并返回筛选后总数；新增只读 `quota_bytes`，容量显示来自服务端。原始文件与附件响应增加 CSP sandbox/nosniff，保留媒体 Range 能力。上传由整文件内存读取改为线程池分块复制、行锁内配额核验与临时文件原子替换，超限使用既有 `VALIDATION` 错误码。
+
+前端确认后才切换工作区；文件/目录请求使用序号和工作区身份拒绝迟到响应，关闭/卸载使旧请求失效。保存绑定提交快照并防重复请求，后续编辑继续标为未保存；批量上传固定目标工作区，下载交由浏览器文件流处理。
+
+### 修改代码文件与作用清单
+
+- `backend/api/app/routers/user_workspaces.py`：分页、配额投影、上传行锁及线程池接线、原始响应隔离。
+- `backend/api/app/workspace_service.py`：有界读取、临时文件清理与原文件保全。
+- `backend/api/app/routers/files.py`：共享附件同源脚本隔离。
+- `frontend/src/api/{http,types}.ts`：列表逐页读取、配额类型契约。
+- `frontend/src/views/UserWorkspaces.vue`：切换确认、读取/保存/上传归属、容量与下载修复。
+- `backend/api/tests/{test_workspace_audit,test_user_workspaces_files,test_native_tools_p1}.py`：新增 14 项文件/分页/配额回归、旧文件流测试迁移、熔断时钟确定化。
+- `backend/runner/tests/test_kernel_cancellation.py`：为已模拟的 POSIX 进程测试补齐 Windows 缺失的信号常量。
+- `frontend/tests/workspace-audit-fixture.html`、`frontend/tests/e2e/workspaceAudit.spec.ts`：真实工作区页面、隔离 HTTP 夹具与 5 项浏览器回归。
+- `docs/AI测试与评估平台-项目审查与修复记录.md`：审查边界、问题分级、验证证据与未验证事项。

@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><title>工作区审查回归夹具</title></head>
+<body>
+  <div id="app" style="height: 95vh"></div>
+  <script type="module">
+    import { createApp, h } from 'vue'
+    import { NMessageProvider, NDialogProvider } from 'naive-ui'
+    import UserWorkspaces from '../src/views/UserWorkspaces.vue'
+    // 使用真实页面和 HTTP 层；所有业务接口由浏览器测试拦截。
+    createApp({ render: () => h(NMessageProvider, {}, {
+      default: () => h(NDialogProvider, {}, { default: () => h(UserWorkspaces) }),
+    }) }).mount('#app')
+  </script>
+</body>
+</html>
