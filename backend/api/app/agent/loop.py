@@ -12,10 +12,11 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import json
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any, Literal, TypedDict
@@ -26,6 +27,7 @@ from langgraph.graph import END, START, StateGraph
 
 from app.agent.loop_settings import LoopSettings
 from app.agent.stream import AssistantAttempt
+from app.errors import AppError
 from app.harness.contracts.fact_log import FactLog
 from app.llm.contracts import SystemSegment
 from app.llm.loop_contracts import (
@@ -49,7 +51,7 @@ SYSTEM_PROMPT = "你是平台助手。按已提供的工具契约执行任务，
 STEP_NOTICE_TOKEN_RESERVE = 256
 
 # 工厂接收当前事实历史和每回合思考覆盖，返回完整且固定的模型请求。
-RequestFactory = Callable[[list[Message], ReasoningEffort | None], LlmRequest]
+RequestFactory = Callable[[list[Message], ReasoningEffort | None], LlmRequest | Awaitable[LlmRequest]]
 
 
 def _override_reasoning(request: LlmRequest, effort: ReasoningEffort) -> LlmRequest:
@@ -312,7 +314,23 @@ async def build_agent(
         current = dependencies(config)
         effort = _reasoning_effort(config, settings)
         if current.request_factory is not None:
-            request = current.request_factory(deepcopy(state["messages"]), effort)
+            try:
+                request = current.request_factory(deepcopy(state["messages"]), effort)
+                # 摘要调用属于当前可取消回合，不能在 WS 接受输入前阻塞或独立后台运行。
+                if inspect.isawaitable(request):
+                    request = await request
+            except AppError as exc:
+                # 请求准备失败没有正式 assistant attempt，仍须返回可行动的标准错误并收尾。
+                failed = context.log.append("runtime/error", {
+                    "turn": context.turn, "step": state["step"], "code": exc.code.value,
+                    "message": exc.message, "error": exc.message, "error_code": exc.code.value,
+                })
+                _emit("runtime_error", failed, turn=context.turn,
+                      code=exc.code.value, message=exc.message)
+                return {"model_error": exc.message, "model_error_code": exc.code.value,
+                        "retryable_error": False, "model_attempts": model_attempts,
+                        "model_finish": "error", "pending_calls": [],
+                        "allow_tool_dispatch": False, "last_event_seq": failed["seq"]}
         elif current.request is not None:
             request = replace(current.request, messages=deepcopy(state["messages"]))
             if config.get("configurable", {}).get("reasoning_effort") is not None:

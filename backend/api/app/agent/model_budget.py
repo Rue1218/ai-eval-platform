@@ -22,6 +22,8 @@ class ModelCallBudget:
         self._per_run = max_calls_per_run
         self._capacity = asyncio.Semaphore(max_concurrent)
         self._calls: dict[str, int] = {}
+        # 摘要为所属运行保留主回答额度，其他并发专家不能抢占这一次调用。
+        self._reserved: dict[str, int] = {}
         self._total = 0
         self._active = 0
         self._closed = False
@@ -33,35 +35,58 @@ class ModelCallBudget:
     def close(self) -> None:
         """阻止新的调用；已派发调用仍由运行时取消并结算，不返还未知消耗。"""
         self._closed = True
+        self._reserved.clear()
 
-    def _admit(self, run_id: str) -> None:
+    def release_reservation(self, run_id: str) -> None:
+        """回合取消/关闭或正式调用完成后释放未使用的摘要预留。"""
+        self._reserved.pop(run_id, None)
+
+    def _admit(self, run_id: str, *, reserve_calls: int = 0) -> None:
         """同一事件循环内无 await 地检查并扣减，避免并发通过最后一份额度。"""
         if self._closed:
             raise LlmRequestError("协作已结束", code="collaboration_closed", public_code="CONCURRENCY")
-        if self._total >= self._max_calls or self._calls.get(run_id, 0) >= self._per_run:
+        owned = self._reserved.get(run_id, 0)
+        other_reserved = sum(self._reserved.values()) - owned
+        if reserve_calls and (self._total + other_reserved + reserve_calls >= self._max_calls
+                              or self._calls.get(run_id, 0) + reserve_calls >= self._per_run):
+            raise LlmRequestError("剩余额度需留给主回答", code="compaction_call_budget",
+                                  public_code="BUDGET_EXCEEDED")
+        if self._total + other_reserved >= self._max_calls or self._calls.get(run_id, 0) >= self._per_run:
             raise LlmRequestError(
                 "协作模型调用额度已用尽", code="collaboration_call_budget",
                 public_code="BUDGET_EXCEEDED",
             )
         self._calls[run_id] = self._calls.get(run_id, 0) + 1
         self._total += 1
+        if reserve_calls:
+            self._reserved[run_id] = reserve_calls
+        else:
+            self.release_reservation(run_id)
 
-    async def stream(self, adapter: LlmAdapter, run_id: str, request: LlmRequest) -> AsyncIterator[StreamChunk]:
+    async def stream(self, adapter: LlmAdapter, run_id: str, request: LlmRequest,
+                     *, reserve_calls: int = 0) -> AsyncIterator[StreamChunk]:
         """只在真正派发模型流时占用并发，等待工具、专家或人工不占模型槽位。"""
-        async with self._capacity:
-            self._admit(run_id)
-            self._active += 1
-            try:
-                stream = adapter.stream(request)
+        try:
+            async with self._capacity:
+                self._admit(run_id, reserve_calls=reserve_calls)
+                self._active += 1
                 try:
-                    async for chunk in stream:
-                        yield chunk
+                    stream = adapter.stream(request)
+                    try:
+                        async for chunk in stream:
+                            yield chunk
+                    finally:
+                        close = getattr(stream, "aclose", None)
+                        if close is not None:
+                            await close()
                 finally:
-                    close = getattr(stream, "aclose", None)
-                    if close is not None:
-                        await close()
-            finally:
-                self._active -= 1
+                    self._active -= 1
+        except BaseException:
+            # 摘要异常或内部超时仍可能回退回答；预留由压缩器终止/关闭时释放。
+            # 正式请求在等待槽位时失败或取消，则不会继续消费预留，应立即释放。
+            if not reserve_calls:
+                self.release_reservation(run_id)
+            raise
 
 
 @dataclass(frozen=True)
@@ -80,3 +105,11 @@ class BudgetedAdapter:
     def stream(self, request: LlmRequest) -> AsyncIterator[StreamChunk]:
         """透传原始请求与供应商片段，不改变模型用途或工具视野。"""
         return self.budget.stream(self.adapter, self.run_id, request)
+
+    def stream_for_compaction(self, request: LlmRequest) -> AsyncIterator[StreamChunk]:
+        """摘要准入时保留一次正常回答额度，不允许主动压缩耗尽最后一次调用。"""
+        return self.budget.stream(self.adapter, self.run_id, request, reserve_calls=1)
+
+    def release_compaction_reservation(self) -> None:
+        """所属回合结束时释放摘要尚未用于主回答的额度。"""
+        self.budget.release_reservation(self.run_id)

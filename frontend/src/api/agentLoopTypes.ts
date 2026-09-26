@@ -16,6 +16,8 @@ export interface LoopCommand {
 export interface LoopMeter {
   basis: string; estimated: boolean; profile_version: string; input_fingerprint: string
   history_upto_seq: number; capacity: number; input_tokens: number; reserved_output_tokens: number
+  /** 本次实际请求是否注入持久会话摘要；旧事实缺失时不推断压缩状态。 */
+  compacted?: boolean
   /** 本次真实请求的输入估算明细；旧历史缺失时由前端按总输入兼容展示。 */
   breakdown?: {
     system_prompt: number; conversation_messages: number; tools: number

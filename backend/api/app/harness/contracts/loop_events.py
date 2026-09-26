@@ -8,7 +8,7 @@ from typing import Any
 
 EVENT_ENVELOPE_VERSION = 2
 EVENT_SCHEMA_DIALECT = "https://json-schema.org/draft/2020-12/schema"
-SCHEMA_CATALOG_VERSION = 7
+SCHEMA_CATALOG_VERSION = 8
 SCHEMA_REF_PREFIX = "dsh://events/"
 
 
@@ -324,6 +324,16 @@ EVENT_SCHEMAS: dict[str, dict[str, Any]] = {
 
 
 # 平台增量只扩展目录，不改变源事件字段与 schema 引用。
+EVENT_SCHEMAS["context/compacted"] = _event(
+    "已完成并提交的会话摘要；原始事实不变，摘要仅供模型请求重建。",
+    {"version": {"const": 1}, "summary": _STRING,
+     "covered_messages": {"type": "integer", "minimum": 1},
+     "source_fingerprint": _STRING, "history_upto_seq": _INTEGER,
+     "previous_summary_seq": {"type": ["integer", "null"]}, "usage": _OBJECT},
+    required=("version", "summary", "covered_messages", "source_fingerprint", "history_upto_seq"),
+    sensitive_paths=("/data/summary",),
+)
+
 for _kind, _description in {
     "runtime/cancel_requested": "已接受指定回合的取消请求，最终仍需 turn/end。",
     "question/asked": "持久工具问题，绑定交互身份与有效期。",
@@ -333,6 +343,7 @@ for _kind, _description in {
     "execution/quarantined": "远端执行结果未知，保留工作区隔离。",
     "execution/reconciled": "受信证据解除远端执行隔离。",
     "context/trimmed": "上下文窗口裁剪元信息。",
+    "context/compaction_failed": "摘要失败的安全分类，不含未完成摘要或供应商原文。",
     "session/updated": "会话公开展示元信息变更。",
     "task/queued": "Worker 任务已入队。",
     "task/progress": "Worker 任务进展。",

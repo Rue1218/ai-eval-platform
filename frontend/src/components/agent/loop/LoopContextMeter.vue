@@ -52,6 +52,7 @@
           <span />输出预留<strong>{{ formatTokens(meter.reserved_output_tokens) }}</strong>
         </p>
         <small>
+          <template v-if="meter.compacted">已使用会话摘要 · 原始记录保留<br></template>
           {{ meter.basis === 'serialized_request.v2' ? '同源序列化估算 · 最近一次实际请求' : '历史请求未记录来源细分，输入已合并到对话消息' }}<br>
           不包含尚未发送的草稿
         </small>
@@ -84,7 +85,7 @@ const labels = {
   tools: '工具',
   mcp: 'MCP',
   skill: 'Skill',
-  memory_files: '记忆文件',
+  memory_files: '会话记忆',
 } as const
 
 const ringLength = 75.4

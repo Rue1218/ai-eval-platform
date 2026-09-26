@@ -179,6 +179,7 @@ def request_summary(
     """记录实际 attempt 的配置和同源输入估算；测试/旧事实缺协议时保留未知。"""
     meter = None
     if request.protocol and context_window:
+        from .compaction import SUMMARY_PREFIX
         from .loop_wiring import _prompt_breakdown, _prompt_tokens
 
         input_tokens = _prompt_tokens(request)
@@ -186,7 +187,9 @@ def request_summary(
                  "profile_version": request.profile_version, "input_fingerprint": input_fingerprint,
                  "history_upto_seq": history_upto_seq, "capacity": context_window,
                  "input_tokens": input_tokens, "reserved_output_tokens": request.max_tokens,
-                 "breakdown": _prompt_breakdown(request, tool_transports, input_tokens)}
+                 "breakdown": _prompt_breakdown(request, tool_transports, input_tokens),
+                 "compacted": any(segment.text.startswith(SUMMARY_PREFIX)
+                                  for segment in request.system_segments)}
     return {"model": request.model, "provider": request.provider, "protocol": request.protocol,
             "profile_id": request.profile_id, "profile_version": request.profile_version,
             "reasoning_effort": request.reasoning_effort, "max_tokens": request.max_tokens,

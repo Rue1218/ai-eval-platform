@@ -12,6 +12,7 @@ from uuid import uuid4
 import pytest
 
 from app.agent import attachments, loop_service, loop_wiring
+from app.agent.compaction import ContextCompactor
 from app.agent.loop_service import LoopService, _Entry
 from app.errors import AppError, ErrorCode
 from app.harness.execution import loop_runner
@@ -339,27 +340,30 @@ async def test_subagent_switch_preserves_default_assistant(wired, monkeypatch, e
         await wired.service._close_resources(resources)
 
 
-def test_window_keeps_tool_group_and_applies_effort(wired):
-    """旧回合可整体裁掉，当前调用与结果保持配对，思考档位写入真正请求。"""
+def test_preflight_preserves_history_for_compaction_and_applies_effort(wired):
+    """可压缩历史在预检时完整保留，工具配对和思考档位写入真实请求。"""
     messages = [{"role": "user", "content": "old" * 5000}, {"role": "assistant", "content": "old answer"},
                 {"role": "user", "content": "current"},
                 {"role": "assistant", "content": "", "tool_calls": [{"id": "c", "name": "read", "args": {}}]},
                 {"role": "tool", "tool_call_id": "c", "name": "read", "content": "result"}]
     before = deepcopy(messages)
-    request, window = loop_wiring._window_request(wired.profile, (SystemSegment("system"),), [], messages, "high", 1000)
-    assert request.messages == messages[2:] and messages == before
+    compactor = ContextCompactor(
+        wired.entry.log, Mock(),
+        lambda selected, summary: loop_wiring._full_request(
+            wired.profile, (SystemSegment("system"),), [], selected, "high", summary,
+        ), loop_wiring._prompt_tokens, 1000,
+    )
+    request = compactor.preflight(messages)
+    assert request.messages == messages and messages == before
     assert request.reasoning_effort == "high"
     assert request.provider_options["thinking"] == {"type": "enabled"}
     assert "reasoning_effort" not in request.provider_options
-    assert window["window_start"] == 2 and window["window_end"] == 5
-    assert window["reserved_output_tokens"] == 128
-    assert window["reserved_step_notice_tokens"] == 256
-    assert window["estimated_input_tokens"] + 128 + 256 <= 1000
-    with pytest.raises(loop_service.AppError):
-        loop_wiring._window_request(wired.profile, (), [], messages[2:], "off", 129)
+    assert loop_wiring._prompt_tokens(request) > 1000 - request.max_tokens - compactor.reserve
+    assert not wired.entry.log.events
+    assert compactor.calls == 0
 
 
-def test_window_counts_image_blocks_as_vision_cost(wired):
+def test_preflight_counts_image_blocks_as_vision_cost(wired):
     """read_image 的 base64 图文块按视觉成本计，不把 base64 当文本压爆上下文预算。"""
     image = "data:image/png;base64," + "A" * 1_600_000
     messages = [
@@ -370,12 +374,16 @@ def test_window_counts_image_blocks_as_vision_cost(wired):
          "content": [{"type": "text", "text": "已读取图片 media/a.png"},
                      {"type": "image_url", "image_url": {"url": image}}]},
     ]
-    request, window = loop_wiring._window_request(
-        wired.profile, (SystemSegment("system"),), [], messages, "off", 20000
+    compactor = ContextCompactor(
+        wired.entry.log, Mock(),
+        lambda selected, summary: loop_wiring._full_request(
+            wired.profile, (SystemSegment("system"),), [], selected, "off", summary,
+        ), loop_wiring._prompt_tokens, 20000,
     )
+    request = compactor.preflight(messages)
     assert request.messages == messages
     # 若把 base64 当文本，此处会是 40 万量级并触发 BUDGET_EXCEEDED。
-    assert window["estimated_input_tokens"] < 5000
+    assert loop_wiring._prompt_tokens(request) < 5000
 
 
 @pytest.mark.asyncio
@@ -392,7 +400,8 @@ async def test_profile_overlay_is_dynamic_and_changes_request_fingerprint(wired,
     dependencies, resources = await loop_wiring.build_dependencies(
         wired.service, wired.entry, "actor", {"content": "准备评测"}
     )
-    request = dependencies.request
+    request = await dependencies.request_factory(dependencies.request.messages, "off")
+    assert request == dependencies.request
     assert reads == ["profile"]
     assert request.system_segments[0] == SystemSegment(loop_wiring.LOOP_SYSTEM, cacheable=True)
     assert request.system_segments[1].cacheable is False
@@ -401,13 +410,12 @@ async def test_profile_overlay_is_dynamic_and_changes_request_fingerprint(wired,
     assert "核心安全、权限边界、错误契约和任务状态机优先" in request.system_segments[1].text
     assert request.system.startswith(loop_wiring.LOOP_SYSTEM)
 
-    changed, _ = loop_wiring._window_request(
+    changed = loop_wiring._full_request(
         wired.profile,
         loop_wiring._loop_system_segments("改用另一组团队术语。"),
-        [],
+        request.tools,
         [{"role": "user", "content": "准备评测"}],
         "off",
-        100000,
     )
     assert request.fingerprint() != changed.fingerprint()
     await wired.service._close_resources(resources)
@@ -499,17 +507,23 @@ def test_profile_overlay_rejects_secret_or_takeover_text(overlay):
 
 
 @pytest.mark.parametrize("protocol", ["openai_chat", "anthropic_messages"])
-def test_window_retains_images_and_checks_protocol_state(wired, protocol):
-    """两类协议使用 SDK 同源转换，保留图片；不兼容 opaque 状态在提交前拒绝。"""
+def test_preflight_retains_images_and_checks_protocol_state(wired, protocol):
+    """两类协议使用 SDK 同源转换，保留图片；损坏的 opaque 状态在提交前拒绝。"""
     profile = replace(wired.profile, config=replace(wired.profile.config, protocol=protocol,
                                                   model="claude-sonnet-4" if protocol == "anthropic_messages" else "gpt-4o"))
     message = {"role": "user", "content": [{"type": "text", "text": "image"},
                  {"type": "image_url", "image_url": {"url": "data:image/png;base64,aGVsbG8="}}]}
     # 原图片预算之外预留平台收尾系统提示，仍须完整保留图片和工具历史。
-    request, _ = loop_wiring._window_request(profile, (), [], [message], "off", 2256)
+    compactor = ContextCompactor(
+        wired.entry.log, Mock(),
+        lambda selected, summary: loop_wiring._full_request(
+            profile, (), [], selected, "off", summary,
+        ), loop_wiring._prompt_tokens, 2256,
+    )
+    request = compactor.preflight([message])
     assert request.messages == [message]
     with pytest.raises(LlmRequestError):
-        loop_wiring._window_request(profile, (), [], [message, {"role": "assistant", "content": "x", "protocol_state": {}}], "off", 2256)
+        compactor.preflight([message, {"role": "assistant", "content": "x", "protocol_state": {}}])
 
 
 @pytest.mark.asyncio
