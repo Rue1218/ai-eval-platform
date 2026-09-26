@@ -58,7 +58,8 @@ verify_bootstrap_api() {
     local attempt
     [ -n "${LEGACY_API_STOPPED:-}" ] || return 0
     for attempt in $(seq 1 30); do
-        if timeout 5 docker compose exec -T api python -c 'import json, os, urllib.request; import app.agent.deploy_guard; result = json.load(urllib.request.urlopen("http://127.0.0.1:8000/api/health", timeout=3)); assert result["status"] == "ok" and result["commit"] == os.environ["BUILD_VERSION"]' >/dev/null 2>&1; then
+        # 按文件检查独立准入模块，避免 app.agent.__init__ 冷启动整个 LangGraph/供应商依赖。
+        if timeout 15 docker compose exec -T api python -c 'import json, os, runpy, urllib.request; assert callable(runpy.run_path("app/agent/deploy_guard.py")["turn_admission"]); result = json.load(urllib.request.urlopen("http://127.0.0.1:8000/api/health", timeout=3)); assert result["status"] == "ok" and result["commit"] == os.environ["BUILD_VERSION"]' >/dev/null 2>&1; then
             echo "==> 首次升级后的 API 已加载部署保护并恢复健康"
             return 0
         fi
@@ -88,7 +89,7 @@ drain_agent_turns() {
     fi
     [ "$running" = "true" ] || return 1
     # 仅模块明确缺失时进入首次升级；导入故障或 Docker 失败不能当成旧版本放行。
-    timeout 15 docker exec "$api_container" python -c 'import importlib, importlib.util, sys; importlib.import_module("app.agent.deploy_guard") if importlib.util.find_spec("app.agent.deploy_guard") else sys.exit(3)' >/dev/null 2>&1 || guard_status=$?
+    timeout 15 docker exec "$api_container" python -c 'import pathlib, runpy, sys; path = pathlib.Path("app/agent/deploy_guard.py"); namespace = runpy.run_path(str(path)) if path.is_file() else sys.exit(3); assert callable(namespace["turn_admission"])' >/dev/null 2>&1 || guard_status=$?
     if [ "$guard_status" != 0 ] && [ "$guard_status" != 3 ]; then
         echo "错误：无法确认 API 部署准入能力，未更新容器" >&2
         return 1
