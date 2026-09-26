@@ -24,6 +24,7 @@ from pathlib import Path
 
 from shared.casegen import (
     MAX_COUNT,
+    MODEL_RESERVED_KEYS,
     SOURCE_MAX_CHARS,
     TARGET_COUNT,
     build_prompts,
@@ -73,7 +74,7 @@ def _fail(db: Session, task: Task, code: str, message: str) -> None:
     logger.warning("testcase task %s failed (%s): %s", task.id, code, message)
 
 
-def _read_source(db: Session, case_source: dict) -> str:
+def _read_source(db: Session, case_source: dict, user_id: str) -> str:
     """读取来源文档内容：file_id 走文件卷，text 直取；Excel 抽取文本行。
 
     口径镜像 api 侧 ``cases.py`` 的来源文档读取（xlsx 逐行拼接、其余 UTF-8 容错读）。
@@ -85,25 +86,28 @@ def _read_source(db: Session, case_source: dict) -> str:
     if not file_id:
         raise ValueError("case_source 缺少 file_id 或 text")
     stored = db.query(StoredFile).filter(StoredFile.id == file_id).first()
-    if not stored:
+    # 排队后权限可能变化，消费前必须复验；知道文件 ID 不构成读取授权。
+    if not stored or stored.uploaded_by != user_id:
         raise FileNotFoundError("来源文件不存在或已删除")
     path = Path(stored.storage_path)
     if not path.exists():
         raise FileNotFoundError("来源文件已从磁盘移除")
-    suffix = path.suffix.lower()
-    if suffix in {".xlsx", ".xlsm"}:
+    suffix = Path(stored.filename or "").suffix.lower()
+    if suffix in {".xlsx", ".xlsm"} or stored.kind in {"xlsx", "xlsm"}:
         from openpyxl import load_workbook
 
-        workbook = load_workbook(path, read_only=True, data_only=True)
-        try:
-            lines = []
-            for sheet in workbook.worksheets:
-                for row in sheet.iter_rows(values_only=True):
-                    line = " ".join(str(cell) for cell in row if cell is not None)
-                    if line.strip():
-                        lines.append(line)
-        finally:
-            workbook.close()
+        # 文件卷以 UUID 命名，传入二进制流避免 openpyxl 按存储路径误判类型。
+        with path.open("rb") as stream:
+            workbook = load_workbook(stream, read_only=True, data_only=True)
+            try:
+                lines = []
+                for sheet in workbook.worksheets:
+                    for row in sheet.iter_rows(values_only=True):
+                        line = " ".join(str(cell) for cell in row if cell is not None)
+                        if line.strip():
+                            lines.append(line)
+            finally:
+                workbook.close()
         return "\n".join(lines)[:SOURCE_MAX_CHARS]
     return path.read_bytes().decode("utf-8", errors="ignore")[:SOURCE_MAX_CHARS]
 
@@ -114,9 +118,12 @@ def _to_case_items(case_set_id: str, cases: list[dict]) -> list[CaseItem]:
         "strategy", "priority", "module", "submodule", "feature_point",
         "name", "precondition", "steps", "expected", "test_type",
     }
+    # 与 API 保存口径一致：模型只能提供业务扩展列，不能覆盖数据库身份和状态。
     items: list[CaseItem] = []
     for index, case in enumerate(cases):
-        extras = {k: v for k, v in case.items() if k not in fixed}
+        extras = {k: v for k, v in case.items() if k not in fixed | MODEL_RESERVED_KEYS}
+        name = str(case.get("name") or "")
+        expected = str(case.get("expected") or "")
         items.append(
             CaseItem(
                 case_set_id=case_set_id,
@@ -125,12 +132,13 @@ def _to_case_items(case_set_id: str, cases: list[dict]) -> list[CaseItem]:
                 module=str(case.get("module") or ""),
                 submodule=str(case.get("submodule") or ""),
                 feature_point=str(case.get("feature_point") or ""),
-                name=str(case.get("name") or ""),
+                name=name,
                 precondition=str(case.get("precondition") or ""),
                 steps=str(case.get("steps") or ""),
-                expected=str(case.get("expected") or ""),
+                expected=expected,
                 test_type=str(case.get("test_type") or ""),
                 extras=extras,
+                pending_complete=not name.strip() or not expected.strip(),
                 sort_order=index,
             )
         )
@@ -154,7 +162,7 @@ def run_testcase(task_id: str) -> None:
 
         # ─── 读取来源文档 ───
         try:
-            source_text = _read_source(db, case_source)
+            source_text = _read_source(db, case_source, task.created_by)
         except FileNotFoundError as exc:
             _fail(db, task, "VALIDATION", str(exc))
             return
@@ -242,6 +250,7 @@ def run_testcase(task_id: str) -> None:
         expires_at = utcnow() + timedelta(hours=CONFIRM_WINDOW_H)
         case_set = CaseSet(
             task_id=task.id,
+            created_by=task.created_by,
             name=f"AI 生成用例集 · 任务 {task.id[:8]}",
             status="generated",
             generated_count=len(cases),

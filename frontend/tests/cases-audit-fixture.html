@@ -1,0 +1,20 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><title>用例工作台回归夹具</title></head>
+<body>
+  <div id="app" style="height: 95vh"></div>
+  <script type="module">
+    import { createApp, h } from 'vue'
+    import { createRouter, createMemoryHistory } from 'vue-router'
+    import naive, { NMessageProvider, NDialogProvider } from 'naive-ui'
+    import Cases from '../src/views/Cases.vue'
+    import '../src/styles/tokens.css'
+    import '../src/styles/base.css'
+    // 挂载生产页面及 HTTP 层，业务请求由 Playwright 隔离拦截。
+    const router = createRouter({ history: createMemoryHistory(), routes: [] })
+    createApp({ render: () => h(NMessageProvider, {}, {
+      default: () => h(NDialogProvider, {}, { default: () => h(Cases) }),
+    }) }).use(router).use(naive).mount('#app')
+  </script>
+</body>
+</html>

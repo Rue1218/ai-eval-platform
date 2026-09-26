@@ -92,12 +92,11 @@ def test_case_in_requires_core_fields():
         CaseIn(strategy="正向", priority="P0", name="")
 
 
-def test_cases_payload_rejects_duplicate_id_and_empty():
+def test_cases_payload_rejects_duplicate_id_and_accepts_empty():
     case = {"strategy": "正向", "priority": "P0", "name": "用例"}
     with pytest.raises(ValidationError):
         CasesPayload(cases=[{**case, "id": "c-1"}, {**case, "id": "c-1"}])
-    with pytest.raises(ValidationError):
-        CasesPayload(cases=[])
+    assert CasesPayload(cases=[]).cases == []
 
 
 def test_case_confirm_schema():
@@ -142,6 +141,16 @@ def test_ai_generate_max_count_bounds():
 def test_ai_generate_strategy_weights_passthrough():
     body = CaseAiGenerateIn(source_text="x", strategy_weights={"positive": 60, "negative": 40})
     assert body.strategy_weights["positive"] == 60
+
+
+@pytest.mark.parametrize("weights", [
+    {}, {"unknown": 100}, {"positive": -1, "negative": 101}, {"positive": 0},
+    {"positive": 99}, {"positive": True, "negative": 99}, {"positive": 100.0},
+])
+def test_ai_generate_rejects_invalid_strategy_weights(weights):
+    """非法键、负数、非整数或总量不为百分百必须在调用供应商前拒绝。"""
+    with pytest.raises(ValidationError):
+        CaseAiGenerateIn(source_text="需求", strategy_weights=weights)
 
 
 def test_ai_fill_requires_case_ids():

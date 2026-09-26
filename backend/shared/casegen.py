@@ -44,12 +44,32 @@ PRIORITY_LABELS = {
     "BL": "遍历",
 }
 
+# 模型只能生成用例正文，身份、归属和工作流状态一律由服务端生成。
+MODEL_RESERVED_KEYS = frozenset({
+    "id", "case_set_id", "mapped", "pending_complete", "extras",
+    "sort_order", "created_at", "updated_at",
+})
+
+
+def validate_strategy_weights(weights: dict[str, int] | None) -> dict[str, int]:
+    """校验百分比；省略的策略取零，未提供配置才使用默认配比。"""
+    if weights is None:
+        return dict(STRATEGY_WEIGHTS)
+    if (
+        not isinstance(weights, dict)
+        or any(key not in STRATEGY_NAMES for key in weights)
+        or any(type(value) is not int or not 0 <= value <= 100 for value in weights.values())
+        or sum(weights.values()) != 100
+    ):
+        raise ValueError("策略配比须为六类已知策略的 0–100 整数百分比，合计 100")
+    return {key: weights.get(key, 0) for key in STRATEGY_NAMES}
+
 
 def build_prompts(
     source_text: str, target_count: int, weights: dict[str, int] | None = None
 ) -> tuple[str, str]:
     """组装六策略用例生成的中文 system / user prompt（口径对齐 api ai-generate）。"""
-    weights = weights or STRATEGY_WEIGHTS
+    weights = validate_strategy_weights(weights)
     ratio_desc = "、".join(f"{STRATEGY_NAMES[key]} {value}%" for key, value in weights.items())
     priority_desc = "、".join(f"{value}（{PRIORITY_LABELS[value]}）" for value in PRIORITY_VALUES)
     system = (
@@ -79,18 +99,24 @@ def parse_cases(text: str) -> list[dict]:
     data = json.loads(cleaned[start : end + 1])
     if not isinstance(data, list):
         raise ValueError("模型返回的不是 JSON 数组")
-    items = [item for item in data if isinstance(item, dict) and item.get("name")]
+    items = [
+        {key: value for key, value in item.items() if key not in MODEL_RESERVED_KEYS}
+        for item in data if isinstance(item, dict) and item.get("name")
+    ]
     if not items:
         raise ValueError("模型输出中没有含用例名称的有效条目")
     return items
 
 
-def rebalance_by_strategy(items: list[dict], max_count: int) -> list[dict]:
+def rebalance_by_strategy(
+    items: list[dict], max_count: int, weights: dict[str, int] | None = None,
+) -> list[dict]:
     """按策略配比对生成条数做软性校正：超出配比的截断，不足的保留。"""
-    total_weight = sum(STRATEGY_WEIGHTS.values())
+    weights = validate_strategy_weights(weights)
+    total_weight = sum(weights.values())
     quotas = {
         STRATEGY_NAMES[key]: (max(1, round(max_count * w / total_weight)) if w > 0 else 0)
-        for key, w in STRATEGY_WEIGHTS.items()
+        for key, w in weights.items()
     }
     grouped: dict[str, list[dict]] = {}
     for item in items:

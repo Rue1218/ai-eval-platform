@@ -4,10 +4,10 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V2.22 |
-| 本轮审查日期 | 2026-09-19（项目审查：文件隔离、上传与工作区状态一致性） |
+| 文档版本 | V2.23 |
+| 本轮审查日期 | 2026-09-26（用例生成、保存确认、来源授权与任务执行修复） |
 | WS v2 修订日期 | 2026-09-13（§4A，模型错误安全摘要） |
-| 对应 PRD | V1.42（功能唯一权威） |
+| 对应 PRD | V1.43（功能唯一权威） |
 | 对应设计规范 | V1.12（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.7.8（AgentLoop 单入口；JSON 仍以本文为准） |
 | 对应前端计划 | AgentLoop 前端计划 V0.5 |
@@ -1135,7 +1135,7 @@ case item 包含：`id, strategy, priority, module, name, precondition, steps, e
 
 #### `PUT /api/case-sets/{id}/cases`
 
-批量保存表格用例项与自定义列数据（即点即改后实时持久化）。
+批量保存当前用例集的完整表格快照与自定义列数据。已有行必须保留服务端 `id`；新行省略 `id`，响应 `items` 返回服务端生成的 ID。未包含的原有行删除，`cases: []` 表示清空；确认或废弃后的用例集、超过确认期限或关联任务不再等待确认的用例集拒绝保存。保存后重算 `generated_count` 和 `checks`，响应包含 `items / total / checks`。前端只有保存成功后才可继续确认或切换；保存期间的新编辑仍须保留未保存状态。
 
 ```json
 {
@@ -1155,6 +1155,8 @@ case item 包含：`id, strategy, priority, module, name, precondition, steps, e
 
 采纳率口径：`confirmed_count / generated_count`。
 
+确认、废弃和 Worker 超时扫描按 `CaseSet → Task` 顺序锁定并复核状态；到达 `expires_at` 后不能确认。关联任务已取消或失败时不能把用例确认成成功。确认后的用例集保持不可编辑，AI 补全也不得绕过该状态检查。
+
 #### `POST /api/case-sets/{id}/cancel`
 
 废弃用例集，任务置为 `cancelled`。
@@ -1168,6 +1170,8 @@ case item 包含：`id, strategy, priority, module, name, precondition, steps, e
 ```
 
 `target=dataset` 时：问句←用例名称、预期←expected、前置←context；缺 `question` 或 `reference` 的行进入目标集 `pending_complete`（不进评分分母）；**全部**映射行写 `source_case_id`，并在 `extras.source_case_set_id` 记录用例集 ID。`target=gold_qa` 时缺 `expected_doc_ids` 的项仅参与答案侧评分（M3；当前返回 `VALIDATION`）。目标 ID 类型不匹配返回 `VALIDATION`。
+
+已有 `active_version_id` 的数据集拒绝直接映射，返回 `VALIDATION` 提示通过受控导入产生新版本，禁止向不会被正式评测读取的旧行表写入并报告成功。对尚未发布版本的数据集，同一来源用例重复映射幂等跳过；`mapped_count` 仅计算本次新插入的行数。
 
 #### `POST /api/case-sets/ai-generate`
 
@@ -1184,6 +1188,11 @@ case item 包含：`id, strategy, priority, module, name, precondition, steps, e
 ```
 
 该接口只返回候选，不创建用例集：
+
+- `source_doc_id` 仅接受当前成员上传的文件；越权或不存在统一 `UNAUTHORIZED`。任务创建、重跑与 Worker 消费执行相同来源授权检查。
+- Excel 按上传时的 `filename / kind` 识别并抽取表格正文；存储文件的 UUID 路径不用于判断格式。
+- `strategy_weights` 只接受六类已知策略的整数百分比（0–100，合计 100，未提供的键视为 0）；未传时使用默认配比。提示词与结果裁剪使用同一份配比。
+- 模型不能指定用例 `id / case_set_id / mapped / pending_complete` 等服务端身份或状态；这些字段不会作为模型扩展列透传。
 
 ```json
 {
@@ -3646,3 +3655,25 @@ Linux Compose 部署使用共享 `/data/.agent-deploy.lock`：`turn.submit` 持�
 - `backend/runner/tests/test_kernel_cancellation.py`：为已模拟的 POSIX 进程测试补齐 Windows 缺失的信号常量。
 - `frontend/tests/workspace-audit-fixture.html`、`frontend/tests/e2e/workspaceAudit.spec.ts`：真实工作区页面、隔离 HTTP 夹具与 5 项浏览器回归。
 - `docs/AI测试与评估平台-项目审查与修复记录.md`：审查边界、问题分级、验证证据与未验证事项。
+
+## V2.23 用例生成与任务执行修复（2026-09-26）
+
+用例工作台恢复既有 `source_text / strategy_weights / max_count` 请求契约；表格编辑保留服务端 ID、前置条件和扩展列，只有保存成功才能确认或切换。加载与保存绑定目标用例集，迟到响应不能覆盖当前视图，保存期间的新编辑继续标记未保存。Excel/XMind 导出实际调用文件接口。
+
+六策略统一使用规范名称，读取时兼容旧“等价/状态”别名；用例 AI 生成和补全的客户端等待、API 代理读取等待调整为 130 秒，覆盖现有 120 秒模型请求预算。
+
+任务来源文件仅允许当前创建者上传的文件，普通创建、Agent 准备、入队、历史重跑和 Worker 消费均复核。重跑受个人配额与会话待确认卡限制。所有新生产压测任务重新设置 `need_approval=true` 并移除历史 `approved_by`，Worker 执行前要求非创建者会签，保持既有 Host 白名单限制。
+
+Task 使用已有 `claimed_by_worker_id / claim_expires_at / attempt` 字段记录领取，独立心跳续租。过期或升级前无租约的 `running` 任务以 `TIMEOUT` 明确失败、释放占槽并写入任务事件；迟到执行器不得覆盖失败终态。该规则不自动重放未知完成的供应商请求，也不新增 Agent 专家后台恢复能力。本轮不新增数据库字段或迁移。
+
+回收提交后对失联压测尽力发送停止请求；失败终态不表示外部引擎已确认停止，需核查外部执行结果后决定重跑。配额计数使用成员行 `FOR NO KEY UPDATE` 锁，兼容其他资产写入用户外键时的引用锁。
+
+### 修改代码文件与作用清单
+
+- `backend/api/app/task_policy.py`、`routers/tasks.py`、`harness/execution/{task_tools,worker_bridge}.py`：统一来源授权、配额与新任务会签。
+- `backend/api/app/routers/cases.py`、`schemas.py`：来源解析、用例保存与状态锁、幂等映射及已发布数据集保护。
+- `backend/shared/casegen.py`：策略百分比校验与同源裁剪、模型保留字段过滤。
+- `backend/worker/app/{main,task_state,benchmark,testcase,stress}.py`：领取续租与故障收尾、停止后续批次、超时确认锁、消费授权和生产会签兜底。
+- `frontend/src/views/Cases.vue`、`frontend/src/api/{http,types}.ts`、`frontend/nginx.conf`：真实生成、完整编辑保存、并发状态、策略名称、请求等待与实际导出。
+- `backend/api/tests/{test_task_creation_audit,test_cases_audit,test_casegen,test_cases_schema,test_batch_save_delete}.py`、Worker 租约与用例测试、`frontend/tests/e2e/casesAudit.spec.ts`：对应缺陷回归。
+- `docs/AI测试与评估平台-用例生成审查修复记录.md`：本轮验证证据与未验证边界。

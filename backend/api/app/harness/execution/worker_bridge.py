@@ -13,6 +13,7 @@ from uuid import uuid4
 
 from app.errors import AppError, ErrorCode
 from app.models import AuditLog, Task
+from app.task_policy import prepare_new_task_config, require_owned_source_file
 
 # Task.kind 短名（与 M10 skill_to_kind、PRD/API Task.kind 一致）
 TASK_KINDS: frozenset[str] = frozenset({"benchmark", "testcase", "rag", "stress"})
@@ -66,13 +67,16 @@ def enqueue_long_task(
     """
     if kind not in TASK_KINDS:
         raise AppError(ErrorCode.VALIDATION, f"未知任务类型：{kind}")
+    source_id = (spec.get("case_source") or {}).get("file_id")
+    if kind == "testcase" and source_id:
+        require_owned_source_file(db, source_id, user_id)
     task = Task(
         id=uuid4().hex,
         session_id=session_id,
         created_by=user_id,
         kind=kind,
         status="queued",
-        config=spec,
+        config=prepare_new_task_config(kind, spec),
         parent_task_id=parent_task_id,
     )
     db.add(task)

@@ -148,6 +148,15 @@ def resolve_job(db: Session, task: Task) -> dict[str, Any]:
     config = task.config if isinstance(task.config, dict) else {}
     stress_cfg = config.get("stress") if isinstance(config.get("stress"), dict) else {}
     env = str(stress_cfg.get("env") or "test")
+    # 即使旧任务或其他入口漏设标记，生产发压也必须有非创建者明确会签。
+    approver = config.get("approved_by")
+    if env == "prod" and (
+        config.get("need_approval") is not False
+        or not isinstance(approver, str)
+        or not approver.strip()
+        or approver == task.created_by
+    ):
+        raise PermissionError("need_approval")
     settings = _load_stress_settings(db)
     qps, duration_s = clamp_stress(stress_cfg.get("qps"), stress_cfg.get("duration_s"), settings)
 
@@ -309,8 +318,11 @@ def run_stress(task_id: str) -> None:
             return
         try:
             job = resolve_job(db, task)
-        except PermissionError:
-            _fail(db, task_id, "WHITELIST", "目标 Host 不在压测白名单")
+        except PermissionError as exc:
+            if str(exc) == "need_approval":
+                _fail(db, task_id, "NEED_APPROVAL", "生产压测须由非创建者会签")
+            else:
+                _fail(db, task_id, "WHITELIST", "目标 Host 不在压测白名单")
             return
         except ValueError as exc:
             if str(exc) == "missing_profile":
@@ -326,6 +338,8 @@ def run_stress(task_id: str) -> None:
         sla = job.get("sla_p99_ms")
         sla_i = int(sla) if isinstance(sla, int) else None
         duration_s = int(job["duration_s"])
+        if is_cancelled(db, task_id):
+            return
         # 发给引擎的 JSON 含鉴权头，此后不得打印 job。
         try:
             _request_json("POST", "/run", job, timeout=15.0)

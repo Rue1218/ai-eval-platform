@@ -99,7 +99,7 @@ class _Query:
     def filter(self, *args, **kwargs):  # noqa: ANN002, ANN003
         return self
 
-    def with_for_update(self):
+    def with_for_update(self, **kwargs):
         return self
 
     def first(self):
@@ -147,7 +147,7 @@ class _FakeDb:
         self.added: list = []
         self.commit_calls = 0
 
-    def query(self, model):
+    def query(self, model, *columns):
         if model is AgentSession:
             return _Query(self._session_row)
         if model is Dataset:
@@ -377,7 +377,8 @@ def test_is_cancelled_detects_terminated_status() -> None:
     from worker.app.task_state import is_cancelled
 
     for status, expected in [("cancelled", True), ("failed", True), ("running", False), ("queued", False)]:
-        db = _FakeDb(task_first=(status,))
+        # 取消检查同时读取租约；旧任务的租约为空仍按状态判断。
+        db = _FakeDb(task_first=(status, None))
         assert is_cancelled(db, "t1") is expected
 
 

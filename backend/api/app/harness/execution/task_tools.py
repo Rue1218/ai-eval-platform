@@ -13,6 +13,7 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 
 from app.errors import AppError, ErrorCode
+from app.task_policy import enforce_task_quota, prepare_new_task_config, require_owned_source_file
 
 from .worker_bridge import TASK_KINDS, enqueue_long_task
 
@@ -60,12 +61,9 @@ def prepare_task_request(db, arguments: Mapping[str, object], context: object) -
     pending_confirm 属于调用方的交互状态，本函数不会拒绝或消费当前确认卡。
     配额拒绝审计仅添加到当前事务，是否提交由外层决定。
     """
-    from app.config import settings
     from app.harness.memory.episodic import get_active_tasks
-    from app.models import AuditLog, Dataset, DatasetVersion, ProtocolProfile, StoredFile, Task
+    from app.models import Dataset, DatasetVersion, ProtocolProfile, Task
     from app.session_access import require_visible_session
-
-    from .worker_bridge import count_active_tasks
 
     session_id, user_id = _context_ids(context)
     task_spec = _task_spec(arguments, session_id)
@@ -75,11 +73,7 @@ def prepare_task_request(db, arguments: Mapping[str, object], context: object) -
     require_visible_session(db, session_id, user_id, lock=True)
     if get_active_tasks(db, session_id):
         raise AppError(ErrorCode.CONCURRENCY, "会话已有未完成任务")
-    if count_active_tasks(db, user_id=user_id) >= settings.max_active_tasks_per_user:
-        db.add(AuditLog(user_id=user_id, action="task_quota_rejected", target_type="user",
-                        target_id=user_id, detail={"kind": kind, "limit": settings.max_active_tasks_per_user}))
-        raise AppError(ErrorCode.CONCURRENCY, "达到个人任务配额上限，请等待现有任务结束后再发起",
-                       fields={"task_quota_rejected": True})
+    enforce_task_quota(db, user_id, kind)
 
     parent_task_id = task_spec.parent_task_id
     if parent_task_id:
@@ -104,11 +98,9 @@ def prepare_task_request(db, arguments: Mapping[str, object], context: object) -
         if not profile:
             raise AppError(ErrorCode.NOT_FOUND, "关联模型协议档不存在")
     if task_spec.case_source and task_spec.case_source.file_id:
-        file = db.get(StoredFile, task_spec.case_source.file_id)
-        if not file or file.uploaded_by != user_id:
-            raise AppError(ErrorCode.UNAUTHORIZED, "用例来源文件不存在或不属于当前成员")
+        require_owned_source_file(db, task_spec.case_source.file_id, user_id)
 
-    spec = task_spec.snapshot()
+    spec = prepare_new_task_config(kind, task_spec.snapshot())
     if kind == "benchmark":
         # 复用原锁与版本冻结规则，保留旧数据集尚无发布版本时的既有兼容行为。
         dataset = db.query(Dataset).filter(Dataset.id == task_spec.dataset_id).with_for_update().first()

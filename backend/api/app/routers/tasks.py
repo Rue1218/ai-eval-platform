@@ -14,6 +14,7 @@ from ..models import AuditLog, Dataset, DatasetVersion, Report, Task, TaskEvent,
 from ..models import Session as AgentSession
 from ..schemas import TaskCreate, TaskDetailOut, TaskEventOut, TaskOut
 from ..session_access import require_visible_session
+from ..task_policy import enforce_task_quota, prepare_new_task_config, require_owned_source_file
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 ACTIVE_STATUSES = {"queued", "running", "awaiting_case_confirm"}
@@ -34,9 +35,12 @@ def _task_out(task: Task) -> dict:
     return payload
 
 
-def _owned_task(db: Session, task_id: str, user_id: str) -> Task:
+def _owned_task(db: Session, task_id: str, user_id: str, *, lock: bool = True) -> Task:
     """锁定当前成员创建的任务，串行化取消、重跑与 Worker 终态写入。"""
-    task = db.query(Task).filter(Task.id == task_id).with_for_update().first()
+    query = db.query(Task).filter(Task.id == task_id)
+    if lock:
+        query = query.with_for_update()
+    task = query.first()
     if not task:
         raise AppError(ErrorCode.NOT_FOUND, "任务不存在")
     if task.created_by != user_id:
@@ -99,22 +103,15 @@ def create_task(
         if existing:
             raise AppError(ErrorCode.VALIDATION, "会话已有未完成任务")
 
-    # P4-2 资源配额：每用户活动任务上限（与 MCP task.create 同一规则 + 审计）
-    from app.config import settings
-    from app.harness.execution.worker_bridge import count_active_tasks
-
-    if count_active_tasks(db, user_id=user.id) >= settings.max_active_tasks_per_user:
-        db.add(
-            AuditLog(
-                user_id=user.id,
-                action="task_quota_rejected",
-                target_type="user",
-                target_id=user.id,
-                detail={"kind": body.kind, "limit": settings.max_active_tasks_per_user},
-            )
-        )
+    # 普通创建和重跑共用配额检查；拒绝审计在控制面提交。
+    try:
+        enforce_task_quota(db, user.id, body.kind)
+    except AppError:
         db.commit()
-        raise AppError(ErrorCode.CONCURRENCY, "达到个人任务配额上限，请等待现有任务结束后再发起")
+        raise
+
+    if body.case_source and body.case_source.file_id:
+        require_owned_source_file(db, body.case_source.file_id, user.id)
 
     if body.kind == "stress":
         parent = db.query(Task).filter(Task.id == body.parent_task_id).first()
@@ -123,7 +120,7 @@ def create_task(
         if parent.kind not in {"benchmark", "rag"}:
             raise AppError(ErrorCode.VALIDATION, "仅质量任务可派生压测")
 
-    snapshot = body.snapshot()
+    snapshot = prepare_new_task_config(body.kind, body.snapshot())
     if body.kind == "benchmark" and body.dataset_id:
         # 与发布流程争用同一数据集行锁，确保任务快照到的是单一、不可变版本。
         dataset = (
@@ -147,8 +144,6 @@ def create_task(
             if not version:
                 raise AppError(ErrorCode.INTERNAL, "数据集当前版本异常，无法创建评测任务")
             snapshot["dataset_version_no"] = version.version_no
-    if body.kind == "stress" and body.stress and body.stress.env == "prod":
-        snapshot["need_approval"] = True
     task = Task(
         kind=body.kind,
         session_id=body.session_id,
@@ -272,12 +267,15 @@ def rerun_task(
     user: User = Depends(get_current_user),
 ):
     """复制终态任务的确认卡快照，创建全新的 queued 任务。"""
-    task = _owned_task(db, task_id, user.id)
+    # 先校验归属，再按会话→成员配额→任务锁序入队，避免与 Agent 创建的锁序相反。
+    task = _owned_task(db, task_id, user.id, lock=False)
     if task.status not in TERMINAL_STATUSES:
         raise AppError(ErrorCode.VALIDATION, "仅终态任务可重跑")
     if task.session_id:
         # 已私有化或软删除的会话不能承接新任务，避免从任务页绕过会话边界。
-        _validate_session(db, task.session_id, user.id)
+        session = _validate_session(db, task.session_id, user.id, lock=True)
+        if session and session.pending_confirm:
+            raise AppError(ErrorCode.CONCURRENCY, "会话存在待确认任务，请先由发起人确认或取消")
         existing = (
             db.query(Task)
             .filter(Task.session_id == task.session_id, Task.status.in_(ACTIVE_STATUSES))
@@ -285,11 +283,24 @@ def rerun_task(
         )
         if existing:
             raise AppError(ErrorCode.VALIDATION, "会话已有未完成任务")
+    try:
+        enforce_task_quota(db, user.id, task.kind)
+    except AppError:
+        db.commit()
+        raise
+    task = _owned_task(db, task_id, user.id)
+    db.refresh(task)
+    if task.status not in TERMINAL_STATUSES:
+        raise AppError(ErrorCode.VALIDATION, "仅终态任务可重跑")
+    snapshot = prepare_new_task_config(task.kind, task.config or {})
+    source_id = (snapshot.get("case_source") or {}).get("file_id")
+    if task.kind == "testcase" and source_id:
+        require_owned_source_file(db, source_id, user.id)
     rerun = Task(
         kind=task.kind,
         session_id=task.session_id,
         parent_task_id=task.parent_task_id,
-        config=dict(task.config),
+        config=snapshot,
         progress={"done": 0, "total": 0, "message": "重跑任务已入队"},
         created_by=user.id,
         status="queued",
