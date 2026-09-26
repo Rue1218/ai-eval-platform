@@ -1,4 +1,4 @@
-import type { Attempt, LoopRecord, LoopUsage, ToolRun } from '../../api/agentLoopTypes.ts'
+import type { Attempt, ContextUsage, LoopRecord, LoopUsage, ToolRun } from '../../api/agentLoopTypes.ts'
 import { finalResponseText, responseParts } from './responsePresentation.ts'
 
 export interface TurnSummary {
@@ -54,6 +54,8 @@ export interface CalculateTurnSummariesOptions {
   activeTurnId?: string | null
   isBusy?: boolean
   sessionId?: string
+  /** 摘要计量独立于可见消息，只累加具有同一真实轮次身份的记录。 */
+  summaryUsage?: Record<string, ContextUsage>
 }
 
 /**
@@ -113,7 +115,9 @@ export function calculateTurnSummaries(
     let totalTokens: number | null = null
     let totalLatencyMs: number | null = null
 
-    for (const a of attempts) {
+    const summaryUsage = Object.values(options.summaryUsage || {})
+      .filter(usage => getTurnIdentifier(usage) === turnKey)
+    for (const a of [...attempts, ...summaryUsage]) {
       const tokens = answerTokens(a)
       if (tokens !== null) {
         totalTokens = (totalTokens ?? 0) + tokens

@@ -8,6 +8,7 @@
 import type {
   Attempt,
   ConversationMetrics,
+  ContextUsage,
   Data,
   LoopAgent,
   LoopProfile,
@@ -44,13 +45,17 @@ export function firstAssistantInTurn(row: LoopRecord, firstKeyByTurn: Map<string
  * 模型吞吐仅在输入、输出、耗时均有效时累计（避免半量数据拉低均值）；
  * 缓存命中率仅在出现任一缓存字段且输入有效时给出，否则为 null。
  */
-export function conversationMetricsFrom(attempts: Record<string, Attempt> | undefined): ConversationMetrics {
+export function conversationMetricsFrom(
+  attempts: Record<string, Attempt> | undefined,
+  summaryUsage?: Record<string, ContextUsage>,
+): ConversationMetrics {
   let inputTokens = 0
   let outputTokens = 0
   let modelLatencyMs = 0
+  let timedOutputTokens = 0
   let cacheReadTokens = 0
   let hasCacheUsage = false
-  for (const attempt of Object.values(attempts || {})) {
+  for (const attempt of [...Object.values(attempts || {}), ...Object.values(summaryUsage || {})]) {
     const usage = attempt.usage
     if (!usage) continue
     const input = tokenValue(usage.prompt_tokens)
@@ -58,7 +63,10 @@ export function conversationMetricsFrom(attempts: Record<string, Attempt> | unde
     inputTokens += input
     outputTokens += output
     const latency = tokenValue(attempt.latency_ms) || tokenValue((usage as { latency_ms?: unknown })?.latency_ms)
-    if (input > 0 && output > 0 && latency > 0) modelLatencyMs += latency
+    if (input > 0 && output > 0 && latency > 0) {
+      modelLatencyMs += latency
+      timedOutputTokens += output
+    }
     const cached = tokenValue(usage.cache_read_input_tokens) || tokenValue(usage.cached_tokens)
     if (
       cached > 0
@@ -72,7 +80,7 @@ export function conversationMetricsFrom(attempts: Record<string, Attempt> | unde
   return {
     inputTokens,
     outputTokens,
-    outputTokensPerSecond: outputTokens > 0 && modelLatencyMs > 0 ? outputTokens / (modelLatencyMs / 1000) : null,
+    outputTokensPerSecond: timedOutputTokens > 0 && modelLatencyMs > 0 ? timedOutputTokens / (modelLatencyMs / 1000) : null,
     cacheHitRate: hasCacheUsage && inputTokens > 0 ? (cacheReadTokens / inputTokens) * 100 : null,
   }
 }

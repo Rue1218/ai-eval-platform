@@ -19,6 +19,7 @@ from .harness.skills.storage import ensure_skill_files
 from .models import ProtocolProfile, User
 from .routers import (
     admin,
+    agent_memories,
     agent_prefs,
     agents,
     auth,
@@ -221,6 +222,7 @@ app.include_router(users.router)
 app.include_router(files.router)
 app.include_router(sessions.router)
 app.include_router(agent_prefs.router)
+app.include_router(agent_memories.router)
 app.include_router(tasks.router)
 app.include_router(profiles.router)
 app.include_router(datasets.router)

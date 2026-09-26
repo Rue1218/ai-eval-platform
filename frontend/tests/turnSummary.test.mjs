@@ -169,3 +169,22 @@ test('calculateTurnSummaries: 多轮对话分别在各轮结尾输出', () => {
   assert.equal(summaries.get('a1').totalTokens, 500)
   assert.equal(summaries.get('a2').totalTokens, 800)
 })
+
+test('calculateTurnSummaries: 摘要计量按真实轮次累加，不改变最终回答或过程行', () => {
+  const rows = [
+    { key: 'a1', text: '回答1', ended: true, correlation: { turn_id: 's:1' }, usage: { total_tokens: 100 }, latency_ms: 1000 },
+    { key: 'a2', text: '回答2', ended: true, correlation: { turn_id: 's:2' }, usage: { total_tokens: 200 }, latency_ms: 1500 },
+  ]
+  const summaries = calculateTurnSummaries(rows, { summaryUsage: {
+    first: { key: 'summary1', correlation: { turn_id: 's:1' }, usage: { prompt_tokens: 1000, completion_tokens: 30 }, latency_ms: 300 },
+    second: { key: 'summary2', correlation: { turn_id: 's:2' }, usage: { total_tokens: 500 } },
+    legacy: { key: 'summary-old', correlation: {}, usage: { total_tokens: 900 }, latency_ms: 2000 },
+  } })
+  assert.equal(summaries.get('a1').totalTokens, 1130)
+  assert.equal(summaries.get('a1').totalLatencyMs, 1300)
+  assert.equal(summaries.get('a2').totalTokens, 700)
+  assert.equal(summaries.get('a2').totalLatencyMs, 1500)
+  assert.equal(summaries.get('a1').summaryText, '回答1')
+  assert.deepEqual(summaries.get('a1').processRows, [])
+  assert.equal(summaries.get('a1').summaryRow, rows[0])
+})

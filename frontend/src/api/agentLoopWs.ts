@@ -47,8 +47,8 @@ export class AgentLoopWebSocket {
     if (this.syncing) return
     this.syncing = true; this.options.state().ready = false
     const data: Record<string, unknown> = { after_cursor: this.options.state().cursor }
-    // v2.1 的严格服务端不接受新字段；先协商再为 v2.2 增加稳定客户端身份。
-    if (this.streamVersion === 'agent-loop-stream.v2.2') data.client_id = this.clientId
+    // v2.1 的严格服务端不接受新字段；先协商再为后续已支持版本增加稳定客户端身份。
+    if (['agent-loop-stream.v2.2', 'agent-loop-stream.v2.3'].includes(this.streamVersion)) data.client_id = this.clientId
     this.send(this.command('subscribe', data))
   }
   trace(enabled: boolean, afterSeq = -1): void {
@@ -83,7 +83,7 @@ export class AgentLoopWebSocket {
             this.traceRequestId = null
           }
           if (frame.type === 'capabilities') {
-            if (!['agent-loop-stream.v2.1', 'agent-loop-stream.v2.2'].includes(frame.data.stream_schema_version)) throw new Error('不支持的事件 Schema 版本')
+            if (!['agent-loop-stream.v2.1', 'agent-loop-stream.v2.2', 'agent-loop-stream.v2.3'].includes(frame.data.stream_schema_version)) throw new Error('不支持的事件 Schema 版本')
             this.streamVersion = frame.data.stream_schema_version
             this.resync(); return
           }

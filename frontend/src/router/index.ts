@@ -35,6 +35,7 @@ const routes: RouteRecordRaw[] = [
       { path: 'kb', component: () => import('../views/Kb.vue'), meta: { title: '知识库' } },
       // F1（工作区与沙箱设计方案 G1）：用户工作区——PRD 5.8 增补随 F1 契约修订登记
       { path: 'workspaces', component: () => import('../views/UserWorkspaces.vue'), meta: { title: '我的工作区' } },
+      { path: 'memories', component: () => import('../views/UserMemories.vue'), meta: { title: '我的记忆' } },
       { path: 'admin/profiles', component: () => import('../views/AdminProfiles.vue'), meta: { title: '协议档' } },
       { path: 'admin/stress', component: () => import('../views/AdminStress.vue'), meta: { title: '压测治理' } },
       { path: 'admin/users', component: () => import('../views/AdminUsers.vue'), meta: { title: '账号' } },

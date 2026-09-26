@@ -31,7 +31,7 @@ export interface LoopUsage {
   cache_read_input_tokens?: number; cache_creation_input_tokens?: number; cached_tokens?: number
 }
 
-/** 当前会话聚合后的模型消耗指标，只由已持久化的助手消息计算。 */
+/** 当前会话聚合后的模型消耗指标，包含已持久化的助手与摘要用量。 */
 export interface ConversationMetrics {
   inputTokens: number; outputTokens: number
   outputTokensPerSecond: number | null; cacheHitRate: number | null
@@ -81,6 +81,8 @@ export interface ToolDisplay {
 /** 业务记录保持稳定引用，页面展开状态由组件管理。 */
 export interface LoopRecord extends Data { key: string; first_cursor: number; correlation: Correlation; event: string; timestamp?: string }
 export interface Attempt extends LoopRecord { text: string; reasoning: string; ended: boolean; chunks: Record<string, number>; request_summary?: Data; usage?: LoopUsage; latency_ms?: number }
+/** 摘要调用的独立计量记录，不作为助手消息展示；来源序号用于重放去重。 */
+export interface ContextUsage extends LoopRecord { usage: LoopUsage; latency_ms?: number }
 export interface ToolRun extends LoopRecord {
   name: string; status: ToolStatus; display: ToolDisplay; synthetic?: boolean
   /** 调度边界公开名称映射与契约版本，不包含实际工具参数。 */

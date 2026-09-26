@@ -162,6 +162,11 @@ async def test_attach_never_recovers_while_another_writer_is_live(wired):
 @pytest.fixture
 def wired(tmp_path, monkeypatch):
     """保留真实 registry/ToolBridge/请求 resolver，替换外部连接及身份数据库。"""
+    from app.harness.memory import preference
+
+    # 此替身仅提供身份行；个人偏好的真实查询与行锁在专属测试覆盖。
+    monkeypatch.setattr(preference, "prepare_private_prefs", lambda *args: {})
+    monkeypatch.setattr(preference, "prepare_private_memories", lambda *args: [])
     closed = []
     user = SimpleNamespace(id="actor", disabled=False, role="member")
     session = SimpleNamespace(id="session", engine_version="agent_loop_v2", workspace_id="ws",
@@ -441,7 +446,10 @@ async def test_expert_prompt_refreshes_next_turn_without_mutating_active_request
         assert "专家旧约定。" in first.request.system_segments[1].text
         assert "协议档团队术语。" in first.request.system_segments[2].text
         assert first.request.system_segments[0].text == loop_wiring.LOOP_SYSTEM
-        assert set(first.scheduler._by_name) <= set(loop_wiring.resolve_expert("testcase-agent").allowed_tools)
+        # 调度器使用供应商安全名称，白名单比较应读取桥中保留的平台规范名。
+        assert {tool.definition.name for tool in first.scheduler._by_name.values()} <= set(
+            loop_wiring.resolve_expert("testcase-agent").allowed_tools
+        )
         current[0] = "专家新约定。"
         second, next_resources = await loop_wiring.build_dependencies(
             wired.service, wired.entry, "actor", {"content": "准备评测", "agent_id": "testcase-agent"},
@@ -608,6 +616,7 @@ async def test_interaction_response_before_future_registration(wired):
 async def test_business_confirmation_revalidates_and_enqueues_in_transaction(wired, monkeypatch):
     """确认前冻结、确认后复验，enqueue(commit=False) 与执行事实共用事务。"""
     from app.harness.execution import task_tools, worker_bridge
+    from app.harness.memory import preference
 
     prepared = []
 
@@ -628,6 +637,7 @@ async def test_business_confirmation_revalidates_and_enqueues_in_transaction(wir
 
     monkeypatch.setattr(task_tools, "prepare_task_request", prepare)
     monkeypatch.setattr(worker_bridge, "enqueue_long_task", enqueue)
+    monkeypatch.setattr(preference, "write_prefs", Mock())
     monkeypatch.setattr(wired.service, "_wait_interaction", confirm)
     deps, resources = await loop_wiring.build_dependencies(wired.service, wired.entry, "actor", {"content": "hi"})
     tool = next(t for t in deps.scheduler._by_name.values() if t.definition.name == "task.create")

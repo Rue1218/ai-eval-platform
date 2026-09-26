@@ -455,6 +455,14 @@ async def update_session_sharing(
         raise AppError(
             ErrorCode.VALIDATION, "绑定工作区的会话不可转为团队共享"
         )
+    if body.visibility == "team" and session.visibility == "private":
+        from app.harness.memory.preference import has_personal_context
+
+        # 私有偏好可能已进入请求头、回复或摘要；与注入路径共用会话行锁。
+        if has_personal_context(db, session.id):
+            raise AppError(
+                ErrorCode.VALIDATION, "此会话已使用个人记忆，不能转为团队共享，请新建共享会话"
+            )
     # 收回共享前：pending_confirm 作者是协作者时拒绝收回——避免协作者卡成孤儿
     # （会话被卡阻塞无法删除/续用，且协作者已不可确认——P4 修复）。
     if (

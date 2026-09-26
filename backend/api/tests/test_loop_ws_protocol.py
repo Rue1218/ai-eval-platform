@@ -141,6 +141,100 @@ def test_assistant_attempt_latency_is_projected_without_estimating_old_records()
     assert all("latency_ms" not in item["data"] for item in legacy)
 
 
+@pytest.mark.parametrize("kind", ["context/compacted", "context/compaction_failed"])
+def test_summary_usage_projects_only_known_numeric_metadata(kind):
+    """成功与失败摘要独立公开用量，正文和供应商扩展不能进入公共帧。"""
+    original = fact(kind, seq=7, summary="PRIVATE SUMMARY", error="PRIVATE ERROR",
+                    latency_ms=120, usage={
+                        "prompt_tokens": 1000, "completion_tokens": 30, "total_tokens": 1030,
+                        "cached_tokens": 0, "cache_read_input_tokens": 50,
+                        "cache_creation_input_tokens": 20,
+                        "vendor_payload": {"content": "PRIVATE BODY"},
+                    })
+    before = deepcopy(original)
+    projections = project_fact(original)
+    expected_types = ["context.trimmed", "context.usage"] if kind == "context/compacted" else ["context.usage"]
+    assert [item["type"] for item in projections] == expected_types
+    usage = projections[-1]
+    assert usage["correlation"] == {"turn": 1, "step": 1, "source_seq": 7}
+    assert usage["data"] == {"latency_ms": 120, "usage": {
+        "prompt_tokens": 1000, "completion_tokens": 30, "total_tokens": 1030,
+        "cached_tokens": 0, "cache_read_input_tokens": 50, "cache_creation_input_tokens": 20,
+    }}
+    assert "PRIVATE" not in json.dumps(projections)
+    assert original == before
+    assert visible_frame(persistent_frame("s", 1, usage))["data"] == usage["data"]
+
+
+@pytest.mark.parametrize("usage", [None, {}, {"vendor_payload": "PRIVATE"}, {
+    "prompt_tokens": True, "completion_tokens": -1, "total_tokens": "12",
+    "cached_tokens": float("inf"), "cache_read_input_tokens": float("nan"),
+}])
+def test_summary_missing_or_invalid_usage_does_not_emit_zero_measurement(usage):
+    """仅有耗时或非法用量时不生成计量事件，不把未知用量伪装成零。"""
+    failed = fact("context/compaction_failed", usage=usage, latency_ms=100)
+    assert project_fact(failed) == []
+    succeeded = fact("context/compacted", usage=usage, latency_ms=100)
+    assert [item["type"] for item in project_fact(succeeded)] == ["context.trimmed"]
+
+
+def test_summary_legacy_usage_keeps_missing_latency_and_turn_unknown():
+    """旧摘要保留已知 token，不补造耗时或回合身份；明确零 token 仍为有效计量。"""
+    original = {"type": "context/compacted", "seq": 3, "session_id": "s", "ts": 1.0,
+                "data": {"usage": {"prompt_tokens": 0}, "latency_ms": True}}
+    usage = project_fact(original)[-1]
+    assert usage["type"] == "context.usage"
+    assert usage["data"] == {"usage": {"prompt_tokens": 0}}
+    assert usage["correlation"] == {"source_seq": 3}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("finish", ["stop", "length"])
+async def test_real_graph_summary_usage_has_own_turn_and_step_without_assistant_attempt(finish):
+    """真实图成功摘要及截断回退均按来源发布计量，不伪造独立助手尝试。"""
+    from app.agent.compaction import ContextCompactor
+    from app.agent.loop import TurnDependencies, build_agent
+    from app.agent.loop_settings import LoopSettings
+    from app.agent.loop_wiring import _prompt_tokens
+    from app.agent.runtime import AgentRuntime
+    from app.llm.loop_contracts import Done, TextDelta
+    from tests.test_loop_compaction import capacity, conversation, request_factory
+    from tests.test_loop_runtime import MemoryLog, ScriptedAdapter
+
+    messages, log, build = conversation(), MemoryLog(), request_factory()
+    log.append("user/message", {"content": messages[0]["content"]})
+    log.append("assistant/message", {"message": messages[1]})
+    provider = ScriptedAdapter(
+        [TextDelta("记忆：预算100元。"), Done(finish, usage={"prompt_tokens": 1000, "completion_tokens": 30})],
+        [TextDelta("继续工作。"), Done("stop", usage={"prompt_tokens": 100, "completion_tokens": 10})],
+    )
+    compact = ContextCompactor(log, provider, build, _prompt_tokens, capacity(build, messages))
+
+    async def prepare(history, effort):
+        """通过正式异步请求工厂触发摘要，不手工补造回合身份。"""
+        return await compact.prepare(history)
+
+    runtime = AgentRuntime(log, await build_agent(LoopSettings(dsh_max_steps=4)))
+    await runtime.submit(messages[-1]["content"], dependencies=TurnDependencies(
+        provider, request_factory=prepare, context_window=compact.context_window,
+    ))
+    await runtime.wait()
+    events = log.read()
+    summary = next(event for event in events if event["type"] in {
+        "context/compacted", "context/compaction_failed",
+    })
+    step = next(event for event in events if event["type"] == "step/start")["data"]
+    assert summary["data"]["turn"] == step["turn"]
+    assert summary["data"]["step"] == step["step"]
+    assert type(summary["data"]["latency_ms"]) is int and summary["data"]["latency_ms"] >= 0
+    usage = next(item for item in project_fact({**summary, "session_id": log.session_id})
+                 if item["type"] == "context.usage")
+    assert usage["correlation"] == {"turn": step["turn"], "step": step["step"], "source_seq": summary["seq"]}
+    assert usage["data"]["usage"] == {"prompt_tokens": 1000, "completion_tokens": 30}
+    assert len([event for event in events if event["type"] == "assistant/attempt_start"]) == 1
+    assert events[-1]["type"] == "turn/end" and events[-1]["data"]["reason"] == "completed"
+
+
 def test_failed_attempt_projects_safe_error_message_and_platform_code():
     """失败 Attempt 公开固定摘要和平台码，绝不投影上游错误正文。"""
     projected = project_fact(fact(
@@ -235,7 +329,7 @@ def test_catalog_matches_runtime_history_selection_and_legacy_attempts():
                {"role": "user", "content": "latest"}]
     selection = _history_selection(history, history[2:])
     catalog = event_schema_catalog()
-    assert catalog["catalog_version"] == 8
+    assert catalog["catalog_version"] == 10
     assert "task_plan/updated" in catalog["events"]
     validator = Draft202012Validator(catalog["events"]["assistant/attempt_start"]["schema"])
     legacy = {"turn": 1, "step": 1, "attempt_id": "a", "header_seq": 0,
@@ -383,3 +477,24 @@ def test_durability_cannot_be_overridden(kind, cursor):
     """类型词汇固定持久性，不能将控制帧错误加入语义流。"""
     with pytest.raises(ValueError):
         frame(kind, {}, session_id="s", cursor=cursor)
+
+
+def test_compaction_user_evidence_is_validated_and_never_projected():
+    """摘要附带原文仍是敏感模型资料，普通事件与诊断都不能透传。"""
+    from jsonschema import Draft202012Validator
+
+    from app.harness.security.loop_redaction import redact_event_for_transport
+
+    event = fact("context/compacted", version=1, summary="摘要 [m:0]",
+                 source_ids=["m:0"], user_evidence=[{"source_id": "m:0", "content": "PRIVATE-EVIDENCE"}],
+                 covered_messages=2, source_fingerprint="source", history_upto_seq=3)
+    schema = event_schema_catalog()["events"]["context/compacted"]["schema"]
+    validator = Draft202012Validator(schema)
+    validator.validate(event["data"])
+    assert list(validator.iter_errors({**event["data"], "source_ids": ["m:0", "m:0"]}))
+    assert list(validator.iter_errors({**event["data"], "user_evidence": [
+        {"source_id": "m:-1", "content": "invalid"},
+    ]}))
+    assert "PRIVATE-EVIDENCE" not in json.dumps(project_fact(event))
+    assert "PRIVATE-EVIDENCE" not in json.dumps(trace_frame(event, "s", source="history"))
+    assert "PRIVATE-EVIDENCE" not in json.dumps(redact_event_for_transport(event))
