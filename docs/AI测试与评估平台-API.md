@@ -4,16 +4,16 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V2.23 |
-| 本轮审查日期 | 2026-09-26（用例生成、保存确认、来源授权与任务执行修复） |
+| 文档版本 | V2.25 |
+| 本轮审查日期 | 2026-09-26（会话摘要失败回退的共享额度预留修复） |
 | WS v2 修订日期 | 2026-09-13（§4A，模型错误安全摘要） |
-| 对应 PRD | V1.43（功能唯一权威） |
+| 对应 PRD | V1.44（功能唯一权威） |
 | 对应设计规范 | V1.12（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.7.8（AgentLoop 单入口；JSON 仍以本文为准） |
 | 对应前端计划 | AgentLoop 前端计划 V0.5 |
 | 对应后端计划 | V1.5 |
 | 撰写日期 | 2026-08-18 |
-| 本轮修订 | 2026-09-16：V2.9 落地准备阶段三类专家、固定版本成果引用、正文校验及前端成果投影。J1 完整修订链、正式资产/报告引用和 J2/J3 仍未实现。 |
+| 本轮修订 | 2026-09-26：V2.25 修复摘要异常或内部超时回退原文时提前释放主回答额度的问题；保持 V2.24 自动摘要事实、通知和仪表契约。 |
 | 最近修订 | 2026-09-03：V1.67 混合引擎执行落地（H2 Workflow DAG / H3 Agent TAOR）：恢复持久事件 `tool_call` / `tool_result`（payload 见 §4.3，ToolCard 只渲染脱敏摘要，观察全文不进任何事件）；`response.completed` 的 `engine` 从「分流结论」升级为「真实执行引擎」——`workflow`（H2，W0–W7 硬编码 DAG）与 `agent`（H3，plan→discover→orchestrator⇄tools 单图内 TAOR）均已真实执行，`agent_id` 审计随 Worker 目录（§3.6.3）供归属核验；`thought` / `tool_progress` / `tool_output_delta` / `confirm` / `clarify` 仍不产生。历史 `ws_events` 中的旧工具事件仍不重放。 |2026-09-03：V1.66 混合引擎 H1 Router 审计契约：`response.completed` payload 新增可选 `engine` / `router_confidence` / `router_reason`（仅 `hybrid_engine_enabled=true` 时出现，旧客户端忽略未知字段即可）；新增 `GET /api/agents` Worker 只读目录（§3.6.3）。本版不新增 WS 事件名、不恢复 `thought` / `tool_*`；`workflow` / `agent` 引擎在 H1 阶段降级按 `chat` 执行，`engine` 如实记录分流结论并经 `router_reason` 标注降级。2026-09-02：V1.65 工具契约加固（T1–T3）：JSON Schema 子集新增 `minItems`/`maxItems` 并为 8 处数组参数补上限；`output_schema` 从装饰字段升级为强制契约（注册期拒绝未声明，运行期按声明比对展示投影）；`platform.tasks` 三工具补全 `output_schema`；移除 `/api/mcp/tools/{name}/code` 端点与 `code_snippet` 字段。2026-08-28：V1.53 `web_fetch` 直抓路径接入 trafilatura 正文提取：可读性算法识别文章主体，保留标题层级/链接/图片/表格，未安装或提取失败降级回内置 `_TextExtractor`；提取真实产出 Markdown 时才声明 `format=markdown`（§4.3.1）。V1.52 优化 `web_fetch` 长文完整性与卡片预览：模型正文预算 8,000→60,000 字符，卡片预览与 `read` 同源对齐 `TOOL_PREVIEW_MAX_CHARS` 并随 `web.preview_limit_chars` 下发，直接抓取字节窗口 256KB→1MB（§4.3.1）。2026-08-27：V1.51 新增持久事件 `session_title`（§4.3）与会话标题 AI 生成契约（§4.3.2）：默认标题会话首条消息后由 Agent 协议档弱结构化生成标题并落库广播，修复标题不持久化问题。V1.50 统一 Agent 文本附件 staging 与 `read` 的 20MB 边界；`read` 模型窗口为 2,000 行 / 600,000 字符。V1.49 协议档新增 `max_output_tokens`（256–131072，默认 8192），创建/更新/列表/详情均支持；Agent 模型调用从协议档读取输出上限，长文档总结/导出类任务可调大避免回答被截断。2026-08-26：V1.48 同轮多调用默认串行，灰度开启后仅 `read`/`web_search`/`web_fetch` 可并行，回填按原始 `call_id`。V1.47 新增 `GET /api/agent/metrics`，不含正文/参数，不新增 WS 事件。V1.46 明确 native 一次 ToolCall 结束当前上游响应，结果回填后再请求，不新增事件名。V1.45 思考链只下发可展示摘要，隐藏 CoT（`Here's a thinking process` / `Analyze User Input`）由服务端替换，不原样推给前端。V1.44 ToolCall 在执行前持久化，新增瞬态 `tool_progress` / `tool_output_delta`，并冻结原生工具的输出 Schema、权限边界和失败恢复字段。V1.43 思考增量允许合并下发；有思考链时 `think_final` 在 `response.completed` 之前。V1.42 Direct `/help`、未知斜杠与图内防御提示在业务事件后必须再发 `response.completed`（成功 `stop`，校验/防御 `error`），结束整轮生成态。V1.41 确认卡预填与 `confirm_ack` 入队前丢掉已删除的协议档/数据集/知识库 ID，避免 Worker 再报「协议档不存在或已删除」。V1.40 `/cancel` 与 `/stress` 按 §4.4 解禁（仍走 `user_message`）：`/cancel` 取消本会话非终态任务，`/stress` 发出质量任务确认卡且 `with_stress=true`，禁止 `kind=stress`。V1.39 原生工具卡片收起态副标题统一为 `ToolCall`，不在卡片摘要区回显文件路径、命令或写入内容；详细参数仍在展开区展示。V1.38 明确原生基础 ToolCall 卡片使用英文工具名，展开区统一显示 `ToolCall` 与 `输出`，文件、命令和代码/文档结果使用行号展示；MCP/平台短工具仍按下方中文名映射。2026-08-24：V1.24 修复 Agent 附件上下文链路：服务端校验文件归属并在模型窗口解析文本、PDF、DOCX、XLSX，图片按三协议图文内容块发送；历史消息附件补齐安全元数据，前端可在刷新后继续预览。同步调整输入框内附件按钮与用户消息附件位序。V1.23 扩展 Agent 附件契约，支持图片、Word 文档与多附件拖拽上传；保留 `POST /api/files` 后再以既有 `file_id` 引用的消息链路，补充图片缩略图、PDF/文本预览与 Office 文件打开/下载说明。V1.22 修复 V1.21 遗留：§4.4 标题「仅此三条」改「仅此四条」、§9 禁止清单「第四种」改「第五种」并补四类上行事件枚举、§4.3 `tool_result.source` 语义对齐 M7 `Observation.source`（溯源标识字符串，非 short\|long 枚举）、§4.3 共享流规则补 clarify/plan/confirm 持久化广播说明、§4.4 clarify 多副本限制注明、§9 Ask/Plan 补注非 Harness plan 事件；V1.20 及更早版本沿用历史修订记录。 |
 | 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
 
@@ -3677,3 +3677,43 @@ Task 使用已有 `claimed_by_worker_id / claim_expires_at / attempt` 字段记�
 - `frontend/src/views/Cases.vue`、`frontend/src/api/{http,types}.ts`、`frontend/nginx.conf`：真实生成、完整编辑保存、并发状态、策略名称、请求等待与实际导出。
 - `backend/api/tests/{test_task_creation_audit,test_cases_audit,test_casegen,test_cases_schema,test_batch_save_delete}.py`、Worker 租约与用例测试、`frontend/tests/e2e/casesAudit.spec.ts`：对应缺陷回归。
 - `docs/AI测试与评估平台-用例生成审查修复记录.md`：本轮验证证据与未验证边界。
+
+## V2.24 AgentLoop v2 自动摘要与上下文回放（2026-09-26）
+
+本节仅适用于 `agent_loop_v2`，与历史 `sessions.compact_summary`、`/compact` 或 legacy ContextMeter 契约分开。无需新增 REST 路径或数据库表列；摘要与覆盖边界写入当前运行的既有持久事实日志，原始消息和工具结果保持不变。
+
+### 摘要触发、输入与失败语义
+
+- 每次主模型调用前按同源序列化估算检查请求输入；可用输入预算扣除输出上限与已有步骤收尾提示预留。达到该预算的 85% 时自动摘要，压缩后目标为预算的 65% 以内。最新用户输入和最近完整消息/工具单元优先保留；不拆分工具调用与结果、不截断用户原文。
+- 摘要模型读取已有摘要和新覆盖的原始历史，源内容超预算时分批，每回合最多 3 次摘要调用。摘要调用复用当前已授权协议档与共享调用预算，计入真实调用次数；不执行工具、不注入内部推理、不透明协议状态或图片 base64，图片只给出未解读的占位说明。
+- 摘要必须收到完整成功终态且正文非空才可提交；取消、异常、截断、空输出或意外工具调用不得推进已覆盖边界。摘要失败时，若原请求仍在硬预算内则继续使用原文；否则返回 `BUDGET_EXCEEDED`，不得静默删除旧消息以继续调用。已提交原始事实始终保留。
+- 成功摘要注入非缓存的系统补充段，`request.messages` 仍为持久原始历史的有序子集；请求头和历史选择元信息应能重建实际输入。后续回合与运行时重建恢复相同摘要及覆盖边界。本期不提供跨会话长期记忆抽取或检索。
+
+### 内部事实与公开投影
+
+新增内部事实 `context/compacted`，持久保存摘要、覆盖源边界及生成/预算元信息；该事实不是公开 WS 事件名。前端继续接收既有持久事件 `context.trimmed`，`data.reason="summary"`，只投影 `dropped`、`kept`、`in_scope_total`、`limit` 等既有窗口元信息。摘要正文、摘要请求源、推理与供应商协议状态不得随该通知外发。
+
+事实目录版本增至 8。`context/compacted.data` 的 `version=1`、`summary`、`covered_messages`、`source_fingerprint`、`history_upto_seq` 为必需字段；`previous_summary_seq` 指向上一份摘要，`usage` 保留实际供应商用量。来源指纹以持久事实派生消息为准，不能使用 `read_image` 仅驻当前图的图像块计算。`context/compaction_failed` 仅保存安全失败分类与已知用量，不保存未完成摘要。共享预算为摘要所属运行预留一次正常回答，并在正常调用时消费、取消或回合关闭时释放；其他并发专家不能占用该预留。
+
+`assistant.start.data.request_summary.context_meter` 新增可选 `compacted: boolean`，表示**该次实际请求**是否注入会话摘要；旧事实缺失该字段时不推断已经压缩。`breakdown.memory_files` 保留兼容键名，改为包含本次实际注入会话摘要的估算 token；前端标签为“会话记忆”。同一摘要占用不能重复计入 `system_prompt`，六项仍严格合计 `input_tokens`。未注入摘要或记忆内容时该项为 `0`；`reserved_output_tokens` 仍在 breakdown 之外。
+
+### 修改代码文件与作用清单
+
+- `backend/api/app/agent/compaction.py`：摘要预算、源窗口选择、模型流完整性校验和持久摘要投影。
+- `backend/api/app/agent/{loop,loop_wiring,loop_presentation}.py`：异步模型前准备、摘要系统段、共享调用预算及真实仪表来源。
+- `backend/api/app/harness/contracts/loop_events.py`、`backend/api/app/agent/events.py`：内部事实目录与安全 `context.trimmed` 投影。
+- `backend/api/tests/test_loop_compaction.py`：成功/失败摘要、历史恢复、工具配对、预算、取消及多协议输入回归。
+- `backend/api/app/agent/model_budget.py`：共享并发下的主回答额度预留与释放。
+- `backend/api/tests/test_loop_compaction_pg.py`、`test_loop_wiring.py`、`test_loop_ws_protocol.py`：真实 PG 句柄恢复/会话隔离（需显式测试库）、装配预检与事实目录契约回归。
+- `frontend/src/api/agentLoopTypes.ts`、`frontend/src/components/agent/loop/LoopContextMeter.vue`：兼容类型、会话记忆 token 标签与压缩状态。
+- `docs/AI测试与评估平台-PRD.md`：当前会话摘要范围、失败行为与长期记忆未交付边界。
+
+## V2.25 摘要失败回退的共享额度预留（2026-09-26）
+
+摘要供应商异常或内部超时后，若原请求仍可容纳并回退继续回答，必须保留该运行的正常回答额度，排队专家不得抢占。仅在正式请求准入时消费，或压缩准备最终失败、外部取消、回合资源关闭时释放；已派发的失败摘要仍计入真实调用次数。正式请求等待模型槽位期间失败或取消，也释放尚未消费的预留。
+
+### 修改代码文件与作用清单
+
+- `backend/api/app/agent/model_budget.py`：摘要流异常不再提前释放主回答预留，正式请求异常清理保持生效。
+- `backend/api/app/agent/compaction.py`：明确准备终止与摘要失败回退的预留生命周期。
+- `backend/api/tests/test_loop_compaction.py`：新增供应商异常、真实内部超时与排队专家竞争回归，并覆盖回退后关闭和硬预算超限终止释放。

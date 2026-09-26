@@ -36,7 +36,7 @@ from app.session_access import require_visible_session
 from app.workspace_service import resolve_session_sandbox
 
 from .experts import ExpertDef, resolve_expert
-from .loop import TurnDependencies
+from .loop import STEP_NOTICE_TOKEN_RESERVE, TurnDependencies
 
 LOOP_SYSTEM = """你是 AI 测试与评估平台助手，通过已提供的原生工具帮助用户完成任务。
 
@@ -508,16 +508,6 @@ async def _build_dependencies(service, entry, actor_id: str, data: dict, resourc
 
         segments += (SystemSegment(text=output_instruction(preparation_contract["kind"]), cacheable=False),)
 
-    def request_factory(messages, effort):
-        """窗口、思考档位与供应商转换同源，记录可重建的窗口边界和摘要。"""
-        request, window = _window_request(profile, segments, specs, messages, effort, context_window)
-        if window["dropped"]:
-            events = entry.log.read()
-            entry.log.append("context/trimmed", {
-                **window, "history_upto_seq": events[-1]["seq"] if events else -1,
-            })
-        return request
-
     # 首个请求在 user/message 提交前完整预检；附件展开后的正文也必须计入预算。
     from app.harness.memory.agent_messages import derive_messages
 
@@ -533,7 +523,6 @@ async def _build_dependencies(service, entry, actor_id: str, data: dict, resourc
         messages = history
     messages.append({"role": "user", "content": data.get("_model_content", data["content"])})
     effort = profile.config.reasoning_effort if profile.config.reasoning_enabled else "off"
-    initial, _ = _window_request(profile, segments, specs, messages, effort, context_window)
     if budget is not None:
         from app.agent.model_budget import BudgetedAdapter
 
@@ -541,6 +530,22 @@ async def _build_dependencies(service, entry, actor_id: str, data: dict, resourc
         if not isinstance(budget_run_id, str) or not budget_run_id:
             budget_run_id = f"root:{entry.log.session_id}"
         adapter = BudgetedAdapter(adapter, budget, budget_run_id)
+    from .compaction import ContextCompactor
+
+    def full_request(selected, summary):
+        """摘要作为非缓存历史资料注入；消息仍是持久原文的有序子集。"""
+        return _full_request(profile, segments, specs, selected, effort, summary)
+
+    # 先包装共享预算再交给摘要器，摘要与主回答计入同一个并发/调用账本。
+    compactor = ContextCompactor(entry.log, adapter, full_request, _prompt_tokens, context_window,
+                                reserve=STEP_NOTICE_TOKEN_RESERVE)
+    resources.append(compactor)
+    initial = compactor.preflight(messages)
+
+    async def request_factory(messages, _effort):
+        """回合内恢复持久摘要，必要时先压缩，再构建真实模型请求。"""
+        return await compactor.prepare(messages)
+
     return TurnDependencies(adapter=adapter, scheduler=scheduler, request=initial,
                             request_factory=request_factory, context_window=context_window,
                             tool_transports=tool_transports,
@@ -649,6 +654,18 @@ def _prompt_breakdown(
         categories["system_prompt"] += tokens(payload.get("system", ""))
         categories["conversation_messages"] += tokens(payload.get("messages", []))
 
+    from .compaction import SUMMARY_PREFIX
+
+    plain_segments = tuple(segment for segment in request.system_segments
+                           if not segment.text.startswith(SUMMARY_PREFIX))
+    if len(plain_segments) != len(request.system_segments):
+        # 对同一 wire 请求移除真实摘要后取差，避免把历史存储量当作模型记忆用量。
+        plain = replace(request, system_segments=plain_segments,
+                        system="\n\n".join(segment.text for segment in plain_segments))
+        memory_tokens = min(categories["system_prompt"], max(0, _prompt_tokens(request) - _prompt_tokens(plain)))
+        categories["system_prompt"] -= memory_tokens
+        categories["memory_files"] = memory_tokens
+
     total = _prompt_tokens(request) if input_tokens is None else input_tokens
     delta = total - sum(categories.values())
     if delta >= 0:
@@ -752,41 +769,15 @@ def _drop_incompatible_protocol_state(request):
     return replace(request, messages=messages), dropped_indices
 
 
-def _window_request(profile, segments, specs, messages, effort, context_window):
-    """纯函数预检和裁剪完整 user 回合；换模型仅降级不可移植的签名块。"""
-    from .loop import STEP_NOTICE_TOKEN_RESERVE
+def _full_request(profile, segments, specs, messages, effort, summary=""):
+    """装配完整输入和非缓存摘要；换模型只降级不可移植的签名块。"""
+    from .compaction import SUMMARY_BOUNDARY
 
-    if type(context_window) is not int or context_window <= 0:
-        raise AppError(ErrorCode.VALIDATION, "模型上下文窗口配置非法")
     config = replace(profile.config, reasoning_enabled=effort != "off",
                      reasoning_effort=effort if effort != "off" else "medium")
+    system_segments = segments + (
+        (SystemSegment(SUMMARY_BOUNDARY + summary, cacheable=False),) if summary else ()
+    )
     request = resolve_request(replace(profile, config=config), messages=messages,
-                              system_segments=segments, tools=specs)
-    request, protocol_state_dropped_indices = _drop_incompatible_protocol_state(request)
-    budget = context_window - request.max_tokens - STEP_NOTICE_TOKEN_RESERVE
-    if budget <= 0:
-        raise AppError(ErrorCode.BUDGET_EXCEEDED, "模型输出预算与平台收尾预留占满上下文窗口")
-    groups = []
-    for message in request.messages:
-        if message["role"] == "user" or not groups:
-            groups.append([])
-        groups[-1].append(message)
-    dropped = 0
-    selected = request
-    tokens = _prompt_tokens(selected)
-    while len(groups) > 1 and tokens > budget:
-        dropped += len(groups.pop(0))
-        selected = replace(request, messages=[message for group in groups for message in group])
-        tokens = _prompt_tokens(selected)
-    if tokens > budget:
-        raise AppError(ErrorCode.BUDGET_EXCEEDED, "当前完整工具回合超出上下文预算")
-    return selected, {
-        "reason": "context_budget", "dropped": dropped, "kept": len(selected.messages),
-        "in_scope_total": len(messages), "limit": context_window,
-        "window_start": dropped, "window_end": len(messages),
-        "messages_fingerprint": _hash({"messages": selected.messages}),
-        "estimated_input_tokens": tokens, "reserved_output_tokens": request.max_tokens,
-        "reserved_step_notice_tokens": STEP_NOTICE_TOKEN_RESERVE,
-        "protocol_state_dropped": len(protocol_state_dropped_indices),
-        "protocol_state_dropped_indices": protocol_state_dropped_indices,
-    }
+                              system_segments=system_segments, tools=specs)
+    return _drop_incompatible_protocol_state(request)[0]

@@ -81,6 +81,7 @@ _SOURCE_TYPES.update({
     "question/asked": "question.requested",
     "question/answered": "question.resolved",
     "context/trim": "context.trimmed",
+    "context/compacted": "context.trimmed",
 })
 _OUTCOMES = {
     "allowed": "allow", "denied": "deny", "allowed-always": "always",
@@ -253,6 +254,11 @@ def project_fact(event: dict) -> list[dict]:
             data["decision"] = outcome
     if event_type == "runtime.error":
         data = {"code": "INTERNAL", "message": "回合运行失败"}
+        # 仅接收请求准备阶段显式写入的安全业务错误；旧 graph_exception 仍使用固定摘要。
+        if source.get("code") == "BUDGET_EXCEEDED":
+            data = {"code": "BUDGET_EXCEEDED", "message": "上下文或模型调用预算不足，原始历史已保留，请缩小输入或工具读取范围"}
+        elif source.get("code") == "VALIDATION":
+            data = {"code": "VALIDATION", "message": "会话上下文校验失败，原始历史已保留"}
     projections = [(event_type, data)]
     if event_type == "assistant.message":
         end_data = {
@@ -343,6 +349,10 @@ def trace_frame(event: dict, session_id: str, *, source: str) -> dict:
             public["history_selection"],
             "algorithm indices message_count input_fingerprint transformations",
         )
+    if event["type"] == "context/compacted":
+        # 摘要是模型资料，普通轨迹只展示压缩边界与用量，不能泄漏其正文。
+        public = _pick(public, "version reason covered_messages previous_summary_seq history_upto_seq "
+                              "dropped kept in_scope_total limit input_tokens_before input_tokens_after model profile_id usage")
     return frame("trace.event", {
         "source": source,
         "event": {**{key: safe[key] for key in (
