@@ -37,6 +37,8 @@ import {
   type DatasetFolder,
   type CaseImportResult,
   type TestCase,
+  type TestCaseInput,
+  type CaseGenerateInput,
   type WhitelistItem,
   type DispatchOverview,
   type DispatchWorker,
@@ -819,16 +821,17 @@ export const api = {
       return data
     },
     // 批量保存用例编辑结果，后端负责已确认用例集的不可编辑校验。
-    async saveCases(id: string, cases: TestCase[]): Promise<TestCase[]> {
+    async saveCases(id: string, cases: TestCaseInput[]): Promise<TestCase[]> {
       if (getDataMode() === 'mock') {
-        mockStore.cases = cases
-        return cases
+        const saved = cases.map((item, index) => ({ ...item, id: item.id || `c-${Date.now()}-${index}` })) as TestCase[]
+        mockStore.cases = saved
+        return saved
       }
       const { data } = await http.put(`/api/case-sets/${id}/cases`, { cases })
       return Array.isArray(data) ? data : data.items || cases
     },
     // 仅生成未落库候选；调用方需要创建用例集并保存候选后才可显示创建成功。
-    async generateCases(payload: Record<string, unknown>): Promise<TestCase[]> {
+    async generateCases(payload: CaseGenerateInput): Promise<TestCase[]> {
       if (getDataMode() === 'mock') {
         return [{
           id: 'c-ai-' + Date.now(),
@@ -840,7 +843,8 @@ export const api = {
           precondition: '服务已就绪',
         }]
       }
-      const { data } = await http.post('/api/case-sets/ai-generate', payload)
+      // 服务端模型允许等待 120 秒，额外预留响应解析与传输时间。
+      const { data } = await http.post('/api/case-sets/ai-generate', payload, { timeout: 130000 })
       return Array.isArray(data) ? data : data.items || []
     },
     // 契约 POST /api/case-sets/{id}/ai-fill：行级 AI 补全，仅返回未落库候选，需随“保存修改”写入。
@@ -853,7 +857,7 @@ export const api = {
           test_type: '自动化回归',
         }))
       }
-      const { data } = await http.post(`/api/case-sets/${id}/ai-fill`, payload)
+      const { data } = await http.post(`/api/case-sets/${id}/ai-fill`, payload, { timeout: 130000 })
       return Array.isArray(data) ? data : data.items || []
     },
     async confirmSet(id: string, payload: { ok: boolean; edits?: TestCase[]; mapping_target?: 'dataset' | 'gold_qa'; target_id?: string }): Promise<void> {

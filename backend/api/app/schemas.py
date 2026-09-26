@@ -2,7 +2,7 @@
 
 from typing import Any, Literal
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class ApiModel(BaseModel):
@@ -878,7 +878,7 @@ class CaseIn(ApiModel):
 class CasesPayload(ApiModel):
     """批量保存用例请求；单次请求内用例 id 不允许重复，避免 upsert 目标歧义。"""
 
-    cases: list[CaseIn] = Field(min_length=1, max_length=20_000)
+    cases: list[CaseIn] = Field(max_length=20_000)
 
     @model_validator(mode="after")
     def validate_unique_case_id(self) -> "CasesPayload":
@@ -923,6 +923,15 @@ class CaseAiGenerateIn(ApiModel):
     strategy_weights: dict[str, int] | None = None
     complexity: str | None = Field(default=None, max_length=32)
     max_count: int = Field(default=45, ge=1, le=100)
+
+    @field_validator("strategy_weights", mode="before")
+    @classmethod
+    def validate_weights(cls, value: Any) -> Any:
+        """先检查原始整数百分比，避免布尔值或小数被类型转换后放行。"""
+        from shared.casegen import validate_strategy_weights
+
+        validate_strategy_weights(value)
+        return value
 
     @model_validator(mode="after")
     def validate_source(self) -> "CaseAiGenerateIn":

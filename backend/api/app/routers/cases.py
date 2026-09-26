@@ -15,6 +15,7 @@ import io
 import json
 import time
 import zipfile
+from datetime import UTC
 from typing import Any
 from urllib.parse import quote
 from xml.sax.saxutils import escape
@@ -51,7 +52,6 @@ from ..models import (
     CaseSet,
     Dataset,
     DatasetRow,
-    StoredFile,
     Task,
     User,
     utcnow,
@@ -72,6 +72,7 @@ from ..schemas import (
     FolderIn,
     FolderOut,
 )
+from ..task_policy import require_owned_source_file
 from ._common import assert_folder_exists, client_ip, get_folder_or_404
 
 router = APIRouter(prefix="/api/case-sets", tags=["case-sets"])
@@ -124,18 +125,36 @@ _XLSX_MEDIA_TYPE = xlsx_media_type()
 _XMIND_MEDIA_TYPE = "application/vnd.xmind.workbook"
 
 
-def _get_case_set_or_404(db: Session, set_id: str) -> CaseSet:
+def _get_case_set_or_404(db: Session, set_id: str, *, lock: bool = False) -> CaseSet:
     """读取用例集或抛出 NOT_FOUND。"""
-    case_set = db.query(CaseSet).filter(CaseSet.id == set_id).first()
+    query = db.query(CaseSet).filter(CaseSet.id == set_id)
+    if lock:
+        query = query.populate_existing().with_for_update()
+    case_set = query.first()
     if not case_set:
         raise AppError(ErrorCode.NOT_FOUND, "用例集不存在")
     return case_set
 
 
 def _assert_editable(case_set: CaseSet) -> None:
-    """confirmed 用例集为版本快照，任何写操作一律拒绝。"""
-    if case_set.status == "confirmed":
-        raise AppError(ErrorCode.VALIDATION, "已确认的用例集不可修改")
+    """终态或超过确认期限的用例集不能再修改或确认。"""
+    if case_set.status in {"confirmed", "cancelled"}:
+        raise AppError(ErrorCode.VALIDATION, "用例集已终态，不可修改")
+    deadline = case_set.expires_at
+    if deadline and deadline.replace(tzinfo=deadline.tzinfo or UTC) <= utcnow():
+        raise AppError(ErrorCode.VALIDATION, "用例确认已超时，请重新生成")
+
+
+def _lock_editable_case_set(db: Session, set_id: str) -> tuple[CaseSet, Task | None]:
+    """与超时扫描保持 CaseSet→Task 锁序，并在持锁后复验编辑状态。"""
+    case_set = _get_case_set_or_404(db, set_id, lock=True)
+    task = None
+    if case_set.task_id:
+        task = db.query(Task).filter(Task.id == case_set.task_id).populate_existing().with_for_update().first()
+    _assert_editable(case_set)
+    if task is not None and task.status != "awaiting_case_confirm":
+        raise AppError(ErrorCode.VALIDATION, "关联任务已不在等待确认状态")
+    return case_set, task
 
 
 def _case_to_item(case: CaseItem) -> dict[str, Any]:
@@ -155,7 +174,7 @@ def _case_to_item(case: CaseItem) -> dict[str, Any]:
         "mapped": bool(case.mapped),
         "pending_complete": bool(case.pending_complete),
     }
-    item.update(case.extras or {})
+    item.update({key: value for key, value in (case.extras or {}).items() if key not in _RESERVED_EXTRA_KEYS})
     return item
 
 
@@ -213,6 +232,7 @@ def _upsert_case(
         )
         db.add(case)
     else:
+        case.sort_order = sort_order
         case.strategy = case_in.strategy
         case.priority = case_in.priority
         case.module = case_in.module
@@ -419,10 +439,9 @@ def ai_generate_cases(
     user: User = Depends(get_current_user),
 ):
     """按 Agent 协议档生成候选用例（新八字段格式 + 新优先级）；候选不落库。"""
-    _ = user
     source_text = body.source_text or ""
     if body.source_doc_id:
-        source_text = _read_stored_file_text(db, body.source_doc_id)
+        source_text = _read_stored_file_text(db, body.source_doc_id, user.id)
     if not source_text.strip():
         raise AppError(ErrorCode.VALIDATION, "需要提供需求文档内容 source_text 或来源文档 source_doc_id")
     source_text = source_text[:SOURCE_MAX_CHARS]
@@ -435,26 +454,27 @@ def ai_generate_cases(
         cases = parse_cases(result.text)
     except (ValueError, json.JSONDecodeError) as exc:
         raise AppError(ErrorCode.UPSTREAM, "模型输出无法解析为用例") from exc
-    cases = rebalance_by_strategy(cases, max_count)
+    cases = rebalance_by_strategy(cases, max_count, weights=weights)
     return {"items": cases}
 
 
-def _read_stored_file_text(db: Session, file_id: str) -> str:
+def _read_stored_file_text(db: Session, file_id: str, user_id: str) -> str:
     """读取来源文档正文（文本/xlsx），用于 AI 用例生成的素材。"""
     from pathlib import Path
 
-    stored = db.query(StoredFile).filter(StoredFile.id == file_id).first()
-    if not stored or not stored.storage_path:
+    stored = require_owned_source_file(db, file_id, user_id)
+    if not stored.storage_path:
         raise AppError(ErrorCode.NOT_FOUND, "来源文档不存在或已删除")
     path = Path(stored.storage_path)
     if not path.exists():
         raise AppError(ErrorCode.NOT_FOUND, "来源文档已从磁盘移除")
-    suffix = path.suffix.lower()
-    if suffix in {".xlsx", ".xlsm"}:
+    suffix = Path(stored.filename).suffix.lower()
+    if suffix in {".xlsx", ".xlsm"} or stored.kind in {"xlsx", "xlsm"}:
         from openpyxl import load_workbook
 
         lines: list[str] = []
-        wb = load_workbook(path, read_only=True, data_only=True)
+        # 上传存储使用 .bin；通过字节流避免 openpyxl 按内部路径后缀拒绝合法工作簿。
+        wb = load_workbook(io.BytesIO(path.read_bytes()), read_only=True, data_only=True)
         try:
             for sheet in wb.worksheets:
                 for row in sheet.iter_rows(values_only=True):
@@ -516,8 +536,7 @@ def update_case_set(
     user: User = Depends(get_current_user),
 ):
     """按提供的字段更新用例集；column_schema 整体替换，confirmed 集拒绝修改。"""
-    case_set = _get_case_set_or_404(db, set_id)
-    _assert_editable(case_set)
+    case_set, _task = _lock_editable_case_set(db, set_id)
     values = body.model_dump(exclude_unset=True)
     if "folder_id" in values:
         folder_id = values.pop("folder_id")
@@ -552,8 +571,7 @@ def save_cases(
     user: User = Depends(get_current_user),
 ):
     """按用例 id 批量 upsert 用例行与扩展列；id 缺省时服务端生成，保存后重算 generated_count。"""
-    case_set = _get_case_set_or_404(db, set_id)
-    _assert_editable(case_set)
+    case_set, _task = _lock_editable_case_set(db, set_id)
     existing = {
         case.id: case
         for case in db.query(CaseItem).filter(CaseItem.case_set_id == case_set.id).all()
@@ -573,9 +591,10 @@ def save_cases(
         _upsert_case(db, case_set, case_in, target, index)
     db.flush()
     _refresh_generated_count(db, case_set)
-    db.commit()
     cases = _list_cases(db, case_set)
-    return {"items": [_case_to_item(case) for case in cases], "total": len(cases)}
+    case_set.checks = _selfcheck_items([_case_to_item(case) for case in cases])
+    db.commit()
+    return {"items": [_case_to_item(case) for case in cases], "total": len(cases), "checks": case_set.checks}
 
 
 @router.post("/{set_id}/confirm", response_model=CaseSetOut)
@@ -591,9 +610,7 @@ def confirm_case_set(
     edits / mapping_target / target_id 为契约预留字段，仅记入审计明细；
     实际映射入库走 POST /{set_id}/map。
     """
-    case_set = _get_case_set_or_404(db, set_id)
-    if case_set.status in {"confirmed", "cancelled"}:
-        raise AppError(ErrorCode.VALIDATION, "用例集已终态，请勿重复操作")
+    case_set, task = _lock_editable_case_set(db, set_id)
     if body.ok:
         case_set.status = "confirmed"
         case_set.confirmed_count = case_set.generated_count
@@ -602,11 +619,9 @@ def confirm_case_set(
         case_set.status = "cancelled"
         task_status = "cancelled"
     # 仅当关联任务仍在等待用例确认时联动流转，其余状态由任务域自行负责
-    if case_set.task_id:
-        task = db.query(Task).filter(Task.id == case_set.task_id).first()
-        if task and task.status == "awaiting_case_confirm":
-            task.status = task_status
-            task.finished_at = utcnow()
+    if task:
+        task.status = task_status
+        task.finished_at = utcnow()
     db.add(
         AuditLog(
             user_id=user.id,
@@ -636,15 +651,11 @@ def cancel_case_set(
     user: User = Depends(get_current_user),
 ):
     """废弃用例集；关联的 awaiting_case_confirm 任务同步置 cancelled。"""
-    case_set = _get_case_set_or_404(db, set_id)
-    if case_set.status in {"confirmed", "cancelled"}:
-        raise AppError(ErrorCode.VALIDATION, "用例集已终态，请勿重复操作")
+    case_set, task = _lock_editable_case_set(db, set_id)
     case_set.status = "cancelled"
-    if case_set.task_id:
-        task = db.query(Task).filter(Task.id == case_set.task_id).first()
-        if task and task.status == "awaiting_case_confirm":
-            task.status = "cancelled"
-            task.finished_at = utcnow()
+    if task:
+        task.status = "cancelled"
+        task.finished_at = utcnow()
     db.add(
         AuditLog(
             user_id=user.id,
@@ -669,19 +680,34 @@ def map_cases(
     user: User = Depends(get_current_user),
 ):
     """批量映射用例到目标基准数据集；黄金 QA 域（M3）尚未上线，统一返回 VALIDATION。"""
-    case_set = _get_case_set_or_404(db, set_id)
+    case_set = _get_case_set_or_404(db, set_id, lock=True)
+    if case_set.status != "confirmed":
+        case_set, _task = _lock_editable_case_set(db, set_id)
     if body.target == "gold_qa":
         raise AppError(ErrorCode.VALIDATION, "知识库域尚未上线，暂不支持映射到黄金 QA")
-    dataset = db.query(Dataset).filter(Dataset.id == body.target_id).first()
+    dataset = db.query(Dataset).filter(Dataset.id == body.target_id).populate_existing().with_for_update().first()
     if not dataset:
         raise AppError(ErrorCode.VALIDATION, "目标 ID 类型不匹配或不存在")
+    if dataset.active_version_id:
+        raise AppError(ErrorCode.VALIDATION, "目标数据集已有发布版本，请通过受控导入创建新版本")
+    if case_set.status != "confirmed":
+        _assert_editable(case_set)
     cases = _get_cases_by_ids(db, case_set, body.case_ids)
+    # 同一用例集和数据集分别持锁；重复请求或重复 case_ids 不产生重复映射行。
+    existing_ids = {
+        row.source_case_id for row in db.query(DatasetRow).filter(
+            DatasetRow.dataset_id == dataset.id,
+            DatasetRow.source_case_id.in_(body.case_ids),
+        ).all()
+    }
+    cases = list({case.id: case for case in cases}.values())
+    new_cases = [case for case in cases if case.id not in existing_ids]
     max_row_no = (
         db.query(func.max(DatasetRow.row_no)).filter(DatasetRow.dataset_id == dataset.id).scalar()
         or 0
     )
     pending_count = 0
-    for offset, case in enumerate(cases, start=1):
+    for offset, case in enumerate(new_cases, start=1):
         question = (case.name or "").strip()
         reference = (case.expected or "").strip()
         context = (case.precondition or "").strip() or None
@@ -701,6 +727,7 @@ def map_cases(
                 extras={"source_case_set_id": case_set.id},
             )
         )
+    for case in cases:
         case.mapped = True
     db.flush()
     # 按 dataset_rows 实况重算目标集行数与待补全行数
@@ -717,7 +744,7 @@ def map_cases(
                 "name": case_set.name,
                 "target": body.target,
                 "target_id": body.target_id,
-                "case_count": len(cases),
+                "case_count": len(new_cases),
                 "pending_count": pending_count,
             },
             ip=client_ip(request),
@@ -726,7 +753,7 @@ def map_cases(
     db.commit()
     return {
         "ok": True,
-        "mapped_count": len(cases),
+        "mapped_count": len(new_cases),
         "pending_count": pending_count,
         "dataset_id": dataset.id,
     }
@@ -741,7 +768,9 @@ def ai_fill_cases(
 ):
     """按 Agent 协议档补全指定用例缺失字段；返回 {id, ...补全字段} 候选，不直接落库。"""
     _ = user
-    _get_case_set_or_404(db, set_id)
+    case_set, _task = _lock_editable_case_set(db, set_id)
+    # 补全只生成候选，调用供应商期间释放行锁，避免阻塞取消和超时扫描。
+    db.commit()
     cases = (
         db.query(CaseItem)
         .filter(CaseItem.case_set_id == set_id, CaseItem.id.in_(body.case_ids))
@@ -751,23 +780,7 @@ def ai_fill_cases(
         raise AppError(ErrorCode.VALIDATION, "部分用例不存在")
 
     payload = json.dumps(
-        [
-            {
-                "id": case.id,
-                "strategy": case.strategy,
-                "priority": case.priority,
-                "module": case.module,
-                "submodule": case.submodule,
-                "feature_point": case.feature_point,
-                "name": case.name,
-                "precondition": case.precondition,
-                "steps": case.steps,
-                "expected": case.expected,
-                "test_type": case.test_type,
-                **(case.extras or {}),
-            }
-            for case in sorted(cases, key=lambda c: c.sort_order)
-        ],
+        [_case_to_item(case) for case in sorted(cases, key=lambda c: c.sort_order)],
         ensure_ascii=False,
     )
     fields_hint = (
@@ -784,7 +797,35 @@ def ai_fill_cases(
     )
     result = call_agent_model(db, system, user_prompt, temperature=0.2, max_tokens=8192)
     items = extract_json_array(result.text)
-    filled = [item for item in items if isinstance(item, dict) and item.get("id")]
+    # 模型仅能补全请求范围内的正文/扩展列，不能替换身份、流程状态或已有内容。
+    by_id = {case.id: _case_to_item(case) for case in cases}
+    allowed_fields = set(CaseIn.model_fields) - {"id"}
+    allowed_fields.update(
+        str(column["key"]) for column in case_set.column_schema or []
+        if isinstance(column, dict) and column.get("key") and column["key"] not in _RESERVED_EXTRA_KEYS
+    )
+    if body.fields is not None:
+        allowed_fields.intersection_update(body.fields)
+    filled = []
+    seen_ids: set[str] = set()
+    for item in items:
+        if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+            continue
+        case_id = item["id"]
+        if case_id not in by_id or case_id in seen_ids:
+            continue
+        updates = {
+            key: value for key, value in item.items()
+            if key in allowed_fields and not by_id[case_id].get(key)
+        }
+        try:
+            CaseIn.model_validate({**by_id[case_id], **updates})
+        except ValidationError:
+            continue
+        if updates:
+            filled.append({"id": case_id, **updates})
+            seen_ids.add(case_id)
+    _lock_editable_case_set(db, set_id)
     if not filled:
         raise AppError(ErrorCode.UPSTREAM, "模型未返回可识别的补全结果")
     return {"items": filled}
@@ -801,8 +842,7 @@ async def import_case_set(
 ):
     """从 Excel 导入用例行。mode=append 追加（同 id 则更新），replace 先清空再写入。"""
     case_set = _get_case_set_or_404(db, set_id)
-    if case_set.status in {"confirmed", "cancelled"}:
-        raise AppError(ErrorCode.VALIDATION, "用例集已终态，无法导入")
+    _assert_editable(case_set)
     if mode not in {"append", "replace"}:
         raise AppError(ErrorCode.VALIDATION, "mode 仅支持 append 或 replace")
     filename = (file.filename or "").lower()
@@ -815,6 +855,8 @@ async def import_case_set(
         raise AppError(ErrorCode.VALIDATION, "文件大小超过 10MB 上限")
 
     parsed, fmt, skipped = parse_cases_xlsx(content)
+    # 上传和解析期间不占业务行锁；写入前再获取最新状态并校验确认期限。
+    case_set, _task = _lock_editable_case_set(db, set_id)
     extra_keys: list[str] = []
     for item in parsed:
         extra_keys.extend((item.get("extras") or {}).keys())
@@ -846,7 +888,7 @@ async def import_case_set(
         imported += 1
     db.flush()
     _refresh_generated_count(db, case_set)
-    case_set.checks = _selfcheck_items(parsed)
+    case_set.checks = _selfcheck_items([_case_to_item(case) for case in _list_cases(db, case_set)])
     db.add(
         AuditLog(
             user_id=user.id,

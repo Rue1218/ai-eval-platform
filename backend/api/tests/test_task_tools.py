@@ -50,7 +50,7 @@ class _Query:
     def filter(self, *args, **kwargs):  # noqa: ANN002, ANN003
         return self
 
-    def with_for_update(self):
+    def with_for_update(self, **kwargs):
         return self
 
     def first(self):

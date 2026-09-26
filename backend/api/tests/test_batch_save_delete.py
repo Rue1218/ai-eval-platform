@@ -24,6 +24,14 @@ class _FakeQuery:
     def order_by(self, *args, **kwargs):
         return self
 
+    def populate_existing(self):
+        """兼容保存入口获取最新锁定行。"""
+        return self
+
+    def with_for_update(self):
+        """本桩仅覆盖删除语义，真实事务另由数据库回归验证。"""
+        return self
+
     def all(self):
         return self._rows
 

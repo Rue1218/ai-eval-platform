@@ -10,7 +10,8 @@
 
 import logging
 import time
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 from sqlalchemy import not_
 
@@ -25,7 +26,13 @@ from .events import push_ws
 from .models import CaseSet, Setting, Task, TaskEvent
 from .rag import run_rag
 from .stress import run_stress
-from .task_state import claim_running_task_for_terminal_write
+from .task_state import (
+    TASK_LEASE_SECONDS,
+    claim_running_task_for_terminal_write,
+    lease_expired,
+    recover_expired_task_leases,
+    task_lease_heartbeat,
+)
 from .testcase import run_testcase
 
 logging.basicConfig(level=logging.INFO)
@@ -173,22 +180,32 @@ def _expire_stale_case_confirmations(db) -> int:
         .filter(
             CaseSet.status == "generated",
             CaseSet.expires_at.isnot(None),
-            CaseSet.expires_at < now,
+            CaseSet.expires_at <= now,
         )
+        .with_for_update(skip_locked=True)
+        .populate_existing()
         .all()
     )
     if not stale:
         return 0
+    expired_count = 0
+    notifications: list[tuple[str, str | None]] = []
     for case_set in stale:
+        # 与 API 确认/废弃共享 CaseSet → Task 锁序，锁内复核截止时间及状态。
+        if case_set.status != "generated" or not lease_expired(case_set.expires_at, now):
+            continue
         case_set.status = "cancelled"
+        expired_count += 1
         if not case_set.task_id:
             continue
         task = (
             db.query(Task)
             .filter(Task.id == case_set.task_id, Task.status == "awaiting_case_confirm")
+            .with_for_update()
+            .populate_existing()
             .first()
         )
-        if task:
+        if task and task.status == "awaiting_case_confirm":
             task.status = "cancelled"
             task.finished_at = now
             task.progress = {**(task.progress or {}), "message": "用例确认超时，任务已自动取消"}
@@ -200,31 +217,31 @@ def _expire_stale_case_confirmations(db) -> int:
                     payload={"case_set_id": case_set.id},
                 )
             )
+            notifications.append((task.id, task.session_id))
     db.commit()
-    # 推送放事务外：批量加载关联任务后逐个通知，避免逐条查询造成 N+1
-    task_ids = [case_set.task_id for case_set in stale if case_set.task_id]
-    tasks_by_id = {task.id: task for task in db.query(Task).filter(Task.id.in_(task_ids)).all()}
-    for case_set in stale:
-        task = tasks_by_id.get(case_set.task_id)
-        if task and task.session_id:
+    # 只通知本次确实取消的任务，避免把已经成功的任务广播为超时。
+    for task_id, session_id in notifications:
+        if session_id:
             push_ws(
-                task.session_id,
+                session_id,
                 "progress",
                 {"percent": 100, "done": 1, "total": 1, "message": "用例确认超时，任务已自动取消"},
-                task_id=task.id,
+                task_id=task_id,
             )
-    logger.info("expired %d stale case set(s)", len(stale))
-    return len(stale)
+    logger.info("expired %d stale case set(s)", expired_count)
+    return expired_count
 
 
 def loop() -> None:
     """轮询评测与导入两条独立队列，二者各自受并发闸门和租约约束。"""
     last_expire_scan = 0.0
+    worker_id = uuid4().hex
     while True:
         db = SessionLocal()
         task_id: str | None = None
         import_claim: tuple[str, str] | None = None
         try:
+            recover_expired_task_leases(db)
             # 导入租约独立于 Task；先回收异常退出的领取，再按设置尝试领取一个作业。
             recover_expired_dataset_import_leases(db)
             import_claim = claim_next_dataset_import(db)
@@ -244,6 +261,9 @@ def loop() -> None:
                 if task:
                     task.status = "running"
                     task.started_at = datetime.now(UTC)
+                    task.claimed_by_worker_id = worker_id
+                    task.claim_expires_at = task.started_at + timedelta(seconds=TASK_LEASE_SECONDS)
+                    task.attempt = (task.attempt or 0) + 1
                     db.commit()
                     task_id = task.id
         except Exception:
@@ -257,7 +277,9 @@ def loop() -> None:
             print(f"[worker] dataset-import start import={import_id}", flush=True)
             run_dataset_import(import_id, lease_token)
         elif task_id:
-            _run_task(task_id)
+            with task_lease_heartbeat(task_id, worker_id) as active:
+                if active:
+                    _run_task(task_id)
         # 72h 超时扫描：节流执行，避免每秒全表扫（表量级小，代价可忽略）
         if time.monotonic() - last_expire_scan >= EXPIRE_SCAN_INTERVAL_S:
             last_expire_scan = time.monotonic()

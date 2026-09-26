@@ -56,6 +56,27 @@ def test_rebalance_trims_overweight_strategy():
     assert len(result) <= 45
 
 
+def test_rebalance_uses_requested_weights_and_excludes_zero_weight():
+    """全正向请求不能再被默认正向四成配额截断，零配额策略不得混入。"""
+    cases = [{"name": f"正向{i}", "strategy": "正向"} for i in range(20)]
+    cases += [{"name": "反向", "strategy": "反向"}]
+    result = casegen.rebalance_by_strategy(cases, 20, {"positive": 100})
+    assert len(result) == 20
+    assert all(case["strategy"] == "正向" for case in result)
+
+
+def test_parse_cases_removes_model_controlled_metadata():
+    """供应商输出不能伪造持久身份和映射状态，正常业务扩展列仍保留。"""
+    import json
+
+    result = casegen.parse_cases(json.dumps([{
+        "name": "正常登录", "strategy": "正向", "owner": "测试组",
+        "id": "victim", "case_set_id": "foreign", "mapped": True,
+        "pending_complete": False, "sort_order": 999, "extras": {"id": "nested"},
+    }]))
+    assert result == [{"name": "正常登录", "strategy": "正向", "owner": "测试组"}]
+
+
 def test_selfcheck_flags_missing_core_positive_and_negative():
     # 无正向用例 + 无反向用例：两条红字
     cases = [{"name": "边界值", "strategy": "边界"}]

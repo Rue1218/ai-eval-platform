@@ -145,11 +145,11 @@
               <template v-if="currentSet.status !== 'confirmed'">
                 <!-- 中频操作组 -->
                 <div class="action-btn-group">
-                  <button class="btn btn-secondary btn-md" aria-label="新增测试用例" @click="addCase">
+                  <button class="btn btn-secondary btn-md" :disabled="!canEditCases" aria-label="新增测试用例" @click="addCase">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
                     新增用例
                   </button>
-                  <button class="btn btn-secondary btn-md" aria-label="新增扩展属性列" @click="openAddColModal">
+                  <button class="btn btn-secondary btn-md" :disabled="!canEditCases" aria-label="新增扩展属性列" @click="openAddColModal">
                     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
                     新增列
                   </button>
@@ -162,7 +162,7 @@
                 <button
                   class="btn btn-save btn-md"
                   :class="{ dirty: hasUnsavedChanges, saved: justSaved }"
-                  :disabled="!hasUnsavedChanges || savingCases"
+                  :disabled="!canEditCases || !hasUnsavedChanges || savingCases"
                   title="快捷键 Ctrl/⌘ + S"
                   aria-label="保存用例修改"
                   @click="persistCases"
@@ -173,7 +173,7 @@
                 </button>
 
                 <!-- 主操作 CTA：确认入库 -->
-                <button class="btn btn-primary btn-md primary-cta btn-success-solid" :loading="confirmingSet" aria-label="确认入库用例集" @click="confirmCaseSet">
+                <button class="btn btn-primary btn-md primary-cta btn-success-solid" :disabled="!canEditCases" aria-label="确认入库用例集" @click="confirmCaseSet">
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <polyline points="20 6 9 17 4 12" />
                   </svg>
@@ -195,10 +195,6 @@
               <!-- 已确认入库状态下 -->
               <template v-else>
                 <div class="action-btn-group">
-                  <button class="btn btn-secondary btn-md" aria-label="新增测试用例" @click="addCase">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" /></svg>
-                    新增用例
-                  </button>
                   <button class="btn btn-secondary btn-md" @click="exportExcel">
                     导出 Excel
                   </button>
@@ -292,7 +288,7 @@
                 <th v-for="col in customCols" :key="col.key" class="custom-th" style="min-width: 120px">
                   <div class="th-flex">
                     <span>{{ col.name }}</span>
-                    <button class="th-del-btn" title="删除该列" :aria-label="`删除扩展列 ${col.name}`" @click.stop="removeCustomCol(col.key)">✕</button>
+                    <button class="th-del-btn" :disabled="!canEditCases" title="删除该列" :aria-label="`删除扩展列 ${col.name}`" @click.stop="removeCustomCol(col.key)">✕</button>
                   </div>
                 </th>
                 <th style="width: 92px">映射状态</th>
@@ -455,17 +451,17 @@
 
                 <!-- 映射状态 -->
                 <td>
-                  <span v-if="c.target_dataset_id" class="status-tag-green" title="已映射至数据集">已映射</span>
+                  <span v-if="c.source?.mapped || c.target_dataset_id" class="status-tag-green" title="已映射至数据集">已映射</span>
                   <span v-else class="status-tag-clean" title="未映射">未映射</span>
                 </td>
 
                 <!-- 操作区 -->
                 <td class="td-actions">
                   <div class="action-links">
-                    <button class="icon-link" title="详细编辑" :aria-label="`详细编辑用例 ${c.code}`" @click.stop="openCaseEditModal(getOriginalCaseIndex(c))">
+                    <button class="icon-link" :disabled="!canEditCases" title="详细编辑" :aria-label="`详细编辑用例 ${c.code}`" @click.stop="openCaseEditModal(getOriginalCaseIndex(c))">
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" /><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" /></svg>
                     </button>
-                    <button class="icon-link danger" title="删除用例" :aria-label="`删除用例 ${c.code}`" @click.stop="deleteCase(getOriginalCaseIndex(c))">
+                    <button class="icon-link danger" :disabled="!canEditCases" title="删除用例" :aria-label="`删除用例 ${c.code}`" @click.stop="deleteCase(getOriginalCaseIndex(c))">
                       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6" /><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" /></svg>
                     </button>
                   </div>
@@ -613,28 +609,7 @@
               <label class="field-label">用例规模 (<b class="mono">{{ aiGen.count }}</b> 条)</label>
               <n-slider v-model:value="aiGen.count" :min="4" :max="30" :step="1" />
             </div>
-            <div class="field">
-              <label class="field-label">推理模型</label>
-              <n-select
-                v-model:value="aiGen.model"
-                :options="[
-                  { label: 'gpt-4.1 (推荐)', value: 'gpt-4.1' },
-                  { label: 'claude-sonnet-4.5', value: 'claude-sonnet-4.5' },
-                  { label: 'o4 (深度推理)', value: 'o4' },
-                ]"
-              />
-            </div>
-            <div class="field">
-              <label class="field-label">发散度 Temperature</label>
-              <n-select
-                v-model:value="aiGen.temperature"
-                :options="[
-                  { label: '0.2 (严谨收敛)', value: 0.2 },
-                  { label: '0.5 (标准)', value: 0.5 },
-                  { label: '0.8 (发散)', value: 0.8 },
-                ]"
-              />
-            </div>
+            <p class="field-hint">使用平台配置的 Agent 协议档生成候选用例。</p>
           </div>
         </div>
 
@@ -809,13 +784,14 @@ import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { useMessage, useDialog, type DropdownOption } from 'naive-ui'
 import { api } from '../api/http'
-import type { CaseSet, Dataset } from '../api/types'
+import type { CaseSet, Dataset, TestCase, TestCaseInput, ColumnSchemaItem } from '../api/types'
 import BenchmarkLaunchDrawer from '../components/drawers/BenchmarkLaunchDrawer.vue'
 import { escapeHtml, escapeRegex, renderIcon } from '../utils/render'
 
-type CaseStrategy = '正向' | '反向' | '边界' | '状态' | '场景' | '等价'
+type CaseStrategy = '正向' | '反向' | '边界' | '状态迁移' | '场景' | '等价类'
 type CasePriority = 'HX' | 'FHX' | 'BJ' | 'YC' | 'ZD' | 'BL'
 
+/** 页面编辑字段与服务端原始行并存，保存时保留未直接展示的固定字段。 */
 interface ExtendedTestCase {
   id: string
   set_id?: string
@@ -829,18 +805,16 @@ interface ExtendedTestCase {
   steps?: string[]
   target_dataset_id?: string
   checked?: boolean
-  extras?: Record<string, string>
+  extras?: Record<string, unknown>
+  source?: TestCase
 }
 
-interface CustomColumn {
-  key: string
-  name: string
-  type: 'text' | 'number'
-}
+/** 扩展列沿用服务端完整定义，包含排序和必填属性。 */
+type CustomColumn = ColumnSchemaItem
 
 type CtxMenuType = 'file' | 'folder' | 'row'
 
-const STRATEGIES: CaseStrategy[] = ['正向', '反向', '边界', '等价', '状态', '场景']
+const STRATEGIES: CaseStrategy[] = ['正向', '反向', '边界', '等价类', '状态迁移', '场景']
 const PRIORITIES: CasePriority[] = ['HX', 'FHX', 'BJ', 'YC', 'ZD', 'BL']
 
 // ─── 右键菜单 SVG 图标辅助渲染 ───
@@ -854,6 +828,10 @@ const caseSets = ref<CaseSet[]>([])
 const activeSetId = ref('')
 const cases = ref<ExtendedTestCase[]>([])
 const savingCases = ref(false)
+const loadingCases = ref(false)
+const loadedSetId = ref('')
+let loadVersion = 0
+let saveRequest: Promise<boolean> | null = null
 const justSaved = ref(false)
 const hasUnsavedChanges = ref(false)
 const confirmingSet = ref(false)
@@ -936,6 +914,8 @@ interface TreeFolder {
 const folders = ref<TreeFolder[]>([{ id: 'cases', name: '用例集目录', open: true, items: [] }])
 
 const currentSet = computed<CaseSet | undefined>(() => caseSets.value.find((s: CaseSet) => s.id === activeSetId.value))
+const canEditCases = computed(() => currentSet.value?.status === 'generated'
+  && loadedSetId.value === activeSetId.value && !loadingCases.value && !confirmingSet.value)
 
 const countdownHours = computed(() => {
   const expires = currentSet.value?.expires_at || (currentSet.value as any)?.confirm_deadline
@@ -997,10 +977,10 @@ const pagedCases = computed(() => {
 })
 
 function getOriginalCaseIndex(c: ExtendedTestCase): number {
-  return cases.value.findIndex(item => item.id === c.id || item.code === c.code)
+  return cases.value.findIndex(item => item.id === c.id)
 }
 function getDisplayedIndex(c: ExtendedTestCase): number {
-  return displayedCases.value.findIndex(item => item.id === c.id || item.code === c.code)
+  return displayedCases.value.findIndex(item => item.id === c.id)
 }
 
 function clearAllFilters() {
@@ -1170,7 +1150,7 @@ const customCols = computed<CustomColumn[]>(() => {
 })
 
 function getCaseExtra(c: ExtendedTestCase, key: string): string {
-  return c.extras ? c.extras[key] || '' : ''
+  return String(c.extras?.[key] ?? '')
 }
 
 // 批量勾选
@@ -1227,6 +1207,7 @@ function uncheckAllCases() {
 }
 
 function batchDeleteCases() {
+  if (!canEditCases.value) return
   const count = selectedCaseIds.value.length
   if (!count) return
   dialog.warning({
@@ -1249,12 +1230,13 @@ function batchDeleteCases() {
 
 // 单元格即时编辑
 function editCell(row: ExtendedTestCase, field: string) {
-  if (currentSet.value?.status === 'confirmed') return
+  if (!canEditCases.value) return
   const original = String((row as any)[field] ?? (row.extras ? row.extras[field] : '') ?? '')
   editingCell.value = { row, field, original }
 }
 
 function finishEditing() {
+  if (!editingCell.value) return
   editingCell.value = null
   hasUnsavedChanges.value = true
 }
@@ -1272,7 +1254,9 @@ function cancelEditing() {
 }
 
 async function selectCaseSet(id: string) {
+  if (confirmingSet.value) return
   activeSetId.value = id
+  editingCell.value = null
   selectedCaseIds.value = []
   page.value = 1
   gridSearch.value = ''
@@ -1296,7 +1280,7 @@ function requestSelectCaseSet(id: string, after?: () => void) {
     positiveText: '保存并切换',
     negativeText: '放弃修改',
     onPositiveClick: async () => {
-      await persistCases()
+      if (!await persistCases() || hasUnsavedChanges.value) return false
       await selectCaseSet(id)
       after?.()
     },
@@ -1311,7 +1295,7 @@ function createEmptyCaseSet() {
     try {
       const created = await api.cases.createSet({ name: val })
       await loadCaseSets()
-      await selectCaseSet(created.id)
+      requestSelectCaseSet(created.id)
       message.success(`已创建「${created.name}」`)
     } catch (err: any) {
       message.error(err.message || '创建用例集失败')
@@ -1339,6 +1323,7 @@ function buildEmptyCase(): ExtendedTestCase {
 }
 
 function addCase() {
+  if (!canEditCases.value) return
   const newCase = buildEmptyCase()
   cases.value.push(newCase)
   hasUnsavedChanges.value = true
@@ -1351,6 +1336,7 @@ function addCase() {
 }
 
 function deleteCase(idx: number) {
+  if (!canEditCases.value) return
   cases.value.splice(idx, 1)
   hasUnsavedChanges.value = true
   const maxPage = Math.max(1, Math.ceil(displayedCases.value.length / pageSize.value))
@@ -1360,45 +1346,79 @@ function deleteCase(idx: number) {
   message.info('已删除用例行，保存后生效')
 }
 
-async function persistCases() {
-  if (!currentSet.value || savingCases.value) return
-  savingCases.value = true
-  try {
-    const payload = cases.value.map((c, i) => ({
-      code: c.code || `TC-${String(i + 1).padStart(3, '0')}`,
-      name: c.name,
-      module: c.module || '通用',
-      strategy: c.strategy,
-      priority: c.priority,
-      preconditions: c.preconditions,
-      steps: c.steps ? (Array.isArray(c.steps) ? c.steps.join('\n') : c.steps) : '',
-      expected: c.expected_result,
-      target_dataset_id: c.target_dataset_id,
-      ...c.extras,
-    }))
-    await api.cases.saveCases(currentSet.value.id, payload as any)
-    hasUnsavedChanges.value = false
-    justSaved.value = true
-    setTimeout(() => { justSaved.value = false }, 1800)
-    message.success('已保存用例集修改')
-  } catch (err: any) {
-    message.error(err.message || '保存用例集失败')
-  } finally {
-    savingCases.value = false
+/** 固定字段使用契约名称；扩展键与未展示的固定字段完整保留。 */
+function casePayload(c: ExtendedTestCase): TestCaseInput {
+  return {
+    ...c.source,
+    ...c.extras,
+    id: c.id.startsWith('temp-') ? undefined : c.id,
+    code: c.code,
+    name: c.name,
+    module: c.module,
+    strategy: c.strategy,
+    priority: c.priority,
+    precondition: c.preconditions,
+    steps: c.steps?.join('\n') || '',
+    expected: c.expected_result,
+    ...(c.target_dataset_id ? { target_dataset_id: c.target_dataset_id } : {}),
   }
 }
 
+/** 保存使用提交时快照；并发调用共享结果，迟到响应仅更新相同视图。 */
+async function persistCases(): Promise<boolean> {
+  if (saveRequest) return saveRequest
+  const set = currentSet.value
+  if (!set || set.status !== 'generated' || loadedSetId.value !== set.id || loadingCases.value) return false
+  const version = loadVersion
+  const rows = cases.value.slice()
+  const snapshot = JSON.stringify(rows.map(casePayload))
+  const columns = JSON.stringify(customCols.value)
+  savingCases.value = true
+  saveRequest = (async () => {
+    try {
+      if (columns !== JSON.stringify(set.column_schema || [])) {
+        await api.cases.updateSet(set.id, { column_schema: JSON.parse(columns) })
+        set.column_schema = JSON.parse(columns)
+      }
+      const saved = await api.cases.saveCases(set.id, JSON.parse(snapshot))
+      if (version !== loadVersion || activeSetId.value !== set.id) return false
+      const unchanged = snapshot === JSON.stringify(cases.value.map(casePayload))
+        && columns === JSON.stringify(customCols.value)
+      // 新增行按本次提交顺序回写真实 ID；保留保存期间的编辑、增删及勾选。
+      rows.forEach((row, index) => {
+        const item = saved[index]
+        if (!item || !cases.value.includes(row)) return
+        selectedCaseIds.value = selectedCaseIds.value.map(id => id === row.id ? item.id : id)
+        row.id = item.id
+        row.source = item
+      })
+      hasUnsavedChanges.value = !unchanged
+      justSaved.value = unchanged
+      setTimeout(() => { justSaved.value = false }, 1800)
+      message.success(unchanged ? '已保存用例集修改' : '已保存提交版本，后续修改仍待保存')
+      return unchanged
+    } catch (err: any) {
+      message.error(err.message || '保存用例集失败')
+      return false
+    } finally {
+      savingCases.value = false
+      saveRequest = null
+    }
+  })()
+  return saveRequest
+}
+
 async function confirmCaseSet() {
-  if (!currentSet.value || confirmingSet.value) return
-  if (hasUnsavedChanges.value) {
-    await persistCases()
-  }
+  if (!currentSet.value || !canEditCases.value) return
+  const set = currentSet.value
   confirmingSet.value = true
   try {
-    await api.cases.confirmSet(currentSet.value.id, { ok: true })
-    currentSet.value.status = 'confirmed'
+    if ((hasUnsavedChanges.value || savingCases.value) && !await persistCases()) return
+    if (activeSetId.value !== set.id || hasUnsavedChanges.value) return
+    await api.cases.confirmSet(set.id, { ok: true })
+    set.status = 'confirmed'
     message.success('用例集已确认入库，当前版本已锁定')
-    await loadCaseSets()
+    await loadCases(set.id)
   } catch (err: any) {
     message.error(err.message || '确认入库失败')
   } finally {
@@ -1413,36 +1433,78 @@ function handleLaunchSuccess() {
   router.push('/tasks')
 }
 
+/** 下载成功前不展示成功消息；当前草稿先保存，避免导出旧内容。 */
+async function exportCaseSet(fmt: 'xlsx' | 'xmind', set = currentSet.value) {
+  if (!set) return
+  if (set.id === activeSetId.value && (hasUnsavedChanges.value || savingCases.value) && !await persistCases()) return
+  try {
+    const blob = await api.cases.exportSet(set.id, fmt)
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `${set.name}.${fmt}`
+    anchor.click()
+    setTimeout(() => URL.revokeObjectURL(url), 0)
+    message.success(`已导出「${set.name}」`)
+  } catch (err: any) {
+    message.error(err.message || '导出用例集失败')
+  }
+}
 function exportExcel() {
-  message.success(`已导出「${currentSet.value?.name || '用例集'}」Excel 格式文件`)
+  void exportCaseSet('xlsx')
 }
 function exportXMind() {
-  message.success(`已导出「${currentSet.value?.name || '用例集'}」XMind 脑图文件`)
+  void exportCaseSet('xmind')
 }
 
+/** 旧别名只在读取边界兼容，页面筛选和保存统一使用服务端规范名称。 */
+function normalizeCaseStrategy(strategy: TestCase['strategy']): CaseStrategy {
+  if (strategy === '等价') return '等价类'
+  if (strategy === '状态') return '状态迁移'
+  return strategy || '正向'
+}
+
+/** 服务端将扩展字段平铺；固定字段之外的值进入页面扩展列，不丢弃未知数据。 */
+function editableCase(c: TestCase, setId: string, index: number): ExtendedTestCase {
+  const fixed = new Set(['id', 'code', 'name', 'module', 'strategy', 'priority', 'precondition',
+    'steps', 'expected', 'submodule', 'feature_point', 'test_type', 'mapped', 'pending_complete'])
+  return {
+    id: c.id || `temp-${Date.now()}-${index}`,
+    set_id: setId,
+    code: c.code || `TC-${String(index + 1).padStart(3, '0')}`,
+    name: c.name || '',
+    module: c.module || '通用',
+    strategy: normalizeCaseStrategy(c.strategy),
+    priority: c.priority || 'HX',
+    preconditions: c.precondition || '',
+    expected_result: c.expected || '',
+    steps: typeof c.steps === 'string' ? c.steps.split('\n') : [],
+    target_dataset_id: typeof c.target_dataset_id === 'string' ? c.target_dataset_id : undefined,
+    extras: Object.fromEntries(Object.entries(c).filter(([key]) => !fixed.has(key))),
+    source: { ...c },
+  }
+}
+
+/** 只有最后一次选择可提交读取结果，失败或旧响应不得覆盖当前草稿。 */
 async function loadCases(setId: string) {
+  const version = ++loadVersion
+  loadingCases.value = true
+  loadedSetId.value = ''
+  cases.value = []
+  hasUnsavedChanges.value = false
   try {
     const setObj = await api.cases.getSet(setId)
-    const list = (setObj as any).cases || []
-    cases.value = list.map((c: any, i: number) => ({
-      id: c.id || `c-${i}`,
-      set_id: setId,
-      code: c.code || `TC-${String(i + 1).padStart(3, '0')}`,
-      name: c.name || c.question || '',
-      module: c.module || '通用',
-      strategy: (c.strategy as CaseStrategy) || '正向',
-      priority: (c.priority as CasePriority) || 'HX',
-      preconditions: c.preconditions || c.precondition || '',
-      expected_result: c.expected_result || c.expected || c.reference || '',
-      steps: Array.isArray(c.steps) ? c.steps : typeof c.steps === 'string' ? [c.steps] : ['1. 执行标准输入'],
-      target_dataset_id: c.target_dataset_id,
-      checked: false,
-      extras: {},
-    }))
+    if (version !== loadVersion || activeSetId.value !== setId) return
+    cases.value = (setObj.cases || []).map((c, index) => editableCase(c, setId, index))
+    customColsMap.value[setId] = setObj.column_schema || []
+    const set = caseSets.value.find(item => item.id === setId)
+    if (set) Object.assign(set, setObj)
+    loadedSetId.value = setId
     hasUnsavedChanges.value = false
   } catch (err: any) {
-    cases.value = []
-    message.error(err.message || '加载用例列表失败')
+    if (version === loadVersion) message.error(err.message || '加载用例列表失败')
+  } finally {
+    if (version === loadVersion) loadingCases.value = false
   }
 }
 
@@ -1457,8 +1519,9 @@ async function loadCaseSets() {
     }
     root.items = list
     const selected = list.find((s: any) => s.id === activeSetId.value) || list[0]
-    if (selected) await selectCaseSet(selected.id)
-    else cases.value = []
+    if (selected) {
+      if (selected.id !== activeSetId.value || !hasUnsavedChanges.value) await selectCaseSet(selected.id)
+    } else cases.value = []
   } catch (err: any) {
     caseSets.value = []
     message.error(err.message || '加载用例集失败')
@@ -1535,13 +1598,13 @@ async function handleFileCtxAction(key: string, targetId: string) {
       requestSelectCaseSet(targetId, () => openLaunchDrawer())
       break
     case 'confirm-set':
-      await confirmCaseSet()
+      requestSelectCaseSet(targetId, () => { void confirmCaseSet() })
       break
     case 'export-excel':
-      exportExcel()
+      await exportCaseSet('xlsx', s)
       break
     case 'export-xmind':
-      exportXMind()
+      await exportCaseSet('xmind', s)
       break
     case 'rename':
       openNameDialog('重命名用例集', '用例集名称', s.name, async (val) => {
@@ -1588,6 +1651,7 @@ async function handleFolderCtxAction(key: string, _folderId: string) {
 async function handleRowCtxAction(key: string, rowIdx: number) {
   const c = cases.value[rowIdx]
   if (!c) return
+  if (!canEditCases.value && !['copy-json', 'toggle-check'].includes(key)) return
   switch (key) {
     case 'edit':
       openCaseEditModal(rowIdx)
@@ -1682,6 +1746,7 @@ const caseEdit = ref<{
 })
 
 function openCaseEditModal(idx: number) {
+  if (!canEditCases.value) return
   const c = cases.value[idx]
   if (!c) return
   caseEdit.value = {
@@ -1698,6 +1763,7 @@ function openCaseEditModal(idx: number) {
 }
 
 function saveCaseEdit() {
+  if (!canEditCases.value) return
   const c = cases.value[caseEdit.value.idx]
   if (!c) return
   c.name = caseEdit.value.name.trim()
@@ -1760,6 +1826,7 @@ function openAddColModal() {
   addCol.value = { show: true, key: '', name: '' }
 }
 function confirmAddCol() {
+  if (!canEditCases.value) return
   const s = currentSet.value
   if (!s) return
   const key = addCol.value.key.trim().toLowerCase()
@@ -1789,12 +1856,14 @@ function confirmAddCol() {
 }
 
 function removeCustomCol(key: string) {
+  if (!canEditCases.value) return
   const s = currentSet.value
   if (!s) return
   const prevCols = customColsMap.value[s.id] || []
   customColsMap.value[s.id] = prevCols.filter(col => col.key !== key)
   cases.value.forEach(c => {
     if (c.extras) delete c.extras[key]
+    if (c.source) delete c.source[key]
   })
   hasUnsavedChanges.value = true
   message.info(`已移除列 ${key}`)
@@ -1817,6 +1886,7 @@ interface AiCaseCandidate {
   preconditions: string
   steps: string[]
   expected_result: string
+  source?: TestCase
 }
 
 const aiGen = ref({
@@ -1826,8 +1896,6 @@ const aiGen = ref({
   prdText: PRD_PRESETS[0].desc,
   strategies: [...STRATEGIES],
   count: 10,
-  model: 'gpt-4.1',
-  temperature: 0.5,
   generating: false,
   candidates: [] as AiCaseCandidate[],
 })
@@ -1850,6 +1918,7 @@ function toggleStrategy(s: CaseStrategy) {
 }
 
 async function runAiGenerateCases() {
+  if (aiGen.value.generating) return
   if (!aiGen.value.prdText.trim()) {
     message.warning('请填写 PRD 需求描述')
     return
@@ -1876,23 +1945,35 @@ async function runAiGenerateCases() {
         expected_result: '返回扣款成功回调并在 100ms 内推送账单流水。',
       }))
     } else {
+      // 选中策略沿用默认配比并归一为整数百分比，未选策略明确传 0。
+      const defaults = [
+        ['正向', 'positive', 40], ['反向', 'negative', 25], ['边界', 'boundary', 15],
+        ['等价类', 'equivalence', 10], ['状态迁移', 'state', 5], ['场景', 'scenario', 5],
+      ] as const
+      const selected = defaults.filter(([strategy]) => aiGen.value.strategies.includes(strategy))
+      const total = selected.reduce((sum, [, , weight]) => sum + weight, 0)
+      const weights: Record<string, number> = Object.fromEntries(defaults.map(([, key]) => [key, 0]))
+      let remaining = 100
+      selected.forEach(([, key, weight], index) => {
+        weights[key] = index === selected.length - 1 ? remaining : Math.floor(weight * 100 / total)
+        remaining -= weights[key]
+      })
       const generated = await api.cases.generateCases({
-        prd_text: aiGen.value.prdText.trim(),
-        strategies: aiGen.value.strategies,
-        count: aiGen.value.count,
-        model: aiGen.value.model,
-        temperature: aiGen.value.temperature,
+        source_text: aiGen.value.prdText.trim(),
+        strategy_weights: weights,
+        max_count: aiGen.value.count,
       })
       candidates = (generated as any[]).map((c, i) => ({
         selected: true,
         code: c.code || `TC-${String(i + 1).padStart(3, '0')}`,
         name: c.name || c.question || '',
         module: c.module || '通用',
-        strategy: (c.strategy as CaseStrategy) || '正向',
+        strategy: normalizeCaseStrategy(c.strategy),
         priority: (c.priority as CasePriority) || 'HX',
         preconditions: c.preconditions || c.precondition || '',
         steps: Array.isArray(c.steps) ? c.steps : typeof c.steps === 'string' ? [c.steps] : [],
         expected_result: c.expected_result || c.expected || c.reference || '',
+        source: c,
       }))
     }
     aiGen.value.candidates = candidates
@@ -1912,6 +1993,10 @@ function toggleAllCandidates() {
 async function commitAiCandidates() {
   const selected = aiGen.value.candidates.filter(c => c.selected)
   if (!selected.length) return
+  if (currentSet.value && !canEditCases.value) {
+    message.warning('请选择可编辑的草稿用例集后采纳候选')
+    return
+  }
   if (!currentSet.value) {
     try {
       const created = await api.cases.createSet({ name: `PRD推导-${new Date().toLocaleDateString()}` })
@@ -1937,6 +2022,7 @@ async function commitAiCandidates() {
       expected_result: cand.expected_result,
       checked: false,
       extras: {},
+      source: cand.source,
     })
   })
   hasUnsavedChanges.value = true
@@ -1959,6 +2045,7 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  loadVersion++
   window.removeEventListener('keydown', onGlobalKeydown)
 })
 </script>
@@ -2489,8 +2576,8 @@ onUnmounted(() => {
 .strategy-pill.pill-正向.active { background: var(--accent-success); border-color: var(--accent-success); color: #FFFFFF; }
 .strategy-pill.pill-反向.active { background: var(--accent-error); border-color: var(--accent-error); color: #FFFFFF; }
 .strategy-pill.pill-边界.active { background: var(--accent-warning); border-color: var(--accent-warning); color: #FFFFFF; }
-.strategy-pill.pill-等价.active { background: var(--accent-info); border-color: var(--accent-info); color: #FFFFFF; }
-.strategy-pill.pill-状态.active { background: var(--c-agent); border-color: var(--c-agent); color: #FFFFFF; }
+.strategy-pill.pill-等价类.active { background: var(--accent-info); border-color: var(--accent-info); color: #FFFFFF; }
+.strategy-pill.pill-状态迁移.active { background: var(--c-agent); border-color: var(--c-agent); color: #FFFFFF; }
 .strategy-pill.pill-场景.active { background: var(--c-kb); border-color: var(--c-kb); color: #FFFFFF; }
 
 .pill-num {
@@ -2715,8 +2802,8 @@ onUnmounted(() => {
 .badge-正向 { background: var(--t-cases); color: var(--c-cases); }
 .badge-反向 { background: var(--t-stress); color: var(--c-stress); }
 .badge-边界 { background: var(--t-profiles); color: var(--c-profiles); }
-.badge-等价 { background: var(--t-datasets); color: var(--c-datasets); }
-.badge-状态 { background: var(--t-agent); color: var(--c-agent); }
+.badge-等价类 { background: var(--t-datasets); color: var(--c-datasets); }
+.badge-状态迁移 { background: var(--t-agent); color: var(--c-agent); }
 .badge-场景 { background: var(--t-kb); color: var(--c-kb); }
 
 .priority-badge {

@@ -501,10 +501,14 @@ export interface TestCaseCheck {
   message: string
 }
 
-export interface TestCase {
-  id: string
-  // 6 类用例策略：正向 / 反向 / 边界 / 状态 / 场景 / 等价（后端亦可能回写 等价类 / 状态迁移）
-  strategy: '正向' | '反向' | '边界' | '状态' | '场景' | '等价'
+/** 用例保存输入：新行省略 ID，固定字段之外允许扩展列。 */
+export interface TestCaseInput {
+  // 接口将扩展列平铺在行对象中，读取与保存时必须保留这些未知键。
+  [key: string]: unknown
+  id?: string
+  code?: string
+  // 六策略使用服务端规范名；保留两种旧别名供历史数据读取兼容。
+  strategy: '正向' | '反向' | '边界' | '状态迁移' | '场景' | '等价类' | '状态' | '等价'
   // 优先级六档：HX 核心 / FHX 非核心 / BJ 边界问题 / YC 异常 / ZD 中断 / BL 遍历
   priority: 'HX' | 'FHX' | 'BJ' | 'YC' | 'ZD' | 'BL'
   module: string
@@ -521,6 +525,18 @@ export interface TestCase {
   question?: string
   reference?: string
   selected?: boolean
+}
+
+/** 服务端持久化用例始终具有真实 ID。 */
+export interface TestCase extends TestCaseInput {
+  id: string
+}
+
+/** PRD 候选生成使用平台 Agent 协议档，页面仅提交来源、策略和数量。 */
+export interface CaseGenerateInput {
+  source_text: string
+  strategy_weights: Record<string, number>
+  max_count: number
 }
 
 export interface CaseFolder {

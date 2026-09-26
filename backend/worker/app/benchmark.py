@@ -42,7 +42,7 @@ from .profile_env import profile_connection, read_profile_env
 from .sampling import clamp_sample_size
 from .scoring import DEFAULT_METRIC
 from .stress_spawn import maybe_spawn_stress
-from .task_state import claim_running_task_for_terminal_write
+from .task_state import claim_running_task_for_terminal_write, is_cancelled
 
 logger = logging.getLogger("worker.benchmark")
 
@@ -116,10 +116,9 @@ def _load_usage(db: Session, task_id: str) -> dict[str, dict]:
 
 
 def _is_cancelled(db: Session, task_id: str) -> bool:
-    """协作式取消检查：重新查询任务当前状态（取消由 cancel API 置位）。"""
+    """协作式取消检查：取消、失败或租约失效后停止发起下一批模型调用。"""
     db.expire_all()
-    row = db.query(Task.status).filter(Task.id == task_id).first()
-    return bool(row) and row[0] in {"cancelled", "failed"}
+    return is_cancelled(db, task_id)
 
 
 def _progress(db: Session, task_id: str, done: int, total: int, message: str) -> None:
