@@ -296,3 +296,30 @@ def test_append_import_recomputes_checks_from_entire_set(cases_db):
     ))
     assert result["generated_count"] == 2
     assert result["checks"] == []
+
+
+@pytest.mark.parametrize("mode", ["append", "replace"])
+@pytest.mark.parametrize("identity", ["new", "existing", "foreign"])
+def test_import_repeated_ids_update_one_local_row(cases_db, mode, identity):
+    """批内重复编号沿用同编号更新语义，跨集编号只重建一个本集副本。"""
+    if identity == "existing":
+        _add_case(cases_db, "repeated")
+    elif identity == "foreign":
+        cases_db.add(CaseSet(id="other-set", name="其他集合", created_by="other"))
+        _add_case(cases_db, "repeated", case_set_id="other-set", name="其他集合原文")
+    workbook = Workbook()
+    workbook.active.append(["用例编号", "用例名称", "预期结果"])
+    workbook.active.append(["repeated", "第一次", "首次预期"])
+    workbook.active.append(["repeated", "最后一次", "最终预期"])
+    buffer = BytesIO()
+    workbook.save(buffer)
+    buffer.seek(0)
+    result = asyncio.run(routes.import_case_set(
+        "set", _request(), UploadFile(file=buffer, filename="重复编号.xlsx"), mode, cases_db, _actor(),
+    ))
+    rows = cases_db.query(CaseItem).filter(CaseItem.case_set_id == "set").all()
+    assert result["generated_count"] == len(rows) == 1
+    assert rows[0].name == "最后一次" and rows[0].expected == "最终预期"
+    if identity == "foreign":
+        assert rows[0].id != "repeated"
+        assert cases_db.get(CaseItem, "repeated").name == "其他集合原文"

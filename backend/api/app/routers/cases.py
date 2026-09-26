@@ -878,13 +878,17 @@ async def import_case_set(
             case_in = _parsed_row_to_case_in(item)
         except ValidationError as exc:
             raise AppError(ErrorCode.VALIDATION, f"第 {offset + 1} 条用例字段不合法") from exc
-        target = existing.get(case_in.id) if case_in.id else None
+        source_id = case_in.id
+        target = existing.get(source_id) if source_id else None
         if case_in.id and target is None:
             clash = db.query(CaseItem).filter(CaseItem.id == case_in.id).first()
             if clash:
                 # 其他用例集占用该编号时改为新 id，避免跨集串行
                 case_in.id = None
-        _upsert_case(db, case_set, case_in, target, sort_base + offset)
+        saved = _upsert_case(db, case_set, case_in, target, sort_base + offset)
+        # 包含尚未 flush 的新行；跨集编号重建后也按原编号复用本批副本。
+        if source_id:
+            existing[source_id] = saved
         imported += 1
     db.flush()
     _refresh_generated_count(db, case_set)

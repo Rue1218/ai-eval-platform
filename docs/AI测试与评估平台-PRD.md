@@ -4,8 +4,8 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.49 |
-| 本轮审查日期 | 2026-09-26（旧 API 首次升级的安全停机与自动恢复） |
+| 文档版本 | V1.50 |
+| 本轮审查日期 | 2026-09-26（重复编号导入与工作区草稿保护） |
 | 文档状态 | V1.31 已实现三类准备专家与受控草稿；V1.30 的完整计划/报告连接仍待实现，后台恢复与专家通讯仍待 P2/P3 |
 | 撰写日期 | 2026-08-17 |
 | 本轮修订 | 2026-09-26：V1.47 新增“我的记忆”，支持个人／个人工作区范围的主动保存、更正、撤回及私有主会话按预算召回；语义向量检索和自动抽取仍未交付。 |
@@ -1160,3 +1160,12 @@ AgentLoop v2 在模型请求前按实际协议序列化的同源 token 估算检
 - `deploy/legacy_agent_barrier.py`、`deploy/drain-agents.sh`：封闭空闲检查与停机间的新回合竞态，保留活动工作。
 - `deploy/deploy.sh`：区分部署主动停机与用户手动停机，并验证恢复结果。
 - `deploy/tests/test_drain_agents.py`、`backend/api/tests/test_deploy_legacy_barrier.py`：首次升级故障路径与真实 PostgreSQL 并发回归。
+
+## V1.50 合并功能复查修复（2026-09-26）
+
+Excel 同一批次内的重复用例编号按最后一条更新，不重复创建或报数据库冲突；被其他用例集占用的编号只生成一个本集副本，其他集合不变。刷新工作区、新建文件或新建工作区不丢弃当前未保存内容，保留原编辑目标，切换新资源沿用已有放弃修改确认。
+
+### 修改代码文件与作用清单
+
+- `backend/api/app/routers/cases.py`、`backend/api/tests/test_cases_audit.py`：导入批内编号复用与跨集合保全。
+- `frontend/src/views/UserWorkspaces.vue`、`frontend/tests/e2e/workspaceAudit.spec.ts`：刷新/创建操作保留未保存内容及保存归属。

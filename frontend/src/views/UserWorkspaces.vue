@@ -695,7 +695,8 @@ async function loadWorkspaces(preferredId?: string): Promise<void> {
     const data = await api.workspaces.list({ include_deleted: showDeleted.value })
     items.value = data.items
     if (items.value.length > 0) {
-      if (preferredId && items.value.some((w) => w.id === preferredId)) {
+      // 自动刷新或新建工作区不能绕过未保存保护，保留草稿所在工作区。
+      if (preferredId && items.value.some((w) => w.id === preferredId) && !isDirty.value) {
         if (preferredId !== selectedWorkspaceId.value) closeActiveFile(true)
         selectedWorkspaceId.value = preferredId
       } else if (!items.value.some((w) => w.id === selectedWorkspaceId.value)) {
@@ -1010,7 +1011,8 @@ async function submitCreateItem(): Promise<void> {
       message.success(`文件 ${res.name} 已创建`)
       showCreateItemModal.value = false
       await loadTree()
-      await openFile(res.path)
+      // 新文件已在树中可见，存在草稿时留在原文件，交由显式切换确认。
+      if (!isDirty.value) await openFile(res.path)
     } else {
       await api.workspaces.createFolder(selectedWorkspaceId.value, createItemParentPath.value, name)
       message.success('文件夹已创建')
@@ -1178,7 +1180,8 @@ function toggleDeleted(): void {
 
 async function refreshAll(): Promise<void> {
   await loadWorkspaces(selectedWorkspaceId.value)
-  if (activeFile.value) {
+  // 刷新目录和容量不应重新读取并覆盖编辑器的未保存快照。
+  if (activeFile.value && !isDirty.value) {
     await openFile(activeFile.value.path)
   }
 }
