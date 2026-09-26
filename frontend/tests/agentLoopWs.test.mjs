@@ -85,6 +85,24 @@ test('旧 v2.1 服务端协商时不发送新增 client_id', async () => {
   } finally { client.close() }
 })
 
+test('v2.3 协商保留稳定客户端身份并消费摘要计量持久帧', async () => {
+  const state=createLoopState('s'),socket=new Socket()
+  const client=new AgentLoopWebSocket('s',{ticket:async()=>'ticket',state:()=>state,replace:()=>{},socket:()=>socket})
+  try {
+    await client.connect();socket.frame('capabilities',{stream_schema_version:'agent-loop-stream.v2.3'})
+    assert.equal(typeof socket.sent[0].data.client_id, 'string')
+    socket.frame('context.usage', { usage: { prompt_tokens: 1000, completion_tokens: 30 } }, {
+      session_id: 's', durability: 'persistent', cursor: 1, correlation: { turn: 1, source_seq: 4 },
+    })
+    socket.frame('replay.completed', { cursor: 1 }, { session_id: 's' })
+    assert.equal(state.ready, true)
+    assert.equal(state.cursor, 1)
+    assert.equal(Object.keys(state.summaryUsage).length, 1)
+    assert.equal(Object.keys(state.attempts).length, 0)
+    assert.equal(state.error, '')
+  } finally { client.close() }
+})
+
 test('轨迹退订丢弃在途帧，重连按轨迹序号恢复且不自动重试拒绝的订阅', async () => {
   const state = createLoopState('s'), socket = new Socket(), frames = []
   const client = new AgentLoopWebSocket('s', {ticket:async()=>'ticket',state:()=>state,replace:()=>{},socket:()=>socket,onFrame:frame=>frames.push(frame)})

@@ -1,12 +1,12 @@
 # AI 测试与评估平台 — Harness 上下文工程层模块设计
 
-> ⚠️ **文档维护提示（2026-09-11）**：本文部分章节含历史实现引用（`agent/react.py`、`plan_solve.py`、`reflect.py`、`clarify.py` 等模块已删除，ReAct / Plan-Solve 图已由 AgentLoop v2 取代）；当前实现与契约以 `AGENTS.md` 状态地图及本文最新修订为准。
+> **文档维护提示（2026-09-26）**：正文旧 `CompactProtocol`、最近六条及 `sessions.compact_summary` 是历史设计；当前 AgentLoop v2 自动摘要、来源回读与个人记忆计量见文末 V0.4.6–V0.4.9，以 API V2.30 为接口权威。旧 ReAct / Plan-Solve 文件已删除，不能用旧章节推断当前运行状态。
 
 | 项 | 内容 |
 | :--- | :--- |
 | 文档名称 | Harness 上下文工程层模块设计 |
-| 版本 | V0.4.5 |
-| 审查日期 | 2026-09-09 |
+| 版本 | V0.4.9 |
+| 审查日期 | 2026-09-26 |
 | 文档性质 | 模块设计说明书（需求发散 + 架构设计 + 接口签名） |
 | 适用模块 | M2 上下文工程层（`app/harness/context/`） |
 | 上游权威 | Harness 需求文档 V1.4.4 §4.2、§2.4、§7、§9；API.md V1.22 §3.4（context_meter）；PRD §5.1.3 |
@@ -366,6 +366,51 @@ AgentLoop 的请求仪表不复用历史会话的宽泛预估，而是以本轮 
 | `backend/api/app/agent/loop_wiring.py` | 修改 | `LoopRequest` 同源序列化 token 拆分与 MCP 注册表归类。 |
 | `backend/api/app/agent/loop_presentation.py` | 修改 | 将五类输入 token 写入 `request_summary.context_meter`。 |
 | `frontend/src/components/agent/loop/LoopContextMeter.vue` | 修改 | 紧凑仪表、彩色分段进度条和五类详细明细。 |
+
+### V0.4.6（2026-09-26）— v2 自动摘要、原文证据与来源回读
+
+当前 v2 使用 `agent/compaction.py` 的异步请求准备：输入达到可用预算的 85% 自动摘要，目标 65%，保留最新用户输入和最近完整工具单元。旧固定六条窗口、2000 字符和严格 JSON `CompactProtocol` 不适用于此路径；手动 `/compact` 已下线。摘要与原始事实边界持久化，后续请求恢复，原文不删除。
+
+摘要固定区分约束、事实、未完成／失败和来源，可用 `[m:N]` 指向当前运行规范消息。正文引用须位于已覆盖历史；额外保留最多三条有界完整用户原文并逐条校验来源，作为优先于派生摘要的证据。原文预算为 `min(512, 可用输入预算/10)`，从最近已覆盖用户消息向前收集，遇过长或多模态消息即停止，不越过可能的新更正而强调旧要求，不声称全部历史要求无损。主运行可调用 `history.read` 按来源分页回读，返回受总 token 上限约束且不含 opaque、内部推理或图像二进制的历史资料。
+
+一次准备复用历史快照及同候选 token 估算，下次准备重新读取，不以跨回合缓存掩盖新增事实。摘要、证据和偏好均计入实际请求预算。会话仪表中的“会话记忆”计入实际摘要资料，摘要模型的已知调用用量由 `context.usage` 累计；这与存储历史总量不同。
+
+### 修改代码文件与作用清单
+
+- `backend/api/app/agent/compaction.py`：同源预算、来源引用、有界原文和准备过程复用。
+- `backend/api/app/agent/history.py`、`backend/api/app/agent/loop_wiring.py`：当前日志回读工具及真实请求接线。
+- `backend/api/app/harness/contracts/loop_events.py`：证据元数据与敏感路径。
+- API 连续压缩、恢复、回读与偏好测试：验证有界原文、来源合法性、调用隔离及实际注入预算；不替代真实供应商语义保真验收。
+
+### V0.4.7（2026-09-26）— 个人记忆逐请求装配
+
+个人记忆按当前用户问题和工作区在每次模型请求前检索，作为不可缓存的动态资料段注入，只用于本人私有主会话。摘要调用等待后再次读取，防止等待期间的更正或删除继续作为最新记忆传入；刷新后重新计算完整请求硬预算，超限不发送。摘要、配置偏好和个人记忆均按实际协议序列化后的 token 差额计入 `memory_files`，不在会话仪表或公共诊断事件中输出记忆正文。
+
+### 修改代码文件与作用清单
+
+- `backend/api/app/agent/loop_wiring.py`：动态资料刷新、摘要后重建与硬预算检查，以及三类记忆同源计量。
+- `backend/api/app/harness/memory/{personal,preference}.py`：有界召回与私有会话消费登记。
+- `backend/api/tests/test_loop_personal_memory.py`：每次请求、摘要等待、更正撤回、子运行隔离和实际请求预算回归。
+
+### V0.4.8（2026-09-26）— 原文证据安全与主专家回读修复
+
+证据遇已知凭据整条停止保留；旧证据先验证来源和逐字一致，再移除敏感项及其之前的证据。保留的原文仍逐字准确，原始日志不变。新摘要候选含已知凭据时走现有失败回退，不持久化候选正文。该检测与个人记忆复用纯文本安全函数，不依赖 ORM。
+
+四类显式主专家同步声明 `history.read`，注册后不再被工具白名单丢弃；子运行继续由原工具交集排除。回归通过实际装配、压缩和调度回读验证，避免仅检查工具注册名。
+
+### 修改代码文件与作用清单
+
+- `backend/api/app/agent/compaction.py`、`backend/api/app/harness/security/loop_redaction.py`：证据筛选、恢复验真后的过滤与摘要候选校验。
+- `backend/api/app/agent/experts.py`、压缩凭据及历史工具测试：主专家白名单与运行内回读闭环。
+
+### V0.4.9（2026-09-26）— 回读分页前的凭据过滤
+
+`history.read` 的用户正文、工具结果及参数内文本统一复用个人记忆的已知凭据识别。包含密码／密钥赋值或私钥头的字符串整体替换为脱敏占位，再生成公开 JSON 和分页位置；避免公开工具结果重新带出压缩证据已拒绝的内容。保留原始事实，普通安全说明仍可完整回读。
+
+### 修改代码文件与作用清单
+
+- `backend/api/app/agent/history.py`：在公开投影和分页前递归过滤已知凭据。
+- `backend/api/tests/test_loop_history.py`：覆盖三类位置、三类凭据、分页重组和普通说明保留。
 
 
 

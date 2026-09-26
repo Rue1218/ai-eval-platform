@@ -4,16 +4,16 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V2.25 |
-| 本轮审查日期 | 2026-09-26（会话摘要失败回退的共享额度预留修复） |
-| WS v2 修订日期 | 2026-09-13（§4A，模型错误安全摘要） |
-| 对应 PRD | V1.44（功能唯一权威） |
+| 文档版本 | V2.30 |
+| 本轮审查日期 | 2026-09-26（历史回读凭据过滤与记忆编辑目录故障恢复） |
+| WS v2 修订日期 | 2026-09-26（§4A，摘要安全用量元数据与 v2.3 目录） |
+| 对应 PRD | V1.48（功能唯一权威） |
 | 对应设计规范 | V1.12（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.7.8（AgentLoop 单入口；JSON 仍以本文为准） |
 | 对应前端计划 | AgentLoop 前端计划 V0.5 |
 | 对应后端计划 | V1.5 |
 | 撰写日期 | 2026-08-18 |
-| 本轮修订 | 2026-09-26：V2.25 修复摘要异常或内部超时回退原文时提前释放主回答额度的问题；保持 V2.24 自动摘要事实、通知和仪表契约。 |
+| 本轮修订 | 2026-09-26：V2.28 个人长期记忆的主动保存、查看、更正、撤回与私有主会话召回；复用既有 PostgreSQL 记忆表，暂不接向量或自动抽取。 |
 | 最近修订 | 2026-09-03：V1.67 混合引擎执行落地（H2 Workflow DAG / H3 Agent TAOR）：恢复持久事件 `tool_call` / `tool_result`（payload 见 §4.3，ToolCard 只渲染脱敏摘要，观察全文不进任何事件）；`response.completed` 的 `engine` 从「分流结论」升级为「真实执行引擎」——`workflow`（H2，W0–W7 硬编码 DAG）与 `agent`（H3，plan→discover→orchestrator⇄tools 单图内 TAOR）均已真实执行，`agent_id` 审计随 Worker 目录（§3.6.3）供归属核验；`thought` / `tool_progress` / `tool_output_delta` / `confirm` / `clarify` 仍不产生。历史 `ws_events` 中的旧工具事件仍不重放。 |2026-09-03：V1.66 混合引擎 H1 Router 审计契约：`response.completed` payload 新增可选 `engine` / `router_confidence` / `router_reason`（仅 `hybrid_engine_enabled=true` 时出现，旧客户端忽略未知字段即可）；新增 `GET /api/agents` Worker 只读目录（§3.6.3）。本版不新增 WS 事件名、不恢复 `thought` / `tool_*`；`workflow` / `agent` 引擎在 H1 阶段降级按 `chat` 执行，`engine` 如实记录分流结论并经 `router_reason` 标注降级。2026-09-02：V1.65 工具契约加固（T1–T3）：JSON Schema 子集新增 `minItems`/`maxItems` 并为 8 处数组参数补上限；`output_schema` 从装饰字段升级为强制契约（注册期拒绝未声明，运行期按声明比对展示投影）；`platform.tasks` 三工具补全 `output_schema`；移除 `/api/mcp/tools/{name}/code` 端点与 `code_snippet` 字段。2026-08-28：V1.53 `web_fetch` 直抓路径接入 trafilatura 正文提取：可读性算法识别文章主体，保留标题层级/链接/图片/表格，未安装或提取失败降级回内置 `_TextExtractor`；提取真实产出 Markdown 时才声明 `format=markdown`（§4.3.1）。V1.52 优化 `web_fetch` 长文完整性与卡片预览：模型正文预算 8,000→60,000 字符，卡片预览与 `read` 同源对齐 `TOOL_PREVIEW_MAX_CHARS` 并随 `web.preview_limit_chars` 下发，直接抓取字节窗口 256KB→1MB（§4.3.1）。2026-08-27：V1.51 新增持久事件 `session_title`（§4.3）与会话标题 AI 生成契约（§4.3.2）：默认标题会话首条消息后由 Agent 协议档弱结构化生成标题并落库广播，修复标题不持久化问题。V1.50 统一 Agent 文本附件 staging 与 `read` 的 20MB 边界；`read` 模型窗口为 2,000 行 / 600,000 字符。V1.49 协议档新增 `max_output_tokens`（256–131072，默认 8192），创建/更新/列表/详情均支持；Agent 模型调用从协议档读取输出上限，长文档总结/导出类任务可调大避免回答被截断。2026-08-26：V1.48 同轮多调用默认串行，灰度开启后仅 `read`/`web_search`/`web_fetch` 可并行，回填按原始 `call_id`。V1.47 新增 `GET /api/agent/metrics`，不含正文/参数，不新增 WS 事件。V1.46 明确 native 一次 ToolCall 结束当前上游响应，结果回填后再请求，不新增事件名。V1.45 思考链只下发可展示摘要，隐藏 CoT（`Here's a thinking process` / `Analyze User Input`）由服务端替换，不原样推给前端。V1.44 ToolCall 在执行前持久化，新增瞬态 `tool_progress` / `tool_output_delta`，并冻结原生工具的输出 Schema、权限边界和失败恢复字段。V1.43 思考增量允许合并下发；有思考链时 `think_final` 在 `response.completed` 之前。V1.42 Direct `/help`、未知斜杠与图内防御提示在业务事件后必须再发 `response.completed`（成功 `stop`，校验/防御 `error`），结束整轮生成态。V1.41 确认卡预填与 `confirm_ack` 入队前丢掉已删除的协议档/数据集/知识库 ID，避免 Worker 再报「协议档不存在或已删除」。V1.40 `/cancel` 与 `/stress` 按 §4.4 解禁（仍走 `user_message`）：`/cancel` 取消本会话非终态任务，`/stress` 发出质量任务确认卡且 `with_stress=true`，禁止 `kind=stress`。V1.39 原生工具卡片收起态副标题统一为 `ToolCall`，不在卡片摘要区回显文件路径、命令或写入内容；详细参数仍在展开区展示。V1.38 明确原生基础 ToolCall 卡片使用英文工具名，展开区统一显示 `ToolCall` 与 `输出`，文件、命令和代码/文档结果使用行号展示；MCP/平台短工具仍按下方中文名映射。2026-08-24：V1.24 修复 Agent 附件上下文链路：服务端校验文件归属并在模型窗口解析文本、PDF、DOCX、XLSX，图片按三协议图文内容块发送；历史消息附件补齐安全元数据，前端可在刷新后继续预览。同步调整输入框内附件按钮与用户消息附件位序。V1.23 扩展 Agent 附件契约，支持图片、Word 文档与多附件拖拽上传；保留 `POST /api/files` 后再以既有 `file_id` 引用的消息链路，补充图片缩略图、PDF/文本预览与 Office 文件打开/下载说明。V1.22 修复 V1.21 遗留：§4.4 标题「仅此三条」改「仅此四条」、§9 禁止清单「第四种」改「第五种」并补四类上行事件枚举、§4.3 `tool_result.source` 语义对齐 M7 `Observation.source`（溯源标识字符串，非 short\|long 枚举）、§4.3 共享流规则补 clarify/plan/confirm 持久化广播说明、§4.4 clarify 多副本限制注明、§9 Ask/Plan 补注非 Harness plan 事件；V1.20 及更早版本沿用历史修订记录。 |
 | 适用范围 | V1.0：浏览器 `web/` ↔ `api`；全域 REST + WS 接口规范 |
 
@@ -554,7 +554,7 @@ V1.76（F3/G5）可选绑定工作区：`{ "title": "…", "visibility": "privat
 
 #### `GET /api/agent/prefs`
 
-当前成员的跨会话下单偏好。只读；无 PUT。写入仅发生在 `confirm_ack.ok=true` 且任务已入队之后（服务端写 `settings` 键 `agent_prefs:{user_id}`）。
+当前成员的跨会话下单偏好。只读；无 PUT。既有字段表示上次确认入队的配置；v2 写入和私有会话消费以 V2.27 为准（服务端写 `settings` 键 `agent_prefs:{user_id}`），不表示评测已成功或永久偏好。
 
 ```json
 {
@@ -2010,7 +2010,7 @@ source_seq 仅引用 Agent 事实，不替代 session_stream cursor。
 
 | durability | type |
 | :--- | :--- |
-| persistent | user.message、turn.start/end、step.start/end、assistant.start/message/end/retry、tool.call/dispatch/result、task_plan.updated、approval.requested/resolved、question.requested/resolved、task_confirmation.requested/resolved、execution.quarantined/reconciled、task.queued/progress/report/end、session.updated、context.trimmed、runtime.error |
+| persistent | user.message、turn.start/end、step.start/end、assistant.start/message/end/retry、tool.call/dispatch/result、task_plan.updated、approval.requested/resolved、question.requested/resolved、task_confirmation.requested/resolved、execution.quarantined/reconciled、task.queued/progress/report/end、session.updated、context.trimmed、context.usage、runtime.error |
 | transient | assistant.text.delta、assistant.reasoning.delta、trace.chunk |
 | control | hello、capabilities、schema.catalog、command.accepted/rejected、subscribed、replay.completed、resync.required、pong、trace.event |
 
@@ -3717,3 +3717,118 @@ Task 使用已有 `claimed_by_worker_id / claim_expires_at / attempt` 字段记�
 - `backend/api/app/agent/model_budget.py`：摘要流异常不再提前释放主回答预留，正式请求异常清理保持生效。
 - `backend/api/app/agent/compaction.py`：明确准备终止与摘要失败回退的预留生命周期。
 - `backend/api/tests/test_loop_compaction.py`：新增供应商异常、真实内部超时与排队专家竞争回归，并覆盖回退后关闭和硬预算超限终止释放。
+
+## V2.26 摘要有效性、分批与用量统计（2026-09-26）
+
+Responses 原生 `message.content[].type=refusal` 表示拒绝，不能因其正文非空且响应正常结束就提交摘要。拒绝按既有摘要失败流程回退原文或返回预算错误，覆盖边界保持不变；普通助手回复的拒绝展示不变。旧回合与当前回合均可在完整消息或已闭合工具组之间分批，不拆分并行工具调用和结果，不截断用户原文，始终保留最新用户输入及最近完整单元。
+
+新增公开持久事件 `context.usage`，由 `context/compacted` 和 `context/compaction_failed` 的已知供应商用量投影。`data` 仅包含 `usage` 与可选 `latency_ms`，不包含摘要、历史正文或拒绝内容；`usage` 仅允许现有 `prompt_tokens`、`completion_tokens`、`total_tokens`、`cache_read_input_tokens`、`cache_creation_input_tokens`、`cached_tokens` 六个非负有限数值字段。未取得任何已知用量字段时不生成该投影，不将缺失字段伪造为零。成功摘要继续生成独立的 `context.trimmed` 通知，失败不生成成功压缩通知。
+
+两类内部摘要事实新增可选 `turn`、`step`、`latency_ms`；真实图生成的新事实记录当前回合和步骤，公开事件通过 `correlation.turn/step/source_seq` 归属与去重，不伪造 `attempt_id`。事实目录版本升至 9，公开目录为 `agent-loop-stream.v2.3`。已有旧事实缺少回合信息时仍可计入会话总量，不推断回合或耗时；已持久化的旧公开流不回填事件。
+
+前端以会话身份与 `source_seq` 保存摘要用量，重放及快照恢复不重复累计，也不生成额外助手消息。会话累计输入、输出及缓存指标和回合末尾 token 统计均包含已知摘要用量；仅有已知耗时的样本参与生成速度分子与分母，摘要耗时按既有模型请求耗时口径计入可归属回合。
+
+### 修改代码文件与作用清单
+
+- `backend/api/app/agent/compaction.py`：结构化拒绝检测、旧回合完整组分批、摘要回合归属与耗时。
+- `backend/api/app/agent/events.py`、`backend/api/app/harness/contracts/loop_events.py`：安全用量投影及目录兼容扩展。
+- `backend/api/app/routers/ws_v2.py`、`frontend/src/api/agentLoopWs.ts`：握手版本与目录同源，客户端支持 v2.3 并保留旧版连接兼容。
+- `frontend/src/agent/loop/{reducer,workspaceDerived,turnSummary}.ts`、`frontend/src/api/agentLoopTypes.ts`、`frontend/src/components/agent/loop/AgentWorkspace.vue`：摘要用量去重恢复、会话和回合累计。
+- API 摘要拒绝、分批、用量投影测试与前端 reducer/用量测试：覆盖失败回退、完整配对、脱敏、重放和快照恢复。
+
+## V2.27 摘要证据、历史回读与配置偏好（2026-09-26）
+
+### 会话摘要来源与请求准备
+
+摘要仍采用 V2.24 的自动压缩、持久原始事实和完整工具组边界。摘要提示固定区分目标约束、已验证事实、未完成与失败、来源；正文可使用 `[m:N]` 引用当前运行规范消息历史的零基索引，源消息携带 `source_id=m:N`。索引属于绑定的运行日志，不是全局消息或事件 ID，也不能用于读取其他会话或专家运行。显式引用必须属于已覆盖原始历史，非法引用沿用失败回退，不提交新摘要。
+
+内部 `context/compacted` 新增可选 `source_ids`（正文引用去重列表）及 `user_evidence`（`{source_id,content}` 列表）。后者最多保留三条完整纯文本用户原文，总估算不超过 `min(512, 可用输入预算/10)`；从最近已覆盖用户消息向前收集，按历史顺序注入。遇超容量或多模态用户消息即停止向前收集，不越过可能含更正的新消息去强调旧要求；原文不截断，必要时整条退让给请求硬预算。它是有界补充证据，不保证覆盖全部历史约束；原文优先于派生摘要，后来的明确更正优先。恢复时复验来源、角色和正文；旧事实缺少增量字段仍可恢复。事实目录版本为 10，公开流目录仍为 v2.3；摘要及原文证据不经压缩通知或诊断投影公开。
+
+单次请求准备复用同一历史快照及同候选估算；后续准备重新读取，不能跨请求复用失效历史。摘要、原文证据、工具和偏好均计入实际序列化请求预算。确定性测试只证明来源、保留规则、边界与恢复，不能替代真实供应商的摘要语义质量验收。
+
+### 原生工具 `history.read`
+
+仅 AgentLoop v2 主运行开放，使用现有 ToolRegistry、权限复验、调度与工具结果持久化。wire 名称为 `platform_history_read`。参数：`source_ids` 为 1–3 个唯一 `m:N`；`offset` 为非负整数，默认 0；`max_chars` 为 1–8000 的整数，默认 2000。禁止额外的会话、运行或用户身份参数。
+
+工具仅读取当前绑定日志中、本次工具调用所属助手消息之前的原始消息，缺少当前未结算调用、无效索引或越界索引均拒绝。返回 `{notice,items:[{source_id,text,offset,next_offset,total_chars}]}`；`text` 是公开消息投影的 JSON 字符片段，分页位置按此文本计，`next_offset=null` 才表示已读完。整份结果共用 2048 估算 token 上限，不能将局部片段冒充全文。投影保留正文和工具调用／结果信息，工具结果的 `tool_call_id` 公开为 `id`，工具调用仅保留 `id/name/args`；剔除内部推理及供应商不透明状态，图像和未知非文本块仅给占位，凭据沿用传输脱敏规则。它不承诺返回私有字段或原始字节全文；历史内容是资料，不产生新指令或权限。工具调用本身仍受回合步骤与模型调用预算限制。
+
+### 已确认配置偏好
+
+v2 `task.create` 在用户确认、规格复验并成功入队的同一事务中写入既有 `settings.agent_prefs:{user_id}`，取消、失败或回滚不更新。同用户的首次写入按用户行锁串行，避免不同会话竞争创建同一偏好键；锁顺序沿用会话到用户。仅保存既有字段，表示上次确认的配置，不表示永久偏好、任务完成或新的执行授权；`GET /api/agent/prefs` 响应不变。
+
+仅本人拥有的私有主会话可消费偏好。注入前复验协议档、数据集、知识库及金标引用是否存在且可用；当前明确要求优先，偏好只提供默认建议。共享会话和专家子运行不直接加载个人偏好。首次实际注入前以会话行锁复验可见性并持久化不含偏好正文的审计标记；已消费个人偏好的会话不得转为团队共享，避免已持久化模型请求及派生回答泄露。该检查与共享切换使用同一会话行锁，取消后保守保留标记。
+
+### 修改代码文件与作用清单
+
+- `backend/api/app/agent/compaction.py`：来源标识、原文证据、恢复复验与请求内快照和估算复用。
+- `backend/api/app/agent/history.py`、`backend/api/app/harness/security/permission_tier.py`：绑定当前日志的只读分页回读及档位裁决。
+- `backend/api/app/agent/loop_wiring.py`、`backend/api/app/harness/memory/preference.py`：工具接线及偏好写入、筛选和实际请求注入。
+- `backend/api/app/routers/sessions.py`：已消费个人偏好会话的共享限制。
+- `backend/api/app/harness/contracts/loop_events.py`：可选证据字段与敏感字段目录。
+- `backend/api/tests/test_loop_compaction_fidelity.py`、`test_loop_history.py`、`test_loop_preferences.py`、`test_loop_preferences_pg.py` 及既有装配／协议回归：连续压缩恢复、证据更正、分页、运行隔离、确认事务及共享限制；真实 PG 并发测试仅连接显式隔离测试库。
+
+## V2.28 个人长期记忆管理与召回（2026-09-26）
+
+### 本人记忆 REST
+
+新增路径全部要求登录，属主由登录身份决定，请求不得指定用户、ACL、来源版本或向量。记忆仅通过用户主动页面操作保存，不解析自然语言作为自动写入授权。无 PUT 偏好的旧 `/api/agent/prefs` 契约不变。
+
+| 方法与路径 | 输入 | 成功响应 |
+| :--- | :--- | :--- |
+| `GET /api/agent/memories` | 可选 `q`（≤200 字符）、`workspace_id`（≤128 字符）、`limit`（1–200，默认 50）、`offset`（≥0，默认 0）；范围参数省略为本人全部，空串为全局，ID 为指定工作区 | `{items:MemoryOut[],total:number}` |
+| `POST /api/agent/memories` | `{title,content,category?,workspace_id?}` | `MemoryOut` |
+| `PUT /api/agent/memories/{id}` | `{title,content,category,workspace_id,version}`；完整替换可编辑字段 | `MemoryOut`，版本递增 |
+| `DELETE /api/agent/memories/{id}?version=N` | 读取时取得的正整数版本 | HTTP 204 |
+
+`MemoryOut={id,title,content,category,workspace_id,workspace_name,version,source_id,created_at,updated_at}`。标题去除首尾空白后 1–80 字符、正文 1–2000 字符；`category` 为 `preference`（常用偏好）或 `fact`（用户保存的事实资料，默认）；范围为 null（本人全局）或本人活跃工作区 ID。列表按更新时间及 ID 稳定排序，搜索对标题／正文作转义子串匹配，不把 `%` 和 `_` 当作通配符。失效工作区记录仍可由本人管理，`workspace_name=null`；运行时不得将其退化为全局记忆。
+
+越权 ID、其他记忆类型、已撤回记录或写入时不可用的工作区统一 `NOT_FOUND`；版本冲突 `CONCURRENCY`；空正文、超长、非法类别及数量超限使用 `VALIDATION`。新增返回 HTTP 201，更新返回 200，删除返回 204。每人至多 200 条有效记录，写入在用户行锁下校验数量与版本；绑定工作区时先锁工作区，再锁用户与目标记忆，避免与工作区清理锁序冲突。已知凭据值不能写入，错误和审计不含提交正文；普通的 token 预算等词语不应被当作凭据拒绝。
+
+### 存储、来源与撤回
+
+复用既有 `KnowledgeMemory`：`tenant_id=personal:<登录用户ID>` 是内部个人命名空间，`acl=private`、`acl_user_ids=[该用户]`；`meta` 包含 `kind=personal_memory`、`schema_version=1`、标题、类别和工作区范围。`source_id=manual:<记忆ID>` 表示用户主动保存，`source_version` 对应公开版本，`embedding=null`。不读取旧宽范围知识记录，不把手动输入伪装为某条对话或工具的已验证结论；无需新增模型或数据库迁移。
+
+创建为版本 1，更正递增；删除置 `memory_revoked=true` 并清空正文和标题、递增版本。以后检索排除撤回记录，重新保存需新建；审计只记录标识和版本等元数据。撤回不删除原始会话事实、已生成回答或既有请求审计，已经发出的请求不可追溯撤回。
+
+### 私有主运行召回
+
+每次实际模型请求均重新获取最新有效记录，不缓存旧正文或旧版本。仅本人拥有的私有主会话可用，子运行和团队共享会话不加载。个人全局记录可用于本人私有会话；工作区记录必须与当前绑定一致且工作区仍属于本人、未注销。SQL 先过滤个人命名空间、私有 ACL、类型与撤回状态，再从最多 200 条本人候选中进行有界关键词评分。
+
+`preference` 可作为默认建议，`fact` 必须匹配当前最新用户输入的关键词；匹配采用英文词和中文双字，不发额外模型请求，不使用向量或 LightRAG。按相关度／更新时间／ID 稳定选择，最多五条完整记录、共用 2048 估算 token，超预算整条跳过。以非缓存系统资料段注入，包含 ID、版本和手动来源，明确不覆盖当前指令、不改变权限、不证明任务成功。旧对话中的历史引用不是本次有效召回。
+
+配置偏好和长期记忆在同一私有范围复验与审计事务中准备，双方读取及使用标记提交成功后才发布新请求段；失败不能沿用之前的缓存。摘要网络等待结束后再次读取最新资料，重建已提交摘要请求并复验硬预算；刷新后超限返回 `BUDGET_EXCEEDED`，不启动第二轮摘要循环。实际长期记忆段纳入上下文 `memory_files` 类别和硬输入预算。沿用 V2.27：已消费个人上下文的会话不能改为团队共享。
+
+### 修改代码文件与作用清单
+
+- `backend/api/app/harness/memory/personal.py`：个人命名空间 CRUD、版本冲突、凭据过滤、工作区检查、撤回与关键词召回。
+- `backend/api/app/routers/agent_memories.py`、`backend/api/app/main.py`：登录身份约束与 REST 注册。
+- `backend/api/app/harness/memory/preference.py`、`backend/api/app/agent/loop_wiring.py`：共享的私有范围校验、使用审计及每次请求的记忆准备和计量。
+- `frontend/src/api/agentMemories.ts`、`frontend/src/views/UserMemories.vue`、路由与布局：管理页、显式范围选择、版本冲突处理。
+- 个人记忆 API／运行时及浏览器回归：存储生命周期、越权、失效范围、撤回刷新、数据提交失败与 UI 操作闭环。
+
+## V2.29 记忆审查修复（2026-09-26）
+
+原文证据遇已知凭据值（如 `sk-`、Bearer、私钥头或明确凭据赋值）整条停止保留，不越过较新的敏感消息去保留更旧约束。恢复已有证据先核对全部来源及逐字内容，再仅保留最后一条敏感证据之后的安全后缀；不改写原始事实或已保存记录。普通 token 预算等说明不因关键词本身被拒绝。新生成摘要若含已知凭据，沿用摘要失败回退和用量记录，不提交候选正文。
+
+`history.read` 对所有可选主专家开放，包括测试用例及三类基准准备专家；沿用专家声明与平台白名单的交集，子运行仍无此工具。原有运行内来源、权限复验和分页预算不变。
+
+记忆保存返回 `NOT_FOUND` 时，前端若提交了工作区范围，先刷新本人工作区目录。已失效范围明确提示改选，并保留草稿和原选择，不自动转为全局；真正的记忆不可访问或 `CONCURRENCY` 继续禁止旧版本覆盖。新建与更正都执行此处理，REST 路径、状态码和响应结构不变。
+
+### 修改代码文件与作用清单
+
+- `backend/api/app/harness/security/loop_redaction.py`、`backend/api/app/harness/memory/personal.py`：统一已知凭据识别，个人记忆沿用原拒绝规则。
+- `backend/api/app/agent/compaction.py`：新证据选择、旧证据恢复过滤及敏感摘要候选拒绝。
+- `backend/api/app/agent/experts.py`：补齐四类显式主专家的回读白名单，子运行交集保持隔离。
+- `frontend/src/views/UserMemories.vue`：区分范围失效与版本冲突，保留草稿以便明确改选。
+- `backend/api/tests/test_loop_compaction_credentials.py`、`test_loop_history.py`、`test_loop_wiring.py` 和 `frontend/tests/e2e/userMemories.spec.ts`：凭据边界、恢复验真、全专家实际回读及动态范围失效回归。
+
+## V2.30 回读与记忆编辑故障修复（2026-09-26）
+
+`history.read` 在既有传输脱敏基础上共用个人记忆凭据规则：正文及参数内文本若包含明确密码／密钥赋值或私钥头，整段字符串替换为 `[已脱敏]` 后再序列化分页。`offset`、`next_offset` 和 `total_chars` 始终基于过滤后的公开文本，原始事实不变；不增加工具参数或返回字段。
+
+记忆编辑期间工作区目录请求失败时，在原弹窗显示错误与重试入口。重试只刷新目录并保留草稿、版本和范围；后续保存仍按既有版本校验与显式范围选择处理。REST 路径、状态码及 JSON 契约不变。
+
+### 修改代码文件与作用清单
+
+- `backend/api/app/agent/history.py`、`backend/api/tests/test_loop_history.py`：分页前过滤已知凭据及无损公开分页回归。
+- `frontend/src/views/UserMemories.vue`、`frontend/tests/e2e/userMemories.spec.ts`：编辑期间目录故障提示、重试及草稿保留回归。

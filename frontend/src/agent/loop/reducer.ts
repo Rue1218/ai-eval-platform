@@ -1,10 +1,11 @@
-import type { Attempt, Connection, Data, InteractionRecord, LoopFrame, LoopRecord, TaskPlanDisplay, ToolRun } from '../../api/agentLoopTypes.ts'
+import type { Attempt, Connection, ContextUsage, Data, InteractionRecord, LoopFrame, LoopRecord, TaskPlanDisplay, ToolRun } from '../../api/agentLoopTypes.ts'
 
 /** 一个会话独占三套游标；持久事实不受瞬态诊断缓冲大小限制。 */
 export interface LoopState {
   sessionId: string; cursor: number; connection: Connection; ready: boolean; activeTurn: string | null
   phase: string; cancelling: boolean; error: string; controlled: boolean
   messages: Record<string, LoopRecord>; attempts: Record<string, Attempt>; tools: Record<string, ToolRun>
+  summaryUsage: Record<string, ContextUsage>
   interactions: Record<string, InteractionRecord>; tasks: Record<string, LoopRecord>; executions: Record<string, LoopRecord>
   turns: Record<string, LoopRecord>; facts: LoopFrame[]; receipts: Record<string, LoopFrame>; taskPlan: TaskPlanDisplay | null; title?: string
 }
@@ -12,7 +13,7 @@ export interface LoopState {
 export function createLoopState(sessionId: string): LoopState {
   return { sessionId, cursor: 0, connection: 'connecting', ready: false, activeTurn: null, phase: 'idle',
     cancelling: false, error: '', controlled: false, messages: {}, attempts: {}, tools: {}, interactions: {},
-    tasks: {}, executions: {}, turns: {}, facts: [], receipts: {}, taskPlan: null }
+    tasks: {}, executions: {}, turns: {}, facts: [], receipts: {}, taskPlan: null, summaryUsage: {} }
 }
 /** 身份包含会话、回合、attempt、call，工具重名或 call_id 跨轮复用均不冲突。 */
 export function identity(frame: Pick<LoopFrame, 'session_id' | 'correlation'>, tool = false): string {
@@ -128,6 +129,11 @@ export function applyFrame(state: LoopState, frame: LoopFrame): 'applied' | 'dup
     if (kind === 'assistant.message') { a.text = d.content ?? ''; a.reasoning = d.reasoning_preview ?? ''; a.ended = true }
     if (kind === 'assistant.end') a.ended = true
     if (kind === 'assistant.retry') state.phase = 'retry_wait'
+  }
+  if (kind === 'context.usage' && Number.isSafeInteger(c.source_seq) && c.source_seq! >= 0) {
+    // 一个来源事实只计量一次；独立集合不参与助手气泡、复制和最终回答选择。
+    const key = JSON.stringify([state.sessionId, c.source_seq])
+    state.summaryUsage[key] ??= { ...record(frame, key), usage: d.usage, latency_ms: d.latency_ms }
   }
   if (kind.startsWith('tool.') && c.call_id) {
     const t = toolFor(state, frame)

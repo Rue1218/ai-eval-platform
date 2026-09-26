@@ -9,6 +9,7 @@ from app.harness.memory.preference import (
     public_prefs,
     write_prefs,
 )
+from app.models import User
 
 
 def test_prefs_from_task_spec_keeps_allowed_fields_only() -> None:
@@ -60,9 +61,11 @@ def test_public_prefs_projects_updated_at() -> None:
 
 
 def test_write_prefs_can_skip_commit() -> None:
-    """同事务写入时不得自行 commit。"""
+    """首次写先锁同成员，且同事务写入不得自行 commit。"""
     db = MagicMock()
     db.query.return_value.filter.return_value.first.return_value = None
     write_prefs(db, "u1", {"last_kind": "benchmark"}, commit=False)
+    assert db.query.call_args_list[0].args == (User.id,)
+    db.query.return_value.filter.return_value.with_for_update.assert_called_once_with(key_share=True)
     db.add.assert_called_once()
     db.commit.assert_not_called()

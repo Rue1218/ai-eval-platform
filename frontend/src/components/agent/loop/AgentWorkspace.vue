@@ -607,7 +607,7 @@ const activeInteractionDrawer = computed<InteractionRecord | null>(() => {
 })
 const summary = computed(() => latestRequestSummary(state.value?.attempts))
 /** 仅聚合已提交的上游 usage；缺字段代表上游未返回，不能当作零或自行估算。 */
-const conversationMetrics = computed<ConversationMetrics>(() => conversationMetricsFrom(state.value?.attempts))
+const conversationMetrics = computed<ConversationMetrics>(() => conversationMetricsFrom(state.value?.attempts, state.value?.summaryUsage))
 const tasks = computed(() => Object.values(state.value?.tasks || {}))
 /** 从脱敏参数/结果解析 task_id，再关联实时 Worker 事实，不能靠工具名称猜测任务。 */
 function taskForTool(tool: ToolRun): LoopRecord | null {
@@ -817,6 +817,7 @@ const turnSummaryByLastRowKey = computed<Map<string, TurnSummary>>(() =>
     activeTurnId: state.value?.activeTurn,
     isBusy: busy.value,
     sessionId: props.sessionId,
+    summaryUsage: state.value?.summaryUsage,
   }),
 )
 

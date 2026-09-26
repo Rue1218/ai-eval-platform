@@ -115,6 +115,20 @@ test('conversationMetricsFrom：多轮累计，非法数值按 0 处理不污染
   assert.equal(metrics.outputTokens, 200)
 })
 
+test('conversationMetricsFrom：摘要计入会话总量，缺耗时的历史不抬高吞吐', () => {
+  const metrics = conversationMetricsFrom({
+    answer: { usage: { prompt_tokens: 100, completion_tokens: 20 }, latency_ms: 1000 },
+  }, {
+    summary: { usage: { prompt_tokens: 1000, completion_tokens: 40, cached_tokens: 500 }, latency_ms: 1000 },
+    failed: { usage: { prompt_tokens: 200, completion_tokens: 10 }, latency_ms: 500 },
+    legacy: { usage: { prompt_tokens: 700, completion_tokens: 30 } },
+  })
+  assert.equal(metrics.inputTokens, 2000)
+  assert.equal(metrics.outputTokens, 100)
+  assert.equal(metrics.outputTokensPerSecond, 28)
+  assert.equal(metrics.cacheHitRate, 25)
+})
+
 test('pickProfile：优先草稿选择，未知 ID 回落平台默认', () => {
   const ui = { profiles: [{ id: 'p1' }, { id: 'p2' }], profile: { id: 'p-default' } }
   assert.equal(pickProfile(ui, 'p2').id, 'p2')

@@ -51,6 +51,7 @@ class ExpertDef:
         return path.read_text(encoding="utf-8").strip()
 
 
+# 主运行专家可回读压缩来源；子运行仍由 SUBAGENT_TOOLS 交集过滤 history.read。
 EXPERTS: tuple[ExpertDef, ...] = (
     ExpertDef(
         expert_id=DEFAULT_EXPERT_ID,
@@ -65,27 +66,27 @@ EXPERTS: tuple[ExpertDef, ...] = (
         description="从需求文档生成测试用例：需求解析 → 功能点/测试点拆分 → 六类用例 → CSV 交付。",
         badge="用例设计",
         prompt_file="testcase_agent.md",
-        allowed_tools=("read", "write", "edit", "bash", "ask_user_question"),
+        allowed_tools=("read", "write", "edit", "bash", "ask_user_question", "history.read"),
     ),
     ExpertDef(
         expert_id="benchmark-designer", name="基准设计专家", badge="基准设计",
         description="起草文本模型评测蓝图：测量目标、场景、能力、指标和预算。",
         prompt_file="benchmark_designer.md",
-        allowed_tools=("read", "glob", "grep"),
+        allowed_tools=("read", "glob", "grep", "history.read"),
         deliverable_kind="benchmark_blueprint",
     ),
     ExpertDef(
         expert_id="benchmark-data-curator", name="基准数据专家", badge="数据候选",
         description="依据已校验蓝图起草数据候选、来源和独立验证计划，不发布数据。",
         prompt_file="benchmark_data_curator.md",
-        allowed_tools=("read", "glob", "grep", "web_search", "web_fetch"),
+        allowed_tools=("read", "glob", "grep", "web_search", "web_fetch", "history.read"),
         deliverable_kind="data_manifest_candidate",
     ),
     ExpertDef(
         expert_id="benchmark-scoring-designer", name="基准评分设计专家", badge="评分草案",
         description="依据已校验蓝图起草评分维度、锚点、缺失处理、校准和复核策略。",
         prompt_file="benchmark_scoring_designer.md",
-        allowed_tools=("read", "glob", "grep"),
+        allowed_tools=("read", "glob", "grep", "history.read"),
         deliverable_kind="scoring_policy_draft",
     ),
 )

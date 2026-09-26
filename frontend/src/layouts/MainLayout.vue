@@ -291,6 +291,13 @@ const IconWorkspaces = () =>
     h('path', { d: 'M9 13h6M12 10v6' }),
   ])
 
+// 用户主动维护的记忆入口，与工作区同属个人数据域。
+const IconMemories = () =>
+  h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round' }, [
+    h('rect', { x: '5', y: '3', width: '15', height: '18', rx: '2' }),
+    h('path', { d: 'M9 3v18M12 8h5M12 12h5M3 7h4M3 17h4' }),
+  ])
+
 const evalRoutes = computed(() => {
   // 两类评测共享智能体、调度、任务、报告和用例；资产入口则严格随顶栏模式切换。
   const modeAsset = modeStore.mode === 'rag'
@@ -307,6 +314,7 @@ const evalRoutes = computed(() => {
     { path: '/cases', label: '用例', icon: IconCases, t: 'var(--t-cases)', c: 'var(--c-cases)' },
     // F1（G1）：我的工作区（用户自管数据域；管理端清理视图已于 V1.79 下线）
     { path: '/workspaces', label: '我的工作区', icon: IconWorkspaces, t: 'var(--t-workspaces)', c: 'var(--c-workspaces)' },
+    { path: '/memories', label: '我的记忆', icon: IconMemories, t: 'var(--t-workspaces)', c: 'var(--c-workspaces)' },
   ]
 })
 

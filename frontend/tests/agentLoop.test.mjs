@@ -4,6 +4,7 @@ import { createLoopState, applyFrame, conversationRows, restoreSnapshot } from '
 import { createTrace, applyTrace, safePacket, schemaRef, semanticTraceRows, category } from '../src/agent/loop/trace.ts'
 import { safeLink } from '../src/agent/loop/toolPresentation.ts'
 import { canonicalTaskToolName, isTaskTool, taskCardSnapshot, taskProgressPercent } from '../src/agent/loop/taskPresentation.ts'
+import { conversationMetricsFrom } from '../src/agent/loop/workspaceDerived.ts'
 
 /** 夹具遵循生产信封，持久 cursor 与 source seq 从各自起点计数。 */
 function fixture() {
@@ -43,6 +44,28 @@ test('严格游标：重复丢弃，缺口停住，受限占位仍消费序号',
   assert.equal(s.cursor, 3); assert.equal(Object.keys(s.messages).length, 1)
   assert.throws(() => applyFrame(s, { ...first, protocol_version: 3 }))
 })
+test('摘要用量按来源去重且可重放恢复，不产生助手或工具气泡', () => {
+  const state = createLoopState('s'), f = fixture()
+  applyFrame(state, f('user.message', { content: '继续', client_message_id: 'u1' }))
+  const summary = f('context.usage', { usage: { prompt_tokens: 1000, completion_tokens: 30 }, latency_ms: 100 }, { source_seq: 5 })
+  assert.equal(applyFrame(state, summary), 'applied')
+  assert.equal(applyFrame(state, summary), 'duplicate')
+  applyFrame(state, f('context.usage', summary.data, { source_seq: 5 }))
+  applyFrame(state, f('context.usage', { usage: { prompt_tokens: 200, completion_tokens: 10 } }, { source_seq: 9 }))
+  assert.equal(Object.keys(state.summaryUsage).length, 2)
+  assert.equal(Object.keys(state.attempts).length, 0)
+  assert.equal(Object.keys(state.tools).length, 0)
+  assert.deepEqual(conversationRows(state).map(row => row.key), ['u1'])
+  const metrics = conversationMetricsFrom(state.attempts, state.summaryUsage)
+  assert.equal(metrics.inputTokens, 1200)
+  assert.equal(metrics.outputTokens, 40)
+  const restored = restoreSnapshot('s', state.cursor, { timeline: state.facts })
+  assert.deepEqual(restored.summaryUsage, state.summaryUsage)
+  assert.equal(conversationRows(restored).length, 1)
+  assert.equal(applyFrame(restored, summary), 'duplicate')
+  assert.deepEqual(conversationMetricsFrom(restored.attempts, restored.summaryUsage), metrics)
+})
+
 test('任务抽屉只接受成功 task 的独立会话快照，调用草稿和失败结果均不覆盖', () => {
   const s = createLoopState('s'), f = fixture(), c = {attempt_id:'a',call_id:'task-1',call_seq:1}
   applyFrame(s, f('tool.call', {name:'task',display:{task:{goal:'草稿',steps:[{title:'不应显示',status:'pending'}]}}}, c))

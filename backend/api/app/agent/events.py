@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from copy import deepcopy
 from datetime import UTC, datetime
 from typing import Any
@@ -49,6 +50,7 @@ _FIELDS = {
     "task.end": "status report_id display",
     "session.updated": "title engine_version",
     "context.trimmed": "reason dropped kept in_scope_total keep_from_id limit",
+    "context.usage": "usage latency_ms",
     "runtime.error": "code message",
 }
 PERSISTENT_TYPES = frozenset(_FIELDS)
@@ -82,6 +84,7 @@ _SOURCE_TYPES.update({
     "question/answered": "question.resolved",
     "context/trim": "context.trimmed",
     "context/compacted": "context.trimmed",
+    "context/compaction_failed": "context.usage",
 })
 _OUTCOMES = {
     "allowed": "allow", "denied": "deny", "allowed-always": "always",
@@ -121,6 +124,24 @@ def scrub(value: Any) -> Any:
 def _pick(data: dict, fields: str) -> dict:
     """按显式字段集合取值，不修改事实正文。"""
     return scrub({key: data[key] for key in fields.split() if key in data})
+
+
+def _context_usage(data: dict) -> dict:
+    """摘要仅公开已知的数值计量，供应商扩展字段与缺失值不进入统计。"""
+    raw = data.get("usage")
+    if not isinstance(raw, dict):
+        return {}
+    usage = {key: value for key in (
+        "prompt_tokens", "completion_tokens", "total_tokens", "cache_read_input_tokens",
+        "cache_creation_input_tokens", "cached_tokens",
+    ) if type(value := raw.get(key)) in (int, float) and math.isfinite(value) and value >= 0}
+    if not usage:
+        return {}
+    result = {"usage": usage}
+    latency = data.get("latency_ms")
+    if type(latency) is int and latency >= 0:
+        result["latency_ms"] = latency
+    return result
 
 
 def _transport_data(event_type: str, data: dict) -> dict:
@@ -260,6 +281,13 @@ def project_fact(event: dict) -> list[dict]:
         elif source.get("code") == "VALIDATION":
             data = {"code": "VALIDATION", "message": "会话上下文校验失败，原始历史已保留"}
     projections = [(event_type, data)]
+    if event.get("type") in {"context/compacted", "context/compaction_failed"}:
+        # 用量独立于压缩通知和助手消息，失败摘要也只能公开已测得的计量。
+        usage = _context_usage(source)
+        if event_type == "context.usage":
+            projections = [(event_type, usage)] if usage else []
+        elif usage:
+            projections.append(("context.usage", usage))
     if event_type == "assistant.message":
         end_data = {
             "outcome": "committed", "committed_seq": seq,
@@ -271,9 +299,13 @@ def project_fact(event: dict) -> list[dict]:
         projections.append(("assistant.end", end_data))
     result = []
     for kind, payload in projections:
+        projected_correlation = correlation
+        if kind == "context.usage":
+            projected_correlation = {key: value for key, value in correlation.items()
+                                     if key in {"turn_id", "turn", "step", "source_seq"}}
         envelope = frame(
             kind, payload, session_id=event["session_id"], cursor=1,
-            correlation=correlation, ts=event.get("ts"),
+            correlation=projected_correlation, ts=event.get("ts"),
         )
         del envelope["cursor"]
         envelope["projection_kind"] = kind
@@ -365,7 +397,7 @@ def trace_frame(event: dict, session_id: str, *, source: str) -> dict:
 def schema_catalog() -> dict:
     """传输目录独立版本化，不假装它是原始事实 schema 的完整描述。"""
     return {
-        "version": "agent-loop-stream.v2.2",
+        "version": "agent-loop-stream.v2.3",
         "types": {
             **{name: {"durability": "persistent", "fields": fields.split()}
                for name, fields in _FIELDS.items()},

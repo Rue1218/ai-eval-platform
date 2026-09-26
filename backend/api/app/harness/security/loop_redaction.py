@@ -24,6 +24,18 @@ _SENSITIVE_VALUE = re.compile(
     r"(?:\bbearer\s+[a-z0-9._~+/=-]{8,}|\bsk-[a-z0-9._-]{8,})",
     re.IGNORECASE,
 )
+# 派生记忆只拒绝明确凭据值，普通 token 预算或 password 说明仍可保留。
+_CREDENTIAL_ASSIGNMENT = re.compile(
+    r"(?:\b(?:api[_-]?key|access[_-]?key|access[_-]?token|refresh[_-]?token|"
+    r"password|passwd|secret|client[_-]?secret|authorization|cookie|token)\b|密码|密钥)"
+    r"[\"']?\s*[:=：]\s*[\"']?\S+", re.IGNORECASE,
+)
+_PRIVATE_KEY = re.compile(r"-----BEGIN (?:[A-Z]+ )?PRIVATE KEY-----")
+
+
+def contains_credential(value: str) -> bool:
+    """个人记忆与压缩证据共用的纯文本凭据识别，不改写原始会话或日志。"""
+    return bool(_SENSITIVE_VALUE.search(value) or _CREDENTIAL_ASSIGNMENT.search(value) or _PRIVATE_KEY.search(value))
 
 
 def _pointer_escape(value: str) -> str:
