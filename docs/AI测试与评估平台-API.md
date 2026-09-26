@@ -4,8 +4,8 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V2.30 |
-| 本轮审查日期 | 2026-09-26（历史回读凭据过滤与记忆编辑目录故障恢复） |
+| 文档版本 | V2.31 |
+| 本轮审查日期 | 2026-09-26（旧 API 首次升级的数据库屏障与恢复闭环） |
 | WS v2 修订日期 | 2026-09-26（§4A，摘要安全用量元数据与 v2.3 目录） |
 | 对应 PRD | V1.48（功能唯一权威） |
 | 对应设计规范 | V1.12（错误码文案、确认卡字段名、调度中心规范） |
@@ -3628,7 +3628,7 @@ AgentLoop 的 `dsh_max_steps` 仍为每轮硬上限（默认 16），最后一�
 
 Linux Compose 部署使用共享 `/data/.agent-deploy.lock`：`turn.submit` 持共享锁完成 `turn/start` 提交；部署持排他锁后统计 `agent_runtime_state.active_turn`，全部为空才更新任何容器。现有回合及其交互回复可继续，新回合拒绝码为 `CONCURRENCY`，文案为“服务正在部署，当前回合可继续，请稍后发起新回合”。准入锁不可用时同码返回“部署状态不可用，请稍后重试”。等待期限 `DEPLOY_AGENT_DRAIN_TIMEOUT` 默认 600 秒；单次活动计数查询最多 15 秒。失败或超时退出并释放锁，不强制取消回合、不推进成功部署基准。窗口保护要求全部 Agent 入口经当前 LoopService，并使用同一 Linux 本机共享数据卷；Windows 本地开发不启用此部署文件锁。
 
-首次从旧版本升级时旧 API 尚无准入锁，部署脚本明确拒绝直接热更新。须在维护窗口阻止新请求，确认没有活动回合后停止旧 API，再运行标准部署脚本。脚本遵从既有“保留手动停止服务”行为，因此升级后需加载新的 `.deploy-images.env` 镜像映射并显式启动 API，验证健康后再恢复入口。不得为通过部署而清空活动回合字段或绕过等待。
+首次从旧版本升级时，脚本仅在确认 `app.agent.deploy_guard` 模块缺失后进入兼容流程；能力探测失败仍拒绝部署。脚本先取得共享数据目录排他锁，再在旧 API 容器内对 `agent_runtime_state`、`agent_runs` 取得 PostgreSQL `EXCLUSIVE` 表锁，统计主活动回合和 queued/running 专家运行。非零时立即释放数据库屏障让现有工作继续，按同一等待期限重试；零计数时保持屏障直到旧 API 停止，防止检查空闲后又提交新回合。此时开始短暂维护窗口，标准更新流程自动启动本次主动停止的 API；手动停止的服务仍保持原状。停机后更新失败且旧容器尚未被替换时恢复原容器。新 API 的准入模块与健康版本检查通过后才能推进成功基准。连接、锁定、查询失败或超时均不得清空活动字段或绕过等待；只支持单 API 容器及上述运行表已存在的版本。
 
 ### 修改代码文件与作用清单
 
@@ -3832,3 +3832,15 @@ v2 `task.create` 在用户确认、规格复验并成功入队的同一事务中
 
 - `backend/api/app/agent/history.py`、`backend/api/tests/test_loop_history.py`：分页前过滤已知凭据及无损公开分页回归。
 - `frontend/src/views/UserMemories.vue`、`frontend/tests/e2e/userMemories.spec.ts`：编辑期间目录故障提示、重试及草稿保留回归。
+
+## V2.31 旧 API 首次升级修复（2026-09-26）
+
+补齐首次部署准入保护时的升级路径，详见 §4A 部署契约：在数据库屏障内等待主回合和专家运行清空，然后停止旧 API，自动启动新 API 并验证健康。已支持文件锁的 API 继续使用原有准入流程；REST/WS 路径与 JSON 字段不变。
+
+### 修改代码文件与作用清单
+
+- `deploy/legacy_agent_barrier.py`：旧容器内真实 PostgreSQL 表锁、活动计数和有界生命周期。
+- `deploy/drain-agents.sh`：能力探测、屏障内停机、失败恢复与首次升级健康检查。
+- `deploy/deploy.sh`：登记本次停机责任、自动更新 API，检查成功后才推进基准。
+- `deploy/tests/test_drain_agents.py`：空闲/繁忙、能力与查询故障、停机与后续更新失败、子进程退出和不健康回归。
+- `backend/api/tests/test_deploy_legacy_barrier.py`：隔离 PostgreSQL 验证真实写入/行锁竞争、主回合和专家计数、异常释放。
