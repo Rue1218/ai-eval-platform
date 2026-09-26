@@ -309,7 +309,15 @@ fi
 # 在任何基础设施或业务容器更新之前阻止新回合，并等待活动回合退出。
 # Actions 与本地回退均经此入口；检查失败由 set -e 中止，退出自动释放文件锁。
 source "$APP_DIR/deploy/drain-agents.sh"
+trap restore_legacy_api EXIT
 drain_agent_turns
+if [ -n "${LEGACY_API_STOPPED:-}" ]; then
+    # 首次升级由脚本停止的 API 必须恢复；与用户手动停止的服务区别处理。
+    case " ${UPDATE_SERVICES[*]} " in
+        *" api "*) ;;
+        *) UPDATE_SERVICES+=(api) ;;
+    esac
+fi
 
 # 基础设施目标镜像以 docker-compose.yml 插值结果为准（唯一事实源），脚本不再重复定义默认值；
 # 若环境显式设置 POSTGRES_IMAGE/REDIS_IMAGE，compose 插值会自然生效。单次调用减少部署耗时。
@@ -440,7 +448,8 @@ for service in "${UPDATE_SERVICES[@]}"; do
     fi
     SERVICE_RUNNING=$(docker inspect --format '{{.State.Running}}' "$SERVICE_CONTAINER")
     SERVICE_PAUSED=$(docker inspect --format '{{.State.Paused}}' "$SERVICE_CONTAINER")
-    if [ "$SERVICE_RUNNING" = "true" ] && [ "$SERVICE_PAUSED" != "true" ]; then
+    if { [ "$SERVICE_RUNNING" = "true" ] && [ "$SERVICE_PAUSED" != "true" ]; } \
+        || { [ "$service" = api ] && [ "$SERVICE_CONTAINER" = "${LEGACY_API_STOPPED:-}" ]; }; then
         DEPLOY_SERVICES+=("$service")
     else
         echo "==> 保留 $service 的停止/暂停状态；镜像已更新，手动恢复时生效"
@@ -514,6 +523,8 @@ if [[ " ${DEPLOY_SERVICES[*]} " == *" web "* ]]; then
         done
     '
 fi
+
+verify_bootstrap_api
 
 # 先原子持久化镜像引用，再更新成功基准，避免中断留下新基准与旧镜像映射。
 # 使用 %q 防止再次 source 时发生 shell 注入；临时文件位于同目录以保证原子替换。
