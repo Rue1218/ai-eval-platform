@@ -6,12 +6,22 @@ async function setup(page: Page) {
   const held: Record<string, Route> = {}
   const holds = new Set<string>()
   const names = ['one.txt', 'two.txt']
+  const createdWorkspaces: string[] = []
   await page.route(/\/api\/workspaces(?:\/|\?|$)/, async route => {
     const url = new URL(route.request().url())
     const parts = url.pathname.split('/')
     if (url.pathname === '/api/workspaces') {
-      const ids = url.searchParams.get('offset') === '2' ? ['w3'] : ['w1', 'w2']
-      return route.fulfill({ json: { items: ids.map(id => ({ id, name: id, deleted: false, quota_bytes: 1024 ** 3, folder: { total_bytes: 1024 ** 2, file_count: 2 } })), total: 3 } })
+      if (route.request().method() === 'POST') {
+        createdWorkspaces.push('w4')
+        return route.fulfill({ json: { id: 'w4', name: 'w4', deleted: false } })
+      }
+      const ids = url.searchParams.get('offset') === '2' ? ['w3', ...createdWorkspaces] : ['w1', 'w2']
+      return route.fulfill({ json: { items: ids.map(id => ({ id, name: id, deleted: false, quota_bytes: 1024 ** 3, folder: { total_bytes: 1024 ** 2, file_count: 2 } })), total: 3 + createdWorkspaces.length } })
+    }
+    if (url.pathname.endsWith('/files/file') && route.request().method() === 'POST') {
+      const name = route.request().postDataJSON().name
+      names.push(name)
+      return route.fulfill({ json: { name, path: name } })
     }
     if (url.pathname.endsWith('/tree')) return route.fulfill({ json: { tree: names.map(name => ({ name, path: name, kind: 'file', size: 8 })) } })
     if (url.pathname.endsWith('/content')) {
@@ -100,3 +110,31 @@ test('确认切换清除旧文件，下一次保存归属新工作区', async ({
   await page.locator('.editor-textarea').press('Control+s')
   await expect.poll(() => ctx.saves).toEqual([{ workspace: 'w2', content: 'new workspace edit' }])
 })
+
+for (const action of ['refresh', 'create-file', 'create-workspace']) {
+  test(`${action} 保留当前文件未保存的草稿`, async ({ page }) => {
+    const ctx = await setup(page)
+    await page.locator('.tree-node-row').filter({ hasText: 'one.txt' }).click()
+    await page.locator('.editor-textarea').fill('unsaved draft')
+    if (action === 'refresh') {
+      await page.getByRole('button', { name: '刷新', exact: true }).click()
+    } else if (action === 'create-file') {
+      await page.getByTitle('新建文件', { exact: true }).click()
+      await page.getByPlaceholder('main.py / README.md').fill('new.txt')
+      await page.locator('.modal-card').getByRole('button', { name: '确定创建', exact: true }).click()
+      await expect(page.locator('.tree-node-row').filter({ hasText: 'new.txt' })).toBeVisible()
+    } else {
+      await page.getByRole('button', { name: '新建工作区', exact: true }).click()
+      await page.getByPlaceholder('例如：大模型评测主库').fill('w4')
+      await page.getByRole('button', { name: '立即创建', exact: true }).click()
+      await expect(page.locator('.workspace-select option')).toHaveCount(4)
+    }
+    await expect(page.locator('.workspace-select')).toBeEnabled()
+    await settled(page)
+    await expect(page.locator('.workspace-select')).toHaveValue('w1')
+    await expect(page.locator('.editor-textarea')).toHaveValue('unsaved draft')
+    await expect(page.locator('.dirty-badge')).toBeVisible()
+    await page.locator('.editor-textarea').press('Control+s')
+    await expect.poll(() => ctx.saves).toEqual([{ workspace: 'w1', content: 'unsaved draft' }])
+  })
+}

@@ -4,10 +4,10 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V2.32 |
-| 本轮审查日期 | 2026-09-26（部署准入探测避免完整 Agent 冷启动） |
+| 文档版本 | V2.33 |
+| 本轮审查日期 | 2026-09-26（合并功能复查：重复编号导入与工作区草稿保护） |
 | WS v2 修订日期 | 2026-09-26（§4A，摘要安全用量元数据与 v2.3 目录） |
-| 对应 PRD | V1.48（功能唯一权威） |
+| 对应 PRD | V1.50（功能唯一权威） |
 | 对应设计规范 | V1.12（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.7.8（AgentLoop 单入口；JSON 仍以本文为准） |
 | 对应前端计划 | AgentLoop 前端计划 V0.5 |
@@ -1235,6 +1235,8 @@ case item 包含：`id, strategy, priority, module, name, precondition, steps, e
 `multipart/form-data`，字段名 `file`。仅 `.xlsx` / `.xlsm`；`.xls` 返回 `VALIDATION` 提示另存。单文件 ≤10MB，有效用例 ≤2000 条。已确认或已废弃的用例集拒绝导入。
 
 `mode` 缺省 `append`：追加写入，Excel「用例编号」若属于本集则更新该行，否则插入；`replace` 先清空本集全部用例再写入。
+
+同批重复编号复用本集同一行，以最后一条内容为准；若编号属于其他用例集，本批只新建一个本集副本，保留其他集合原文。`imported_count` 统计处理的有效输入行数，`generated_count` 为去重后本集实际总条数。
 
 表头识别（列顺序不限，可出现在前 20 行）：
 
@@ -3853,3 +3855,12 @@ v2 `task.create` 在用户确认、规格复验并成功入队的同一事务中
 
 - `deploy/drain-agents.sh`：轻量能力检查与首次升级健康探测，避免冷启动导致误报。
 - `deploy/tests/test_probe_agent_guard.py`：直接执行脚本中的 Python 命令，覆盖 Agent 初始化隔离、模块缺失/损坏、健康状态与版本校验。
+
+## V2.33 合并功能复查修复（2026-09-26）
+
+Excel 导入在本批缓存已写入但尚未 flush 的用例，重复编号按既有更新语义处理，避免主键冲突；跨集编号仍隔离为本集副本。工作区刷新、新建文件或新建工作区后保留当前未保存草稿及其工作区，用户可通过既有切换确认进入新资源。REST/WS 路径、状态码及字段不变。
+
+### 修改代码文件与作用清单
+
+- `backend/api/app/routers/cases.py`、`backend/api/tests/test_cases_audit.py`：追加/替换导入的批内编号复用，以及新编号、本集编号、跨集编号六种回归。
+- `frontend/src/views/UserWorkspaces.vue`、`frontend/tests/e2e/workspaceAudit.spec.ts`：刷新和创建后的草稿保护，验证保留内容并保存到原工作区。
