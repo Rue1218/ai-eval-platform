@@ -43,6 +43,7 @@ from app.schemas import (
         ),
         ("POST", "/api/case-sets/ai-generate", {"source_text": "PRD 正文"}),
         ("GET", "/api/case-sets/import-template", None),
+        ("POST", "/api/case-sets/import", None),
         ("POST", "/api/case-sets/cs-1/import", None),
         ("POST", "/api/case-sets/cs-1/ai-fill", {"case_ids": ["c-1"]}),
         ("GET", "/api/case-sets/cs-1/export?fmt=xlsx", None),

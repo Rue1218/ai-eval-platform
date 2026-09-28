@@ -169,7 +169,7 @@
               <text y="6" class="sn-ico" text-anchor="middle">{{ s.icon }}</text>
               <text y="45" class="sn-name" text-anchor="middle">{{ s.name }}</text>
               <text y="59" class="sn-count" text-anchor="middle">
-                {{ s.activeCount > 0 ? `${s.runningCount} 运行 / ${s.activeCount} 活跃` : '待命' }}
+                {{ s.activeCount > 0 ? `${s.runningCount} 运行 / ${s.activeCount} ${liveMode ? '可见' : '活跃'}` : '待命' }}
               </text>
             </g>
 
@@ -488,6 +488,9 @@
         <span class="row" style="gap: 5px; align-items: center"><i class="legend-dot" style="background: var(--accent-success)"></i><span class="tertiary">完成涟漪</span></span>
         <span class="tertiary" style="margin-left: auto">滚轮缩放 · 拖拽平移 · 双击复位 · 浮窗面板可折叠</span>
       </div>
+      <div v-if="liveMode && (topo.queueOverflow || topo.runningOverflow || topo.awaitingOverflow)" class="small tertiary mt8">
+        星图仅展示代表任务；未显示：排队 {{ topo.queueOverflow }}、运行中 {{ topo.runningOverflow }}、待确认 {{ topo.awaitingOverflow }}。
+      </div>
     </div>
 
     <!-- 节点治理弹窗 -->
@@ -714,6 +717,8 @@ const queue = ref<QueueItem[]>([
 // live 模式：活跃任务（queued/running/awaiting_case_confirm）与近期任务（甘特）
 const liveActiveTasks = ref<Task[]>([])
 const liveRecentTasks = ref<Task[]>([])
+const liveRunningTotal = ref(0)
+const liveAwaitingTotal = ref(0)
 // live 模式任务→节点映射：由 assigned 事件维护，终态事件解除
 const taskWorkerMap = ref<Record<string, string>>({})
 
@@ -870,7 +875,11 @@ const topo = computed(() => {
   const running = taskNodes.value.filter(t => t.status === 'running')
   const runStack = new Map<string, number>()
   const tasks: { t: TaskNode; x: number; y: number }[] = []
-  queued.slice(0, MAX_QUEUE_CHIPS).forEach((t, i) => {
+  const visibleAwaiting = liveMode ? queued.filter(t => t.status === 'awaiting_case_confirm').slice(0, 2) : []
+  const visibleQueued = liveMode
+    ? [...queued.filter(t => t.status === 'queued').slice(0, MAX_QUEUE_CHIPS - visibleAwaiting.length), ...visibleAwaiting]
+    : queued.slice(0, MAX_QUEUE_CHIPS)
+  visibleQueued.forEach((t, i) => {
     const p = polar(105 + i * 30, R_QUEUE)
     tasks.push({ t, x: p.x, y: p.y })
   })
@@ -904,7 +913,13 @@ const topo = computed(() => {
       return { key: `live-${t.id}`, skillKind: t.kind as string, d: `M ${CX} ${CY} L ${s.x} ${s.y} L ${pw.x} ${pw.y}` }
     })
 
-  return { skills, sectors, workers, tasks, liveWires, queueOverflow: Math.max(0, queued.length - MAX_QUEUE_CHIPS) }
+  const visibleByStatus = (status: TaskStatus) => tasks.filter(p => p.t.status === status).length
+  return {
+    skills, sectors, workers, tasks, liveWires,
+    queueOverflow: Math.max(0, (liveMode ? queueDepth.value : queued.length) - visibleByStatus('queued')),
+    runningOverflow: liveMode ? Math.max(0, liveRunningTotal.value - visibleByStatus('running')) : 0,
+    awaitingOverflow: liveMode ? Math.max(0, liveAwaitingTotal.value - visibleByStatus('awaiting_case_confirm')) : 0,
+  }
 })
 
 const onlineCount = computed(() =>
@@ -918,7 +933,7 @@ const totalWorkers = computed(() =>
 const queueDepth = computed(() =>
   liveMode && overviewData.value ? overviewData.value.queue_depth : queue.value.filter(q => !q.workerId).length,
 )
-const runningCount = computed(() => taskNodes.value.filter(t => t.status === 'running').length)
+const runningCount = computed(() => liveMode ? liveRunningTotal.value : taskNodes.value.filter(t => t.status === 'running').length)
 const assignedTodayNum = computed(() =>
   liveMode && overviewData.value ? overviewData.value.assigned_today : assignedToday.value,
 )
@@ -1049,8 +1064,8 @@ function showWorkerTip(e: MouseEvent, w: WorkerNode) {
 function showSkillTip(e: MouseEvent, s: { fullName: string; desc: string; runningCount: number; activeCount: number }) {
   placeTip(e, s.fullName, [
     ['职责', s.desc],
-    ['运行中', `${s.runningCount} 个任务`],
-    ['活跃工单', `${s.activeCount} 个`],
+    [liveMode ? '可见运行中' : '运行中', `${s.runningCount} 个任务`],
+    [liveMode ? '可见工单' : '活跃工单', `${s.activeCount} 个`],
     ['操作', '点击聚焦 / 取消聚焦本业务扇区'],
   ])
 }
@@ -1519,29 +1534,39 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
-/** 全量刷新大盘指标、节点池与任务域（活跃任务进星图，近期任务进甘特）。 */
+let liveLoadRequestId = 0
+
+/** 刷新大盘指标、节点池与任务域；状态总量来自分页契约，星图只取有限代表任务。 */
 async function loadLiveAll() {
+  const requestId = ++liveLoadRequestId
   try {
-    const [ov, workers, allTasks] = await Promise.all([
+    const [ov, workers, recentPage, queuedPage, runningPage, awaitingPage] = await Promise.all([
       api.dispatch.overview(),
       api.dispatch.workers(),
-      api.tasks.list(),
+      api.tasks.listPage({ limit: 12, offset: 0 }),
+      api.tasks.listPage({ status: 'queued', limit: 8, offset: 0 }),
+      api.tasks.listPage({ status: 'running', limit: 64, offset: 0 }),
+      api.tasks.listPage({ status: 'awaiting_case_confirm', limit: 8, offset: 0 }),
     ])
+    if (requestId !== liveLoadRequestId) return
     if (ov) {
       overviewData.value = ov
       strategy.value = ov.strategy
       capacity.value = ov.max_running_tasks
     }
     if (workers) workerPool.value = workers.map(mapWorker)
-    const sorted = [...allTasks].sort((a, b) => +new Date(b.created_at) - +new Date(a.created_at))
-    liveActiveTasks.value = sorted.filter(t => ['queued', 'running', 'awaiting_case_confirm'].includes(t.status))
-    liveRecentTasks.value = sorted.slice(0, 12)
+    liveRunningTotal.value = runningPage.total
+    liveAwaitingTotal.value = awaitingPage.total
+    const activeById = new Map([...queuedPage.items, ...runningPage.items, ...awaitingPage.items].map(task => [task.id, task]))
+    liveActiveTasks.value = [...activeById.values()].sort((a, b) => +new Date(b.created_at) - +new Date(a.created_at))
+    liveRecentTasks.value = recentPage.items
     nowTs.value = Date.now()
     pushHist(histQueue.value, queueDepth.value)
     pushHist(histRunning.value, runningCount.value)
     pushHist(histCost.value, avgDispatchCost.value)
     pushHist(histAssigned.value, assignedTodayNum.value)
   } catch (err: any) {
+    if (requestId !== liveLoadRequestId) return
     message.error(err.message || '调度数据加载失败')
   }
 }

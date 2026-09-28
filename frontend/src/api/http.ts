@@ -26,6 +26,7 @@ import {
   type Task,
   type TaskSpec,
   type Report,
+  type ReportListItem,
   type AdminSettings,
   type AgentExpertPromptDocument,
   type AgentExpertPromptMetadata,
@@ -144,8 +145,6 @@ http.interceptors.response.use(
   },
 )
 
-// KB 域后端路由属 M3 里程碑：首次 404 后置位，后续读取直接走降级数据，不再重复请求
-let kbBackendMissing = false
 
 // In-Memory Mock Store for interactive demonstration when in mock mode
 const mockStore = {
@@ -404,6 +403,16 @@ export const api = {
 
   // 5. 任务管理
   tasks: {
+    async listPage(params: { status?: string; kind?: string; limit: number; offset: number }): Promise<{ items: Task[]; total: number }> {
+      if (getDataMode() === 'mock') {
+        const filtered = mockStore.tasks.filter((task) =>
+          (!params.status || task.status === params.status) && (!params.kind || task.kind === params.kind),
+        )
+        return { items: filtered.slice(params.offset, params.offset + params.limit), total: filtered.length }
+      }
+      const { data } = await http.get('/api/tasks', { params })
+      return { items: data.items, total: data.total }
+    },
     async list(params: { status?: string; kind?: string } = {}): Promise<Task[]> {
       if (getDataMode() === 'mock') {
         return mockStore.tasks.filter((t) => {
@@ -705,23 +714,28 @@ export const api = {
       })
       return data
     },
-    async getRows(id: string, params: { pending_complete?: boolean } = {}): Promise<DatasetRow[]> {
+    async getRows(id: string, params: { pending_complete?: boolean } = {}): Promise<{ items: DatasetRow[]; version: number }> {
       if (getDataMode() === 'mock') {
-        if (params.pending_complete) return mockStore.pendingRows
-        return [
+        const version = mockStore.datasets.find((dataset) => dataset.id === id)?.version ?? 1
+        if (params.pending_complete) return { items: mockStore.pendingRows, version }
+        return { items: [
           { row_no: 1, question: '如何修改密码？', reference: '在右上角点击个人头像并选择修改密码', context: null },
           { row_no: 2, question: '平台支持哪些协议？', reference: '支持 OpenAI Chat 和 Anthropic Messages', context: null },
           ...mockStore.pendingRows,
-        ]
+        ], version }
       }
       const { data } = await http.get(`/api/datasets/${id}/rows`, { params })
-      return Array.isArray(data) ? data : data.items || []
+      return { items: data.items || [], version: data.version }
     },
     // 批量保存表格编辑结果，确保行内编辑不会只停留在浏览器内存。
-    async saveRows(id: string, rows: Array<DatasetRow & Record<string, unknown>>): Promise<DatasetRow[]> {
-      if (getDataMode() === 'mock') return rows
-      const { data } = await http.put(`/api/datasets/${id}/rows`, { rows })
-      return Array.isArray(data) ? data : data.items || rows
+    async saveRows(id: string, rows: Array<DatasetRow & Record<string, unknown>>, expectedVersion: number): Promise<{ items: DatasetRow[]; version: number }> {
+      if (getDataMode() === 'mock') {
+        const dataset = mockStore.datasets.find((item) => item.id === id)
+        if (dataset) dataset.version = expectedVersion + 1
+        return { items: rows, version: expectedVersion + 1 }
+      }
+      const { data } = await http.put(`/api/datasets/${id}/rows`, { rows }, { params: { expected_version: expectedVersion } })
+      return { items: data.items, version: data.version }
     },
     // 请求 AI 候选行；候选必须由页面确认后再经 saveRows 落库。
     async generateRows(payload: Record<string, unknown>): Promise<Array<DatasetRow & Record<string, unknown>>> {
@@ -924,6 +938,19 @@ export const api = {
       const { data } = await http.post(`/api/case-sets/${id}/import`, formData, { params: { mode, expected_revision: expectedRevision } })
       return data
     },
+    async importExcelAsNew(name: string, file: File, folderId?: string): Promise<CaseImportResult & { case_set_id: string }> {
+      if (getDataMode() === 'mock') {
+        const created = await this.createSet({ name, folder_id: folderId })
+        const result = await this.importExcel(created.id, file, 'replace', created.revision)
+        return { case_set_id: created.id, ...result }
+      }
+      const formData = new FormData()
+      formData.append('file', file)
+      formData.append('name', name)
+      if (folderId) formData.append('folder_id', folderId)
+      const { data } = await http.post('/api/case-sets/import', formData)
+      return data
+    },
     async listFolders(): Promise<CaseFolder[]> {
       if (getDataMode() === 'mock') return []
       const { data } = await http.get('/api/case-folders')
@@ -953,18 +980,8 @@ export const api = {
   kb: {
     async list(): Promise<KnowledgeBase[]> {
       if (getDataMode() === 'mock') return mockStore.kbs
-      // M3 前后端无 /api/kb 路由：已知缺失时直接走降级数据，避免每次挂载重复打 404
-      if (kbBackendMissing) return mockStore.kbs
-      try {
-        const { data } = await http.get('/api/kb')
-        return Array.isArray(data) ? data : data.items || []
-      } catch (e: any) {
-        if (e.status === 404 || e.code === ErrorCode.NOT_FOUND) {
-          kbBackendMissing = true
-          return mockStore.kbs
-        }
-        throw e
-      }
+      const { data } = await http.get('/api/kb')
+      return Array.isArray(data) ? data : data.items || []
     },
     async get(id: string): Promise<KnowledgeBase> {
       if (getDataMode() === 'mock') {
@@ -972,16 +989,8 @@ export const api = {
         if (!kb) throw new ApiError('知识库不存在', ErrorCode.NOT_FOUND, 404)
         return kb
       }
-      try {
-        const { data } = await http.get(`/api/kb/${id}`)
-        return data
-      } catch (e: any) {
-        if (e.status === 404 || e.code === ErrorCode.NOT_FOUND) {
-          const kb = mockStore.kbs.find((x) => x.id === id) || mockStore.kbs[0]
-          return kb
-        }
-        throw e
-      }
+      const { data } = await http.get(`/api/kb/${id}`)
+      return data
     },
     async create(payload: { name: string; kind: 'lightrag' | 'external_chat'; profile_id?: string }): Promise<KnowledgeBase> {
       if (getDataMode() === 'mock') {
@@ -1019,13 +1028,8 @@ export const api = {
     },
     async listDocs(id: string): Promise<KbDocument[]> {
       if (getDataMode() === 'mock') return mockStore.kbDocs
-      try {
-        const { data } = await http.get(`/api/kb/${id}/documents`)
-        return Array.isArray(data) ? data : data.items || []
-      } catch (e: any) {
-        if (e.status === 404 || e.code === ErrorCode.NOT_FOUND) return mockStore.kbDocs
-        throw e
-      }
+      const { data } = await http.get(`/api/kb/${id}/documents`)
+      return Array.isArray(data) ? data : data.items || []
     },
     async uploadDoc(id: string, file: File): Promise<KbDocument> {
       if (getDataMode() === 'mock') {
@@ -1064,21 +1068,8 @@ export const api = {
           text: `第 ${index + 1} 个服务端切块预览。`,
         }))
       }
-      try {
-        const { data } = await http.get(`/api/kb/${id}/documents/${docId}/chunks`, { params })
-        return Array.isArray(data) ? data : data.items || []
-      } catch (e: any) {
-        if (e.status === 404 || e.code === ErrorCode.NOT_FOUND) {
-          const count = params.chunk_size === 256 ? 14 : params.chunk_size === 1024 ? 4 : 8
-          return Array.from({ length: count }, (_, index) => ({
-            chunk_id: `${docId}#c${String(index + 1).padStart(2, '0')}`,
-            doc_id: docId,
-            tokens: Math.round(params.chunk_size * (0.75 + ((index * 37) % 25) / 100)),
-            text: `第 ${index + 1} 个服务端切块预览。`,
-          }))
-        }
-        throw e
-      }
+      const { data } = await http.get(`/api/kb/${id}/documents/${docId}/chunks`, { params })
+      return Array.isArray(data) ? data : data.items || []
     },
     async query(id: string, queryPayload: { query: string; mode?: string; k?: number }): Promise<any> {
       if (getDataMode() === 'mock') {
@@ -1094,39 +1085,13 @@ export const api = {
           metrics: { hit_rate: 0.8, mrr: 0.74, recall: 0.85, contain: 0.83 },
         }
       }
-      try {
-        const { data } = await http.post(`/api/kb/${id}/query`, queryPayload)
-        return data
-      } catch (e: any) {
-        if (e.status === 404 || e.code === ErrorCode.NOT_FOUND) {
-          return {
-            query: queryPayload.query,
-            mode: queryPayload.mode || 'hybrid',
-            items: [
-              { chunk_id: 'd-01#c03', doc_name: 'product-manual.pdf', text: 'AI 测试与评估平台产品手册第一章：评测引擎与两类协议调度规范...', similarity: 0.89, hit: true },
-              { chunk_id: 'd-02#c11', doc_name: 'faq-2026.md', text: 'FAQ 常见问题第 12 条：关于黄金 QA 集制作及 Hit Rate 指标定义...', similarity: 0.82, hit: false },
-            ],
-            // 重排后最终序，供「重排对比」右列渲染排名位移。
-            reranked_ids: ['d-01#c03', 'd-01#c01', 'd-02#c01', 'd-01#c05', 'd-03#c02'],
-            metrics: { hit_rate: 0.8, mrr: 0.74, recall: 0.85, contain: 0.83 },
-          }
-        }
-        throw e
-      }
+      const { data } = await http.post(`/api/kb/${id}/query`, queryPayload)
+      return data
     },
     async getGoldQA(id: string): Promise<GoldQA[]> {
       if (getDataMode() === 'mock') return mockStore.goldQAs.filter((x) => x.kb_id === id)
-      if (kbBackendMissing) return mockStore.goldQAs.filter((x) => x.kb_id === id)
-      try {
-        const { data } = await http.get(`/api/kb/${id}/gold-qa`)
-        return Array.isArray(data) ? data : data.items || []
-      } catch (e: any) {
-        if (e.status === 404 || e.code === ErrorCode.NOT_FOUND) {
-          kbBackendMissing = true
-          return mockStore.goldQAs.filter((x) => x.kb_id === id)
-        }
-        throw e
-      }
+      const { data } = await http.get(`/api/kb/${id}/gold-qa`)
+      return Array.isArray(data) ? data : data.items || []
     },
     async uploadGoldQA(id: string, file: File, name: string): Promise<GoldQA> {
       if (getDataMode() === 'mock') {
@@ -1154,6 +1119,15 @@ export const api = {
 
   // 9. 报告管理
   reports: {
+    async list(params: { offset?: number; limit?: number } = {}): Promise<{ items: ReportListItem[]; total: number }> {
+      if (getDataMode() === 'mock') {
+        const rows = Object.values(mockStore.reports).sort((a, b) => b.created_at.localeCompare(a.created_at))
+        const offset = params.offset || 0
+        return { items: rows.slice(offset, offset + (params.limit || 20)), total: rows.length }
+      }
+      const { data } = await http.get('/api/reports', { params })
+      return data
+    },
     // 重载签名：默认返回报告 JSON；传 fmt='md' 时返回服务端渲染的 Markdown 纯文本
     get: reportsGet,
     async share(id: string, expireDays: number = 7): Promise<{ token: string; share_url: string }> {

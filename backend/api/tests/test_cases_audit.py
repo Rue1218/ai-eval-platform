@@ -446,6 +446,66 @@ def test_append_import_recomputes_checks_from_entire_set(cases_db):
     assert cases_db.query(CaseItem).count() == 2
 
 
+def test_create_and_import_excel_commits_one_complete_set(cases_db):
+    """新集导入只产生含用例的一个集，并将创建和导入审计同事务入库。"""
+    workbook = Workbook()
+    workbook.active.append(["用例名称", "预期结果"])
+    workbook.active.append(["登录成功", "进入首页"])
+    buffer = BytesIO()
+    workbook.save(buffer)
+    buffer.seek(0)
+
+    result = asyncio.run(routes.create_case_set_from_excel(
+        _request(), UploadFile(file=buffer, filename="需求.xlsx"), "新导入集", None, cases_db, _actor(),
+    ))
+
+    created = cases_db.get(CaseSet, result["case_set_id"])
+    assert created.name == "新导入集" and created.revision == 1
+    assert result["imported_count"] == result["generated_count"] == 1
+    assert [row.name for row in cases_db.query(CaseItem).filter_by(case_set_id=created.id)] == ["登录成功"]
+    assert {log.action for log in cases_db.query(AuditLog).filter_by(target_id=created.id)} == {
+        "case_set_create", "case_set_import",
+    }
+
+
+def test_invalid_excel_does_not_create_empty_case_set(cases_db):
+    """无效 Excel 不会提前创建空集；重复尝试也不会增加草稿。"""
+    for _ in range(2):
+        with pytest.raises(AppError) as error:
+            asyncio.run(routes.create_case_set_from_excel(
+                _request(), UploadFile(file=BytesIO(b"invalid"), filename="坏文件.xlsx"),
+                "不应出现", None, cases_db, _actor(),
+            ))
+        assert error.value.code == ErrorCode.VALIDATION
+    assert cases_db.query(CaseSet).count() == 1
+    assert cases_db.query(AuditLog).count() == 0
+
+
+def test_new_set_import_rolls_back_after_write_failure(cases_db, monkeypatch):
+    """即使写入行时失败，新建集和相关审计也一起回滚。"""
+    workbook = Workbook()
+    workbook.active.append(["用例名称", "预期结果"])
+    workbook.active.append(["登录成功", "进入首页"])
+    buffer = BytesIO()
+    workbook.save(buffer)
+    buffer.seek(0)
+    write = routes._write_imported_cases
+
+    def fail_after_rows(*args, **kwargs):
+        write(*args, **kwargs)
+        raise RuntimeError("数据库提交前失败")
+
+    monkeypatch.setattr(routes, "_write_imported_cases", fail_after_rows)
+    with pytest.raises(RuntimeError):
+        asyncio.run(routes.create_case_set_from_excel(
+            _request(), UploadFile(file=buffer, filename="需求.xlsx"),
+            "不应出现", None, cases_db, _actor(),
+        ))
+    assert cases_db.query(CaseSet).count() == 1
+    assert cases_db.query(CaseItem).count() == 0
+    assert cases_db.query(AuditLog).count() == 0
+
+
 def test_stale_replace_import_preserves_newer_cases(cases_db):
     """旧页面的整集替换导入不能清除另一个页面新保存的用例。"""
     routes.save_cases("set", CasesPayload(expected_revision=0, cases=[

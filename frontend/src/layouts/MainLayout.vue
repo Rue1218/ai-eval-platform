@@ -290,7 +290,7 @@ function closeMobileNavigation() {
 function handleLogout() {
   dialog.warning({
     title: '退出登录？',
-    content: '退出登录后，正在运行中的评测与压测任务不会停止。',
+    content: '退出登录后，正在运行的用例生成任务不会停止。',
     positiveText: '确认退出',
     negativeText: '取消',
     onPositiveClick: async () => {

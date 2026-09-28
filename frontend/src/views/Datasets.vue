@@ -166,7 +166,7 @@
               <button
                 class="btn btn-save btn-md"
                 :class="{ dirty: hasUnsavedChanges, saved: justSaved }"
-                :disabled="!hasUnsavedChanges || savingRows"
+                :disabled="!hasUnsavedChanges || savingRows || (showUploadModal && datasetForUpload?.id === activeDatasetId)"
                 title="快捷键 Ctrl/⌘ + S"
                 aria-label="保存当前修改"
                 @click="persistRows"
@@ -723,7 +723,7 @@
     <UploadDatasetModal
       v-model:show="showUploadModal"
       :dataset="datasetForUpload"
-      @success="loadDatasets"
+      @success="handleUploadSuccess"
     />
 
     <n-dropdown
@@ -830,8 +830,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useMessage, useDialog, type DropdownOption } from 'naive-ui'
-import { api } from '../api/http'
-import type { Dataset, DatasetRow, GoldQA } from '../api/types'
+import { api, ApiError } from '../api/http'
+import { ErrorCode, type Dataset, type DatasetRow, type GoldQA } from '../api/types'
 import UploadDatasetModal from '../components/modals/UploadDatasetModal.vue'
 import { escapeHtml, escapeRegex, renderIcon } from '../utils/render'
 
@@ -875,6 +875,7 @@ const sampleRows = ref<EditableDatasetRow[]>([])
 const savingRows = ref(false)
 const justSaved = ref(false)
 const hasUnsavedChanges = ref(false)
+const loadedRowsVersion = ref<number | null>(null)
 const editingCell = ref<{ row: EditableDatasetRow; field: string; original: string } | null>(null)
 const focusedCell = ref<{ rowIdx: number; field: string } | null>(null)
 const showUploadModal = ref(false)
@@ -966,7 +967,7 @@ const drawerWidth = computed(() => (typeof window !== 'undefined' && window.inne
 // ─── 黄金 QA 资产 ───
 const goldQas = ref<GoldQA[]>([])
 const activeGoldQa = computed(() => goldQas.value.find(g => g.id === activeDatasetId.value))
-const isGoldQaActive = computed(() => !activeGoldQa.value)
+const isGoldQaActive = computed(() => Boolean(activeGoldQa.value))
 
 const currentDataset = computed(() =>
   datasets.value.find(dataset => dataset.id === activeDatasetId.value) || (isGoldQaActive.value ? undefined : datasets.value[0]),
@@ -1410,15 +1411,20 @@ function cancelEditing() {
 
 async function selectDataset(id: string) {
   activeDatasetId.value = id
+  loadedRowsVersion.value = null
   page.value = 1
   gridSearch.value = ''
   filterPendingMode.value = 'all'
   focusedCell.value = null
   if (goldQas.value.some(g => g.id === id)) {
+    rowsRequestId++
     sampleRows.value = []
     hasUnsavedChanges.value = false
     return
   }
+  // 切换期间不在新数据集标题下保留旧集行，避免把旧集草稿写入新集。
+  sampleRows.value = []
+  hasUnsavedChanges.value = false
   await loadRows(id)
 }
 
@@ -1437,7 +1443,7 @@ function requestSelectDataset(id: string, after?: () => void) {
     positiveText: '保存并切换',
     negativeText: '放弃修改',
     onPositiveClick: async () => {
-      await persistRows()
+      if (!await persistRows() || hasUnsavedChanges.value) return false
       await selectDataset(id)
       after?.()
     },
@@ -1448,17 +1454,59 @@ function requestSelectDataset(id: string, after?: () => void) {
 }
 
 function openUploadModal(dataset: Dataset | null) {
-  datasetForUpload.value = dataset
-  showUploadModal.value = true
+  const overwritesActive = dataset?.id === activeDatasetId.value
+  if (overwritesActive && savingRows.value) {
+    message.warning('当前修改正在保存，请稍后再覆盖上传')
+    return
+  }
+  const open = () => {
+    datasetForUpload.value = dataset
+    showUploadModal.value = true
+  }
+  if (overwritesActive && hasUnsavedChanges.value) {
+    dialog.warning({
+      title: '当前数据集有未保存的修改',
+      content: '覆盖上传成功后，当前草稿将被舍弃并显示新版本；取消或上传失败时草稿仍会保留。',
+      positiveText: '继续覆盖上传',
+      negativeText: '取消',
+      onPositiveClick: open,
+    })
+    return
+  }
+  open()
+}
+
+async function handleUploadSuccess() {
+  if (datasetForUpload.value?.id === activeDatasetId.value) {
+    // 上传已覆盖服务端版本，旧草稿和未完成的行请求都不能再回写当前集。
+    rowsRequestId++
+    sampleRows.value = []
+    loadedRowsVersion.value = null
+    hasUnsavedChanges.value = false
+    editingCell.value = null
+  }
+  await loadDatasets()
 }
 
 function createEmptyDataset(after?: () => void) {
-  openNameDialog('新建空数据集', '数据集名称', '新数据集', async (val) => {
+  const openCreateDialog = () => openNameDialog('新建空数据集', '数据集名称', '新数据集', async (val) => {
     const created = await api.datasets.create({ name: val })
     await loadDatasets()
     await selectDataset(created.id)
     message.success(`已创建「${created.name}」`)
     after?.()
+  })
+  if (!hasUnsavedChanges.value) return openCreateDialog()
+  dialog.warning({
+    title: '存在未保存的修改',
+    content: '当前表格有未落库的编辑，新建前请选择处理方式。',
+    positiveText: '保存并新建',
+    negativeText: '放弃修改',
+    onPositiveClick: async () => {
+      if (!await persistRows() || hasUnsavedChanges.value) return false
+      openCreateDialog()
+    },
+    onNegativeClick: openCreateDialog,
   })
 }
 
@@ -1498,23 +1546,42 @@ function deleteRow(index: number) {
   message.info('已删除行，保存后生效')
 }
 
-async function persistRows() {
-  if (!currentDataset.value || savingRows.value) return
+async function persistRows(): Promise<boolean> {
+  if (!currentDataset.value || savingRows.value) return false
+  if (showUploadModal.value && datasetForUpload.value?.id === currentDataset.value.id) return false
+  if (loadedRowsVersion.value === null) {
+    message.error('行数据尚未加载完成，草稿仍保留；请导出备份后重新选择数据集')
+    return false
+  }
+  const datasetId = currentDataset.value.id
+  const expectedVersion = loadedRowsVersion.value
+  const rowsGeneration = rowsRequestId
+  const submittedRows = toApiRows()
+  const snapshot = JSON.stringify(submittedRows)
   savingRows.value = true
   try {
-    await api.datasets.saveRows(currentDataset.value.id, toApiRows())
-    const dataset = datasets.value.find(item => item.id === currentDataset.value!.id)
-    if (dataset) {
+    const result = await api.datasets.saveRows(datasetId, submittedRows, expectedVersion)
+    const dataset = datasets.value.find(item => item.id === datasetId)
+    // 保存期间可能继续编辑或切换数据集；服务端版本仍须前进，以便下次保存新草稿。
+    if (dataset && dataset.version === expectedVersion) dataset.version = result.version
+    if (activeDatasetId.value !== datasetId || rowsGeneration !== rowsRequestId) return false
+    loadedRowsVersion.value = result.version
+    const unchanged = snapshot === JSON.stringify(toApiRows())
+    if (dataset && unchanged) {
       dataset.row_count = sampleRows.value.length
       dataset.pending_complete_count = pendingCount.value
     }
-    syncDatasetTree(datasets.value)
-    hasUnsavedChanges.value = false
-    justSaved.value = true
+    if (unchanged) syncDatasetTree(datasets.value)
+    hasUnsavedChanges.value = !unchanged
+    justSaved.value = unchanged
     setTimeout(() => { justSaved.value = false }, 1800)
-    message.success('已保存数据集修改')
+    message.success(unchanged ? '已保存数据集修改' : '已保存提交版本，后续修改仍待保存')
+    return unchanged
   } catch (err: any) {
-    message.error(err.message || '保存数据集失败')
+    message.error(err instanceof ApiError && err.code === ErrorCode.CONCURRENCY
+      ? '数据集已由其他操作更新，草稿仍保留；请备份草稿后刷新页面对照新版本'
+      : err.message || '保存数据集失败')
+    return false
   } finally {
     savingRows.value = false
   }
@@ -1536,8 +1603,7 @@ async function saveMetric() {
   if (!currentDataset.value) return
   try {
     const updated = await api.datasets.update(currentDataset.value.id, { metric: currentDataset.value.metric })
-    const index = datasets.value.findIndex(item => item.id === updated.id)
-    if (index !== -1) datasets.value[index] = updated
+    applyDatasetMetadata(updated)
     syncDatasetTree(datasets.value)
     message.success('主评分指标已更新')
   } catch (err: any) {
@@ -1545,31 +1611,77 @@ async function saveMetric() {
   }
 }
 
+function applyDatasetMetadata(updated: Dataset) {
+  const index = datasets.value.findIndex(item => item.id === updated.id)
+  if (index === -1) return
+  const oldVersion = datasets.value[index].version
+  // 元信息更新不改变当前未保存行草稿的并发基线。
+  datasets.value[index] = hasUnsavedChanges.value && activeDatasetId.value === updated.id
+    ? { ...updated, version: oldVersion }
+    : updated
+}
+
+let rowsRequestId = 0
+
 async function loadRows(datasetId: string) {
+  const requestId = ++rowsRequestId
   try {
-    sampleRows.value = (await api.datasets.getRows(datasetId)).map(toEditableRow)
+    const rows = await api.datasets.getRows(datasetId)
+    if (requestId !== rowsRequestId || activeDatasetId.value !== datasetId || hasUnsavedChanges.value) return
+    sampleRows.value = rows.items.map(toEditableRow)
+    loadedRowsVersion.value = rows.version
     hasUnsavedChanges.value = false
   } catch (err: any) {
+    if (requestId !== rowsRequestId || activeDatasetId.value !== datasetId || hasUnsavedChanges.value) return
     sampleRows.value = []
     message.error(err.message || '加载行数据失败')
   }
 }
 
+let datasetsRequestId = 0
+
 async function loadDatasets() {
+  const requestId = ++datasetsRequestId
   try {
-    const list = await api.datasets.list()
+    const serverList = await api.datasets.list()
+    if (requestId !== datasetsRequestId) return
+    const activeDraft = hasUnsavedChanges.value
+      ? datasets.value.find(dataset => dataset.id === activeDatasetId.value)
+      : null
+    const refreshedDraft = serverList.find(dataset => dataset.id === activeDraft?.id)
+    const staleSuffix = '（已删除，草稿待导出）'
+    const list = activeDraft && !refreshedDraft
+      ? [{ ...activeDraft, name: activeDraft.name.endsWith(staleSuffix) ? activeDraft.name : activeDraft.name + staleSuffix }, ...serverList]
+      : serverList
+    if (activeDraft && !refreshedDraft) {
+      message.error('当前数据集已被删除，草稿仍保留；请导出 JSONL 备份后刷新页面')
+    }
+    // 列表刷新不能让旧草稿冒用其他页面写入的新版本号。
+    if (activeDraft && refreshedDraft) refreshedDraft.version = activeDraft.version
     datasets.value = list
     list.forEach(ds => {
-      customColsMap.value[ds.id] = fromColumnSchema(ds.column_schema)
+      if (!(hasUnsavedChanges.value && ds.id === activeDatasetId.value)) {
+        customColsMap.value[ds.id] = fromColumnSchema(ds.column_schema)
+      }
     })
     syncDatasetTree(list)
+    // 黄金 QA 由独立列表提供，刷新数据集时不能将其切回首个普通数据集。
+    if (isGoldQaActive.value) return
     const selected = list.find(dataset => dataset.id === activeDatasetId.value) || list[0]
-    if (selected) await selectDataset(selected.id)
-    else sampleRows.value = []
+    if (selected) {
+      if (!(hasUnsavedChanges.value && selected.id === activeDatasetId.value)) await selectDataset(selected.id)
+    } else if (!hasUnsavedChanges.value) {
+      sampleRows.value = []
+      loadedRowsVersion.value = null
+    }
   } catch (err: any) {
-    datasets.value = []
-    syncDatasetTree([])
-    sampleRows.value = []
+    if (requestId !== datasetsRequestId) return
+    if (!hasUnsavedChanges.value) {
+      datasets.value = []
+      syncDatasetTree([])
+      sampleRows.value = []
+      loadedRowsVersion.value = null
+    }
     message.error(err.message || '加载数据集列表失败')
   }
 }
@@ -1678,8 +1790,7 @@ async function handleFileCtxAction(key: string, targetId: string) {
     case 'rename':
       openNameDialog('重命名数据集', '数据集名称', dataset.name, async (val) => {
         const updated = await api.datasets.update(targetId, { name: val })
-        const index = datasets.value.findIndex(item => item.id === targetId)
-        if (index !== -1) datasets.value[index] = updated
+        applyDatasetMetadata(updated)
         syncDatasetTree(datasets.value)
         message.success('重命名成功')
       })

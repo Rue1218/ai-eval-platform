@@ -16,6 +16,9 @@
               <span>用例集资源</span>
             </div>
             <div class="sidebar-actions">
+              <button class="btn btn-ghost-subtle btn-xs" aria-label="导入 Excel 用例" @click="showImportExcel = true">
+                导入 Excel
+              </button>
               <button class="btn btn-ghost-subtle btn-xs" title="通过 PRD 或接口需求自动推导用例集" aria-label="PRD 用例推导向导" @click="openAiGenDrawer">
                 + PRD 推导
               </button>
@@ -560,6 +563,8 @@
       </main>
     </div>
 
+    <ImportCasesExcelModal v-model:show="showImportExcel" :current-set="importCurrentSet" @imported="onCasesImported" />
+
     <!-- ─── 右侧滑出抽屉：PRD 用例推导向导 ─── -->
     <n-drawer v-model:show="aiGen.show" :width="drawerWidth" placement="right">
       <n-drawer-content title="PRD 用例智能推导向导" closable>
@@ -756,6 +761,7 @@ import { useMessage, useDialog, type DropdownOption } from 'naive-ui'
 import { api } from '../api/http'
 import type { CaseSet, TestCase, TestCaseInput, ColumnSchemaItem, TaskStatus } from '../api/types'
 import { escapeHtml, escapeRegex, renderIcon } from '../utils/render'
+import ImportCasesExcelModal from '../components/modals/ImportCasesExcelModal.vue'
 
 type CaseStrategy = '正向' | '反向' | '边界' | '状态迁移' | '场景' | '等价类'
 type CasePriority = 'HX' | 'FHX' | 'BJ' | 'YC' | 'ZD' | 'BL'
@@ -804,6 +810,7 @@ let loadVersion = 0
 let saveRequest: Promise<boolean> | null = null
 const justSaved = ref(false)
 const hasUnsavedChanges = ref(false)
+const showImportExcel = ref(false)
 const confirmingSet = ref(false)
 const filterStrategy = ref('')
 const selectedCaseIds = ref<string[]>([])
@@ -872,6 +879,17 @@ interface TreeFolder {
 const folders = ref<TreeFolder[]>([{ id: 'cases', name: '用例集目录', open: true, items: [] }])
 
 const currentSet = computed<CaseSet | undefined>(() => caseSets.value.find((s: CaseSet) => s.id === activeSetId.value))
+/** 导入当前集必须使用已加载的修订号；未保存编辑只能导入为新集。 */
+const importCurrentSet = computed<CaseSet | null>(() => {
+  const set = currentSet.value
+  if (!set || hasUnsavedChanges.value || loadedSetId.value !== set.id || loadedRevision.value === null) return null
+  return { ...set, revision: loadedRevision.value }
+})
+
+async function onCasesImported(setId: string) {
+  await loadCaseSets()
+  requestSelectCaseSet(setId)
+}
 const missingTaskStatus = ref<TaskStatus | 'missing' | 'unavailable' | null>(null)
 const pendingTaskId = computed(() => {
   const taskId = route.query.task_id
@@ -1666,7 +1684,7 @@ function confirmDeleteCaseSet(s: CaseSet) {
         const revision = s.id === loadedSetId.value ? loadedRevision.value : s.revision
         if (revision === null) return
         await api.cases.cancelSet(s.id, revision, '用户废弃草稿用例集')
-        hasUnsavedChanges.value = false
+        if (s.id === activeSetId.value) hasUnsavedChanges.value = false
         await loadCaseSets()
         message.success(`已废弃「${s.name}」`)
       } catch (err: any) {

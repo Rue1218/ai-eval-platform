@@ -3,8 +3,10 @@
     :show="show"
     preset="card"
     :title="isOverride ? `覆盖上传「${dataset?.name}」` : '上传新评测数据集'"
+    :mask-closable="!uploading"
+    :close-on-esc="!uploading"
     style="width: 520px; max-width: calc(100vw - 24px)"
-    @update:show="$emit('update:show', $event)"
+    @update:show="handleVisibilityChange"
   >
     <div class="upload-form">
       <div v-if="!isOverride" class="field">
@@ -58,7 +60,7 @@
 
     <template #footer>
       <div style="display: flex; gap: 8px; justify-content: flex-end">
-        <n-button @click="$emit('update:show', false)">取消</n-button>
+        <n-button :disabled="uploading" @click="handleVisibilityChange(false)">取消</n-button>
         <n-button type="primary" :loading="uploading" @click="handleUpload">
           {{ isOverride ? '确认覆盖上传' : '上传并创建' }}
         </n-button>
@@ -90,6 +92,11 @@ const metric = ref<DatasetMetric>('contain')
 const selectedFile = ref<File | null>(null)
 
 const isOverride = computed(() => !!props.dataset?.id)
+
+function handleVisibilityChange(show: boolean) {
+  if (uploading.value && !show) return
+  emit('update:show', show)
+}
 
 watch(
   () => props.show,
