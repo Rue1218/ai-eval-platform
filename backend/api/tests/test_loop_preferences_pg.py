@@ -14,6 +14,7 @@ from app.models import AuditLog, Session, Setting, Task
 from tests import test_loop_store_pg as store_fixtures
 
 pg_case = store_fixtures.pg_case
+_CASE_SOURCE = {"case_source": {"text": "登录需求"}}
 
 
 @pytest.fixture
@@ -33,7 +34,7 @@ def test_pg_task_preferences_and_receipt_commit_atomically(prefs_case, fail_fact
     with prefs_case.log() as log:
         try:
             with log._transaction() as (db, session, state):
-                task_id = enqueue_long_task(db, session.id, prefs_case.user_id, "testcase", {}, commit=False)
+                task_id = enqueue_long_task(db, session.id, prefs_case.user_id, "testcase", _CASE_SOURCE, commit=False)
                 write_prefs(db, prefs_case.user_id, {"last_kind": "testcase"}, commit=False)
                 log._append(db, session, state, "task/queued", {
                     "turn": 1, "step": 1, "attempt_id": "prefs", "call_id": "create",
@@ -60,7 +61,7 @@ def test_pg_first_preferences_from_parallel_sessions_do_not_fail_enqueue(prefs_c
         """第二事务先创建任务，以真实外键 KEY SHARE 检验偏好锁兼容性。"""
         with prefs_case.factory.begin() as db:
             db.execute(select(Session.id).where(Session.id == second_session).with_for_update())
-            task_id = enqueue_long_task(db, second_session, prefs_case.user_id, "testcase", {}, commit=False)
+            task_id = enqueue_long_task(db, second_session, prefs_case.user_id, "testcase", _CASE_SOURCE, commit=False)
             ready.put(db.scalar(text("SELECT pg_backend_pid()")))
             write_prefs(db, prefs_case.user_id, {"last_kind": "rag"}, commit=False)
             return task_id
@@ -68,7 +69,7 @@ def test_pg_first_preferences_from_parallel_sessions_do_not_fail_enqueue(prefs_c
     with prefs_case.factory() as first, ThreadPoolExecutor(max_workers=1) as executor:
         first.execute(select(Session.id).where(Session.id == first_session).with_for_update())
         first_pid = first.scalar(text("SELECT pg_backend_pid()"))
-        enqueue_long_task(first, first_session, prefs_case.user_id, "testcase", {}, commit=False)
+        enqueue_long_task(first, first_session, prefs_case.user_id, "testcase", _CASE_SOURCE, commit=False)
         write_prefs(first, prefs_case.user_id, {"last_kind": "benchmark"}, commit=False)
         first.flush()
         future = executor.submit(second_enqueue)
