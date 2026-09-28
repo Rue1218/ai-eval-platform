@@ -918,6 +918,8 @@ class CaseSet(Base):
     status = Column(String, nullable=False, default="generated", index=True)
     generated_count = Column(Integer, nullable=False, default=0)
     confirmed_count = Column(Integer, nullable=False, default=0)
+    # 用例行快照修订号；持有用例集行锁的写入方每次修改后递增。
+    revision = Column(Integer, nullable=False, default=0, server_default="0")
     folder_id = Column(String, ForeignKey("case_folders.id"), nullable=True)
     # 自定义扩展列定义数组：[{key, name, type, required?, sort_order}]
     column_schema = Column(JSONB, nullable=False, default=list)

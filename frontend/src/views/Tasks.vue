@@ -265,7 +265,7 @@
                     查看报告
                   </router-link>
                   <router-link
-                    v-if="t.kind === 'testcase'"
+                    v-if="t.kind === 'testcase' && !['failed', 'cancelled'].includes(t.status)"
                     :to="{ path: '/cases', query: { task_id: t.id } }"
                     class="link-btn"
                   >
@@ -364,7 +364,7 @@
               查看报告
             </router-link>
             <router-link
-              v-if="t.kind === 'testcase'"
+              v-if="t.kind === 'testcase' && !['failed', 'cancelled'].includes(t.status)"
               :to="{ path: '/cases', query: { task_id: t.id } }"
               class="btn btn-primary btn-xs"
             >

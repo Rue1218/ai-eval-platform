@@ -195,15 +195,12 @@ def cancel_task_safe(arguments: Mapping[str, object], context: object) -> dict:
     if not task_id:
         raise AppError(ErrorCode.VALIDATION, "缺少 task_id")
     from app.db import SessionLocal
-    from app.models import AuditLog, Task, TaskEvent
+    from app.models import AuditLog, TaskEvent
+    from app.task_policy import lock_owned_task_for_cancel
 
     db = SessionLocal()
     try:
-        task = db.query(Task).filter(Task.id == task_id).with_for_update().first()
-        if not task:
-            raise AppError(ErrorCode.NOT_FOUND, "任务不存在")
-        if task.created_by != user_id:
-            raise AppError(ErrorCode.UNAUTHORIZED, "没有权限做这件事")
+        task = lock_owned_task_for_cancel(db, task_id, user_id)
         if task.status in _TERMINAL_STATUSES:
             return {"task_id": task.id, "status": task.status, "kind": task.kind}
         now = datetime.now(UTC)

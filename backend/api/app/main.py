@@ -78,7 +78,7 @@ def _bootstrap_admin() -> None:
 
 
 def _bootstrap_preview() -> None:
-    """全新部署时播种预览数据；播种失败仅记录日志，不阻塞服务启动。"""
+    """全新部署时播种非执行预览数据；播种失败仅记录日志，不阻塞服务启动。"""
     db = SessionLocal()
     try:
         admin = db.query(User).filter(User.username == settings.bootstrap_admin_username).first()

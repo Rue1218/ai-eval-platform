@@ -17,6 +17,7 @@ from ..session_access import require_visible_session
 from ..task_policy import (
     assert_task_creation_allowed,
     enforce_task_quota,
+    lock_owned_task_for_cancel,
     prepare_new_task_config,
     require_owned_source_file,
 )
@@ -240,7 +241,7 @@ def cancel_task(
     user: User = Depends(get_current_user),
 ):
     """取消非终态任务；M1 mock Worker 会在下一检查点停止。"""
-    task = _owned_task(db, task_id, user.id)
+    task = lock_owned_task_for_cancel(db, task_id, user.id)
     if task.status in TERMINAL_STATUSES:
         # REST 与 platform.tasks.task.cancel 保持幂等：重试取消不会把已完成、
         # 已失败或已取消的任务误报为业务错误。

@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from threading import Event, Thread
 
-from sqlalchemy import or_
+from sqlalchemy import or_, true
 from sqlalchemy.orm import Session
 
 from .db import SessionLocal
@@ -17,13 +17,14 @@ logger = logging.getLogger("worker.task_state")
 # 独立心跳覆盖阻塞模型调用；租约失效只失败收尾，绝不自动重复供应商调用。
 TASK_LEASE_SECONDS = 120
 TASK_HEARTBEAT_SECONDS = 30
+STRESS_STOP_RETRY_BATCH = 3
 
 # 取消传播（P4-2）：worker 执行中轮询的终态集合
 _TERMINATED = {"cancelled", "failed"}
 
 
 def cancel_non_testcase_tasks(db: Session) -> int:
-    """停用评测后取消尚未结束的旧任务，提交后停止正在发压的引擎。"""
+    """停用评测后取消尚未结束的旧任务，并持久记录外部压测停止请求。"""
     now = datetime.now(UTC)
     rows = (
         db.query(Task)
@@ -44,17 +45,43 @@ def cancel_non_testcase_tasks(db: Session) -> int:
         task.claimed_by_worker_id = None
         task.claim_expires_at = None
         task.progress = {**(task.progress or {}), "message": message}
+        if task.kind == "stress" and was_running:
+            task.result = {**(task.result or {}), "stress_stop_pending": True}
         db.add(TaskEvent(task_id=task.id, event="cancelled", message=message,
                          payload={"status": "cancelled"}))
         cancelled.append((task.id, task.session_id, task.kind, was_running))
     db.commit()
-    for task_id, session_id, kind, was_running in cancelled:
-        if kind == "stress" and was_running:
-            from .stress import _stop_engine
-
-            _stop_engine(task_id)
+    for task_id, session_id, kind, _was_running in cancelled:
         push_ws(session_id, "task_cancelled", {"status": "cancelled", "kind": kind}, task_id=task_id)
+    retry_pending_stress_stops(db)
     return len(cancelled)
+
+
+def retry_pending_stress_stops(db: Session) -> int:
+    """限批重试已取消压测的停止请求；接口成功受理后清除持久标记。"""
+    from .stress import _stop_engine
+
+    task_ids = [row[0] for row in db.query(Task.id).filter(
+        Task.kind == "stress",
+        Task.status == "cancelled",
+        Task.result["stress_stop_pending"].as_boolean() == true(),
+    ).order_by(Task.updated_at.asc(), Task.id.asc()).limit(STRESS_STOP_RETRY_BATCH).all()]
+    stopped = 0
+    for task_id in task_ids:
+        accepted = _stop_engine(task_id)
+        task = db.query(Task).filter(Task.id == task_id).with_for_update().populate_existing().first()
+        if task and (task.result or {}).get("stress_stop_pending"):
+            result = dict(task.result)
+            if accepted:
+                result.pop("stress_stop_pending")
+                result.pop("stress_stop_attempts", None)
+                stopped += 1
+            else:
+                # 失败行更新排序时间，让同批次之外的待停止任务也能获得重试机会。
+                result["stress_stop_attempts"] = int(result.get("stress_stop_attempts") or 0) + 1
+            task.result = result
+            db.commit()
+    return stopped
 
 
 def lease_expired(expires_at: datetime | None, now: datetime | None = None) -> bool:

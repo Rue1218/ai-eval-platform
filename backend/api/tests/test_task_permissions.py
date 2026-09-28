@@ -7,7 +7,7 @@
 import pytest
 
 from app.errors import AppError, ErrorCode
-from app.models import Task, User
+from app.models import CaseSet, Task, User
 from app.routers.tasks import cancel_task
 
 
@@ -28,17 +28,21 @@ class _FakeQuery:
         self.locked = True
         return self
 
+    def populate_existing(self):
+        return self
+
 
 class _FakeDb:
     """覆盖本测试所需 query/add/commit/refresh 的最小会话桩。"""
 
     def __init__(self, result=None):
         self._query = _FakeQuery(result)
+        self._case_query = _FakeQuery(None)
         self.added: list = []
         self.commit_calls = 0
 
-    def query(self, *args, **kwargs):
-        return self._query
+    def query(self, model, *args, **kwargs):
+        return self._case_query if model is CaseSet else self._query
 
     def add(self, obj, *args, **kwargs):
         self.added.append(obj)

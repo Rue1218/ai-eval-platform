@@ -33,6 +33,7 @@ import {
   type AgentSkillDocument,
   type AgentSkillMetadata,
   type CaseSet,
+  type ColumnSchemaItem,
   type CaseFolder,
   type DatasetFolder,
   type CaseImportResult,
@@ -792,6 +793,7 @@ export const api = {
           task_id: '',
           name: payload.name,
           status: 'generated',
+          revision: 0,
           generated_count: 0,
           confirmed_count: 0,
           folder_id: payload.folder_id || null,
@@ -821,14 +823,19 @@ export const api = {
       return data
     },
     // 批量保存用例编辑结果，后端负责已确认用例集的不可编辑校验。
-    async saveCases(id: string, cases: TestCaseInput[]): Promise<TestCase[]> {
+    async saveCases(id: string, cases: TestCaseInput[], expectedRevision: number, columnSchema: ColumnSchemaItem[]): Promise<{ items: TestCase[]; revision: number }> {
       if (getDataMode() === 'mock') {
+        const cs = mockStore.caseSets.find((x) => x.id === id)
+        if (!cs) throw new ApiError('用例集不存在', ErrorCode.NOT_FOUND, 404)
+        if (cs.revision !== expectedRevision) throw new ApiError('用例已由其他操作更新，请刷新后再保存', ErrorCode.CONCURRENCY, 409)
         const saved = cases.map((item, index) => ({ ...item, id: item.id || `c-${Date.now()}-${index}` })) as TestCase[]
         mockStore.cases = saved
-        return saved
+        cs.column_schema = columnSchema
+        cs.revision++
+        return { items: saved, revision: cs.revision }
       }
-      const { data } = await http.put(`/api/case-sets/${id}/cases`, { cases })
-      return Array.isArray(data) ? data : data.items || cases
+      const { data } = await http.put(`/api/case-sets/${id}/cases`, { cases, expected_revision: expectedRevision, column_schema: columnSchema })
+      return { items: data.items, revision: data.revision }
     },
     // 仅生成未落库候选；调用方需要创建用例集并保存候选后才可显示创建成功。
     async generateCases(payload: CaseGenerateInput): Promise<TestCase[]> {
@@ -860,10 +867,11 @@ export const api = {
       const { data } = await http.post(`/api/case-sets/${id}/ai-fill`, payload, { timeout: 130000 })
       return Array.isArray(data) ? data : data.items || []
     },
-    async confirmSet(id: string, payload: { ok: boolean; edits?: TestCase[]; mapping_target?: 'dataset' | 'gold_qa'; target_id?: string }): Promise<void> {
+    async confirmSet(id: string, payload: { ok: boolean; expected_revision: number }): Promise<void> {
       if (getDataMode() === 'mock') {
         const cs = mockStore.caseSets.find((x) => x.id === id)
         if (cs) {
+          if (cs.revision !== payload.expected_revision) throw new ApiError('用例已由其他操作更新，请刷新后再确认', ErrorCode.CONCURRENCY, 409)
           cs.status = payload.ok ? 'confirmed' : 'cancelled'
           if (payload.ok) cs.confirmed_count = cs.generated_count
         }
@@ -871,13 +879,15 @@ export const api = {
       }
       await http.post(`/api/case-sets/${id}/confirm`, payload)
     },
-    async cancelSet(id: string, reason?: string): Promise<void> {
+    async cancelSet(id: string, expectedRevision: number, reason?: string): Promise<void> {
       if (getDataMode() === 'mock') {
         const cs = mockStore.caseSets.find((x) => x.id === id)
-        if (cs) cs.status = 'cancelled'
+        if (!cs) throw new ApiError('用例集不存在', ErrorCode.NOT_FOUND, 404)
+        if (cs.revision !== expectedRevision) throw new ApiError('用例已由其他操作更新，请刷新后再废弃', ErrorCode.CONCURRENCY, 409)
+        cs.status = 'cancelled'
         return
       }
-      await http.post(`/api/case-sets/${id}/cancel`, { reason })
+      await http.post(`/api/case-sets/${id}/cancel`, { reason, expected_revision: expectedRevision })
     },
     async mapCases(id: string, payload: { target: 'dataset' | 'gold_qa'; target_id: string; case_ids: string[] }): Promise<void> {
       if (getDataMode() === 'mock') {
@@ -901,13 +911,17 @@ export const api = {
       const { data } = await http.get('/api/case-sets/import-template', { responseType: 'blob' })
       return data
     },
-    async importExcel(id: string, file: File, mode: 'append' | 'replace' = 'append'): Promise<CaseImportResult> {
+    async importExcel(id: string, file: File, mode: 'append' | 'replace', expectedRevision: number): Promise<CaseImportResult> {
       if (getDataMode() === 'mock') {
-        return { ok: true, format: 'platform', mode, imported_count: 1, skipped_count: 0, generated_count: 1, checks: [] }
+        const cs = mockStore.caseSets.find((x) => x.id === id)
+        if (!cs) throw new ApiError('用例集不存在', ErrorCode.NOT_FOUND, 404)
+        if (cs.revision !== expectedRevision) throw new ApiError('用例已由其他操作更新，请刷新后再导入', ErrorCode.CONCURRENCY, 409)
+        cs.revision++
+        return { ok: true, format: 'platform', mode, revision: cs.revision, imported_count: 1, skipped_count: 0, generated_count: 1, checks: [] }
       }
       const formData = new FormData()
       formData.append('file', file)
-      const { data } = await http.post(`/api/case-sets/${id}/import`, formData, { params: { mode } })
+      const { data } = await http.post(`/api/case-sets/${id}/import`, formData, { params: { mode, expected_revision: expectedRevision } })
       return data
     },
     async listFolders(): Promise<CaseFolder[]> {

@@ -1,13 +1,15 @@
 # AI 测试与评估平台 — API 契约
 
-> ⚠️ **文档维护提示（2026-09-11）**：本文部分章节含历史实现引用（`agent/react.py`、`plan_solve.py`、`reflect.py`、`clarify.py` 等模块已删除，ReAct / Plan-Solve 图已由 AgentLoop v2 取代）；当前实现与契约以 `AGENTS.md` 状态地图及本文最新修订为准。
+> ⚠️ **当前接口边界（2026-09-28）**：仅测试用例生成任务可新建和重跑；Benchmark、RAG 评测与压测写入口停用，历史任务和报告只读保留。本文旧评测字段与示例仅用于解释历史数据；冲突时以 §3.8、§3.10、§5 当前契约及 V2.34–V2.35 修订为准。
+>
+> **文档维护提示（2026-09-11）**：部分章节含已删除模块的历史引用（如 `agent/react.py`、`plan_solve.py`）；当前实现与接口以 `AGENTS.md` 状态地图及本文最新修订为准。
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V2.34 |
-| 本轮审查日期 | 2026-09-28（测试用例生成与评测停用） |
+| 文档版本 | V2.35 |
+| 本轮审查日期 | 2026-09-28（用例审核与停用链路缺陷修复） |
 | WS v2 修订日期 | 2026-09-26（§4A，摘要安全用量元数据与 v2.3 目录） |
-| 对应 PRD | V1.51（功能唯一权威） |
+| 对应 PRD | V1.52（功能唯一权威） |
 | 对应设计规范 | V1.12（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.7.8（AgentLoop 单入口；JSON 仍以本文为准） |
 | 对应前端计划 | AgentLoop 前端计划 V0.5 |
@@ -245,9 +247,9 @@ WS `error` 事件 payload 与上表同一套 `code` + `message`（可带 `fields
 | **智能体 (agent.html)** | 会话列表 / 意图识别 / TaskSpec 下单 / 迷你拓扑坞 / 斜杠面板 / 上下文仪表 | `/api/sessions`, `/api/sessions/{id}/messages`, `/api/agent/prefs`, `/api/slash-commands`, `/ws/agent`, `/api/profiles`, `/api/datasets`, `/api/kb`, `/api/tasks`, `/api/dispatch/overview` | GET/POST/DELETE/WS | 成员 · 全员同权 |
 | **调度中心 (dispatch.html)** | 调度大盘 / Worker 节点池 / 策略治理 / 分配日志流 | `/api/dispatch/overview`, `/api/dispatch/workers`, `/api/dispatch/workers/{id}`, `/api/dispatch/events`, `/api/dispatch/config`, `/api/tasks?status=queued` | GET/POST/PUT | 成员 · 全员同权 |
 | **任务中心 (tasks.html)** | 24h 状态趋势 / 六态过滤表格 / 抽屉详情 / 取消与重跑 | `/api/tasks`, `/api/tasks/summary`, `/api/tasks/{id}`, `/api/tasks/{id}/cancel`, `/api/tasks/{id}/rerun` | GET/POST | 成员 · 全员同权 |
-| **报告中心 (report.html)** | 报告列表 / 3合1详情 (Benchmark雷达/RAG水平柱状/压测多轴曲线) / Markdown导出 / 7天免登分享 / 冻结基线 | `/api/reports`, `/api/reports/{id}`, `/api/reports/{id}/samples`, `/api/reports/{id}/share`, `/api/reports/{id}/baseline` | GET/POST | 成员 · 全员同权 |
+| **报告中心 (report.html)** | 历史评测与压测报告只读查询、Markdown 导出；既有分享链接继续可读 | `/api/reports`, `/api/reports/{id}`, `/api/reports/{id}/samples` | GET | 成员 · 全员同权 |
 | **数据集工作台 (datasets.html)** | 数据集目录树 / 行内即点即改网格 / 自定义列扩展 / AI 数据集生成 | `/api/dataset-folders`, `/api/datasets`, `/api/datasets/{id}`, `/api/datasets/{id}/rows`, `/api/datasets/ai-generate`, `/api/kb` | GET/POST/PUT/DELETE | 成员 · 全员同权 |
-| **用例工作台 (cases.html)** | 6大策略分布图 / 用例表格编辑 / 72h倒计时 / Excel 导入导出 / 批量映射入库 / AI PRD 用例抽取 | `/api/case-folders`, `/api/case-sets`, `/api/case-sets/{id}`, `/api/case-sets/{id}/cases`, `/api/case-sets/{id}/confirm`, `/api/case-sets/{id}/cancel`, `/api/case-sets/{id}/map`, `/api/case-sets/ai-generate`, `/api/case-sets/import-template`, `/api/case-sets/{id}/import`, `/api/case-sets/{id}/export` | GET/POST/PUT/DELETE | 成员 · 全员同权 |
+| **用例工作台 (cases.html)** | 6 大策略分布、自检、草稿编辑与审核、72h 倒计时、Excel 导入导出及 AI PRD 用例抽取；旧评测映射入口停用 | `/api/case-folders`, `/api/case-sets`, `/api/case-sets/{id}`, `/api/case-sets/{id}/cases`, `/api/case-sets/{id}/confirm`, `/api/case-sets/{id}/cancel`, `/api/case-sets/ai-generate`, `/api/case-sets/import-template`, `/api/case-sets/{id}/import`, `/api/case-sets/{id}/export` | GET/POST/PUT/DELETE | 成员 · 全员同权 |
 | **知识库 (kb.html)** | 3栏工作台 / 文档与切块预览 / 4模式检索 Playground / 黄金 QA | `/api/kb`, `/api/kb/{id}`, `/api/kb/{id}/documents`, `/api/kb/{id}/documents/{doc_id}/chunks`, `/api/kb/{id}/query`, `/api/kb/{id}/gold-qa` | GET/POST/DELETE | 成员 · 全员同权 |
 | **协议档与智能体 (admin-profiles.html)** | 4 Tab 架构（协议档、MCP 工具只读、技能受控说明、运行时治理）/ 连通性探活 Ping | `/api/profiles`, `/api/profiles/{id}/check`, `/api/mcp/tools`, `/api/admin/settings` | GET/POST/PUT/DELETE | 成员 · 全员同权 |
 | **压测治理 (admin-stress.html)** | 7天峰值 QPS 面积图 / Host 白名单表格 / 安全阈值 / 成本预算 / Prometheus `/metrics` | `/api/admin/stress/settings`, `/api/admin/stress/whitelist`, `/api/admin/stress/usage`, `/metrics` | GET/POST/PUT/DELETE | 成员 · 全员同权 |
@@ -1105,6 +1107,7 @@ Worker 按 `FOR UPDATE SKIP LOCKED` 领取导入，写入独立 15 分钟 lease 
   "id": "uuid",
   "task_id": "uuid",
   "status": "generated | confirmed | cancelled",
+  "revision": 0,
   "generated_count": 40,
   "confirmed_count": 0,
   "folder_id": "uuid?",
@@ -1131,14 +1134,16 @@ case item 包含：`id, strategy, priority, module, name, precondition, steps, e
 
 #### `PUT /api/case-sets/{id}`
 
-更新 `name`、`folder_id`、`column_schema`。已确认的用例集不可修改其策略、检查结果或目标映射，只允许返回 `VALIDATION`，避免破坏版本快照。
+更新 `name`、`folder_id`、`column_schema`。整体替换 `column_schema` 时必须在 JSON body 中同时传读取时的整数 `expected_revision`；服务端在用例集行锁内比较，成功后递增并返回新 `revision`，冲突返回 `CONCURRENCY` (409)。仅重命名或移动目录无需修订号。已确认或已废弃的用例集不可修改。
 
 #### `PUT /api/case-sets/{id}/cases`
 
-批量保存当前用例集的完整表格快照与自定义列数据。已有行必须保留服务端 `id`；新行省略 `id`，响应 `items` 返回服务端生成的 ID。未包含的原有行删除，`cases: []` 表示清空；确认或废弃后的用例集、超过确认期限或关联任务不再等待确认的用例集拒绝保存。保存后重算 `generated_count` 和 `checks`，响应包含 `items / total / checks`。前端只有保存成功后才可继续确认或切换；保存期间的新编辑仍须保留未保存状态。
+批量保存当前用例集的完整表格快照与自定义列数据。必须传读取时的整数 `expected_revision`；可同时传 `column_schema`，行与列定义在同一事务保存。服务端持用例集行锁比较修订号，不匹配返回 `CONCURRENCY` (409)，不覆盖他人编辑。已有行必须保留服务端 `id`；新行省略 `id`，响应 `items` 返回服务端生成的 ID。未包含的原有行删除，`cases: []` 表示清空；确认或废弃后的用例集、超过确认期限或关联任务不再等待确认的用例集拒绝保存。保存后重算 `generated_count` 和 `checks`，响应包含 `items / total / checks / revision`。前端只有保存成功后才可继续确认或切换；保存期间的新编辑仍须保留未保存状态。
 
 ```json
 {
+  "expected_revision": 0,
+  "column_schema": [{ "key": "owner", "name": "负责人", "type": "string", "sort_order": 1 }],
   "cases": [
     { "id": "c-001", "strategy": "正向", "priority": "P0", "module": "登录", "name": "账密正确登录", "expected": "进入工作台", "precondition": "账号正常" }
   ]
@@ -1147,10 +1152,10 @@ case item 包含：`id, strategy, priority, module, name, precondition, steps, e
 
 #### `POST /api/case-sets/{id}/confirm`
 
-确认用例入库，生成正式数据集版本快照。任务状态由 `awaiting_case_confirm` 转换为 `succeeded`。
+确认当前用例集版本入库，仅在用例域锁定为 `confirmed`；不写入评测数据集。必须传读取时的 `expected_revision`，冲突返回 `CONCURRENCY` (409)；任务状态由 `awaiting_case_confirm` 转换为 `succeeded`。
 
 ```json
-{ "ok": true, "mapping_target": "dataset | gold_qa", "target_id": "uuid" }
+{ "ok": true, "expected_revision": 0 }
 ```
 
 采纳率口径：`confirmed_count / generated_count`。
@@ -1159,19 +1164,11 @@ case item 包含：`id, strategy, priority, module, name, precondition, steps, e
 
 #### `POST /api/case-sets/{id}/cancel`
 
-废弃用例集，任务置为 `cancelled`。
+JSON body 必须传读取时的整数 `expected_revision`，可附 `reason`。修订号冲突返回 `CONCURRENCY` (409)；成功后用例集与等待确认的关联任务同置 `cancelled`。
 
 #### `POST /api/case-sets/{id}/map`
 
-批量映射用例到目标基准数据集或知识库黄金问答。
-
-```json
-{ "target": "dataset | gold_qa", "target_id": "uuid", "case_ids": ["c-001", "c-002"] }
-```
-
-`target=dataset` 时：问句←用例名称、预期←expected、前置←context；缺 `question` 或 `reference` 的行进入目标集 `pending_complete`（不进评分分母）；**全部**映射行写 `source_case_id`，并在 `extras.source_case_set_id` 记录用例集 ID。`target=gold_qa` 时缺 `expected_doc_ids` 的项仅参与答案侧评分（M3；当前返回 `VALIDATION`）。目标 ID 类型不匹配返回 `VALIDATION`。
-
-已有 `active_version_id` 的数据集拒绝直接映射，返回 `VALIDATION` 提示通过受控导入产生新版本，禁止向不会被正式评测读取的旧行表写入并报告成功。对尚未发布版本的数据集，同一来源用例重复映射幂等跳过；`mapped_count` 仅计算本次新插入的行数。
+旧评测数据集映射已停用；任何请求均返回 `VALIDATION`，不写入基准数据集或黄金 QA。历史映射行只读保留。
 
 #### `POST /api/case-sets/ai-generate`
 
@@ -1230,9 +1227,9 @@ case item 包含：`id, strategy, priority, module, name, precondition, steps, e
 
 下载平台标准列 Excel 模板（`用例集` + `填写说明` 两个工作表）。响应文件流。登录后可用。
 
-#### `POST /api/case-sets/{id}/import?mode=append|replace`
+#### `POST /api/case-sets/{id}/import?mode=append|replace&expected_revision=<整数>`
 
-`multipart/form-data`，字段名 `file`。仅 `.xlsx` / `.xlsm`；`.xls` 返回 `VALIDATION` 提示另存。单文件 ≤10MB，有效用例 ≤2000 条。已确认或已废弃的用例集拒绝导入。
+`multipart/form-data`，字段名 `file`；query 参数 `expected_revision` 必填。服务端解析后持锁比较，冲突返回 `CONCURRENCY` (409) 且不修改用例。仅 `.xlsx` / `.xlsm`；`.xls` 返回 `VALIDATION` 提示另存。单文件 ≤10MB，有效用例 ≤2000 条。已确认或已废弃的用例集拒绝导入。
 
 `mode` 缺省 `append`：追加写入，Excel「用例编号」若属于本集则更新该行，否则插入；`replace` 先清空本集全部用例再写入。
 
@@ -1254,7 +1251,8 @@ case item 包含：`id, strategy, priority, module, name, precondition, steps, e
   "imported_count": 12,
   "skipped_count": 1,
   "generated_count": 13,
-  "checks": []
+  "checks": [],
+  "revision": 1
 }
 ```
 
@@ -1336,16 +1334,13 @@ case item 包含：`id, strategy, priority, module, name, precondition, steps, e
 
 ### 3.10 任务
 
-`POST /api/tasks` 的 JSON **等于** 确认卡 payload（§6），再加可选 `session_id`。
+`POST /api/tasks` 当前只接受 `kind=testcase`；JSON 沿用确认卡 payload（§6）并可加 `session_id`。旧 benchmark、rag、stress kind 仅供历史查询，新建和重跑均返回 `VALIDATION`。
 
 ```json
 {
   "session_id": "uuid",
-  "kind": "benchmark",
-  "profile_ids": ["uuid"],
-  "dataset_id": "uuid",
-  "run": {},
-  "with_stress": false
+  "kind": "testcase",
+  "case_source": { "text": "登录需求说明" }
 }
 ```
 
@@ -1355,7 +1350,7 @@ case item 包含：`id, strategy, priority, module, name, precondition, steps, e
 {
   "id": "uuid",
   "status": "queued",
-  "kind": "benchmark",
+  "kind": "testcase",
   "parent_task_id": null
 }
 ```
@@ -1364,11 +1359,10 @@ case item 包含：`id, strategy, priority, module, name, precondition, steps, e
 
 - 未通过字段校验 → 400 `VALIDATION`，**不入队**（与确认卡未 ack 同等）。  
 - 会话存在待确认卡 → 409 `CONCURRENCY`，必须由确认卡作者确认或取消后再创建。
-- 会话已有非终态任务（含压测子任务）→ 400 `VALIDATION`（占槽），前端应已禁用按钮。  
+- 会话已有非终态任务 → 400 `VALIDATION`（占槽），前端应已禁用按钮。
 - 平台 `max_running_tasks` 满 → **仍** `queued`（3.4），可附 `warning: "CONCURRENCY"` 字段（可选）。  
-- `kind=stress` 一般由 worker 在质量 `succeeded` 且 `with_stress=true` 时创建；人手 POST 须带 `parent_task_id`，且父任务必须 succeeded。  
-- 一任务一种 `kind`。V1 禁止 Benchmark+RAG 混单。
-- `kind=benchmark` 且目标数据集存在 `active_version_id` 时，服务端在创建事务中锁定数据集并把 `dataset_version_id`、`dataset_version_no` 写入 `config` 快照；后续发布或 staging 编辑不影响该任务。
+- `kind=testcase` 必须提供 `case_source.file_id` 或 `case_source.text`，二者恰有其一；来源文件须属于当前成员。
+- 历史 benchmark、rag、stress 配置仍可在旧任务详情中只读查看，不再用于新建或重跑。
 
 #### `GET /api/tasks?status=&kind=&offset=&limit=`
 
@@ -1410,9 +1404,7 @@ case item 包含：`id, strategy, priority, module, name, precondition, steps, e
 
 #### `POST /api/tasks/{id}/approve-stress`  M4
 
-`{id}` 为 **压测子任务** 或质量任务（实现须能解析到对应 `kind=stress` 子任务）。  
-会签人 ≠ 创建者（`prod` 发压须另一名正常成员确认）。
-未会签：子任务保持 `queued`，`NEED_APPROVAL`；质量报告仍保留。写审计。
+压测已停用；该旧写入口统一返回 `VALIDATION`，不会批准或启动历史任务。
 
 #### `GET /api/tasks/{id}/stress-series`  M4
 
@@ -1427,7 +1419,7 @@ case item 包含：`id, strategy, priority, module, name, precondition, steps, e
 }
 ```
 
-供 Chart.js。**禁止**把本数组塞进 WS `progress`。Grafana 用同一 `task_id` 对 `job=ai-eval-stress`。
+仅供历史压测曲线只读展示。**禁止**把本数组塞进 WS `progress`。
 
 ---
 
@@ -1488,11 +1480,11 @@ JSON 公共头：
 { "url": "https://.../reports/{id}?share=token", "expires_at": "..." }
 ```
 
-生成公开只读链接，有效期 7 天，免登录访问。
+新分享已停用，该写入口返回 `VALIDATION`。历史已签发且未失效的免登录分享链接继续按原鉴权规则只读访问。
 
 #### `POST /api/reports/{id}/baseline`
 
-冻结当前任务为基线版本（写操作审计）。
+基线修改已停用，该写入口返回 `VALIDATION`；旧报告中的基线标记仍可只读查看。下列旧响应及对比规则仅作历史契约留存。
 
 ```json
 { "frozen": true, "task_id": "uuid" }
@@ -2121,60 +2113,22 @@ WS 类型定义在 `routers/ws_v2.py`：`WsAccess(write,trace,reasoning,interact
 
 ## 5. 任务规格 TaskSpec（`POST /api/tasks` 与内部 `task.create` 共用）
 
-字段名不得改。必填语义随 `kind` 变化（PRD 5.1.2）。
+当前新建仅支持用例生成；旧评测与压测字段保留在历史任务快照中，不再作为可下单能力。
 
 ```json
 {
-  "kind": "benchmark",
-  "profile_ids": ["uuid"],
-  "dataset_id": "uuid",
-  "kb_id": null,
-  "gold_qa_id": null,
-  "rag_mode": ["hybrid"],
-  "run": {
-    "sample_size": 1000,
-    "concurrency": 4,
-    "timeout_s": 60,
-    "retry": 1,
-    "temperature": 0,
-    "max_tokens": 1024,
-    "system_prompt": "",
-    "k": 5,
-    "use_judge": false
-  },
-  "with_stress": false,
-  "stress": {
-    "env": "test",
-    "qps": 10,
-    "duration_s": 120,
-    "sla_p99_ms": null
-  },
+  "kind": "testcase",
   "case_source": { "file_id": "uuid" }
 }
 ```
 
 | 字段 | 必填 | 校验 |
 | --- | --- | --- |
-| `kind` | 是 | 四选一；前端只读展示 |
-| `profile_ids` | benchmark：1–5；rag 外部 Chat：恰好 1 | 内置 LightRAG 评测可不填 profile |
-| `dataset_id` | benchmark | |
-| `kb_id` + `gold_qa_id` | rag | 内置或外挂都要黄金 QA |
-| `rag_mode` | rag 且 LightRAG | 1–4 个，默认 `["hybrid"]` |
-| `run` | benchmark / rag | 默认见 PRD 5.2.2；`concurrency` ≤ 平台 inflight |
-| `run.k` | 否 | 仅 rag 有意义，默认 5，1–20 |
-| `run.use_judge` | 否 | 默认 false；true 时用用途含 `judge` 的协议档 |
-| `with_stress` | benchmark / rag | 默认 false |
-| `stress` | `with_stress=true` | `env,qps,duration_s`；`sla_p99_ms` 可选 |
-| `case_source` | testcase | `{file_id}` 或 `{text}`，二选一 |
-| `parent_task_id` | 人手创建 stress 时 | 父任务须 succeeded |
+| `kind` | 是 | 当前固定为 `testcase`；其他值返回 `VALIDATION` |
+| `case_source` | 是 | `{file_id}` 或 `{text}`，二选一；文件须属于当前成员 |
+| `session_id` | 否 | 可见的有效会话；同一会话内任务串行 |
 
-`prod` + 压测：响应或 confirm payload 可带只读 `approvers: [{id,name}]` 供卡上展示；未会签不得 running。
-
-`stress.qps` ≤ settings.max_qps（默认 500），`duration_s` ≤ max_duration_s（默认 1800）。未填 `sla_p99_ms` 时报告不出「是否达标」。
-
-纯对话 Agent 当前不创建任务。人手 `POST /api/tasks` 或未来恢复 ToolNode 后的内部 `task.create` 都必须按本节校验；压测由质量任务 `succeeded` 且 `with_stress=true` 时 Worker 派生，手动创建 `kind=stress` 仍须 `parent_task_id`。
-
-REST 前端预填与后端 TaskSpec 默认值必须保持一致（`sample_size=1000`、`temperature=0`、`max_tokens=1024`、`qps=10`、`duration_s=120`、`sla_p99_ms=null`）。Worker 夹紧：`sample_size = min(请求值, 1000, 行数)`。
+REST `POST /api/tasks` 与 Agent 的内部 `task.create` 均受同一用例生成门禁约束。旧压测会签、手动发压及质量任务成功后派生压测均已停用。
 
 ---
 
@@ -3879,3 +3833,19 @@ Excel 导入在本批缓存已写入但尚未 flush 的用例，重复编号按�
 - `backend/api/app/harness/execution/registry.py`、`task_tools.py`、`harness/skills/`、`agent/`：Agent 用例任务参数、结果定位与能力目录。
 - `backend/shared/casegen.py`、`frontend/src/views/Cases.vue`：统一用例生成规则和草稿定位。
 - 对应 API、Worker 与前端测试：验证停用与草稿审核链路。
+
+## V2.35 用例审核与停用链路缺陷修复（2026-09-28）
+
+- `GET /api/case-sets` 与 `GET /api/case-sets/{id}` 的用例集投影增加持久整数 `revision`。`PUT /api/case-sets/{id}/cases` 必须携带读取时的 `expected_revision`，可同时携带 `column_schema`；服务端在用例集行锁内比较，并在同一事务保存用例行与扩展列定义。冲突返回 `CONCURRENCY` (409)，不删除或覆盖任何用例和列定义。保存成功后返回新 `revision`，客户端继续以它保存后续修改。其他会改动用例行的入口也推进修订号。
+- `POST /api/case-sets/{id}/confirm` 同样要求 `expected_revision`；审核者确认时若用例集自其读取后已变化，返回 `CONCURRENCY` (409)，不将未复核的新版本标为已入库。
+- `POST /api/case-sets/{id}/cancel` 在 JSON body 中要求 `expected_revision`；`PUT /api/case-sets/{id}` 修改 `column_schema` 时在 JSON body 中要求该字段；`POST /api/case-sets/{id}/import` 的 append/replace 均要求 query 参数 `expected_revision`。服务端持锁校验，防止旧页面废弃或覆盖新版本。导入成功返回新 `revision`；重命名等不改用例快照的元信息更新沿用原契约。
+- `POST /api/case-sets/{id}/map` 是已停用的基准数据集映射写入口，拒绝新请求；历史映射行保留。取消 `awaiting_case_confirm` 任务时同步将关联草稿置为 `cancelled`，用例页按终态显示。
+- `POST /api/reports/{id}/share` 继续拒绝新分享，前端移除该操作；历史报告及已存在的分享凭证仍可只读查询。全新数据库启动不播种虚假的 benchmark、RAG 或 stress 任务和报告。Worker 对旧运行中压测的外部停止失败保留可恢复重试，直至引擎接受停止请求；压测服务的 `POST /run` 恒返回 410，不再接受旧 Worker 的迟到请求。停止回执不等于全部在途请求已完成。
+
+### 修改代码文件与作用清单
+
+- `backend/api/app/routers/{cases,tasks}.py`、`schemas.py`、`backend/shared/models.py` 与迁移：乐观锁、审核状态和旧映射关闭。
+- `backend/api/app/{main,seed}.py`：停止伪历史任务播种。
+- `backend/worker/app/{task_state,stress}.py`、`backend/stress/main.go`、`backend/stress/main_test.go`：外部压测停止重试与停用发压入口回归。
+- `frontend/src/views/{Cases,Tasks,Report}.vue`、`frontend/src/api/`：修订字段与只读/终态展示。
+- 对应 API、Worker 和前端测试：覆盖冲突、取消、失败停止与页面回归。

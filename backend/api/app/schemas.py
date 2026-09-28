@@ -822,6 +822,7 @@ class CaseSetUpdate(ApiModel):
     name: str | None = Field(default=None, min_length=1, max_length=100)
     folder_id: str | None = None
     column_schema: list[ColumnSchemaItem] | None = None
+    expected_revision: int | None = Field(default=None, ge=0)
 
     @model_validator(mode="after")
     def validate_unique_column_keys(self) -> "CaseSetUpdate":
@@ -842,6 +843,7 @@ class CaseSetOut(OrmOut):
     status: str = "generated"
     generated_count: int = 0
     confirmed_count: int = 0
+    revision: int = 0
     folder_id: str | None = None
     column_schema: list[dict[str, Any]] = Field(default_factory=list)
     checks: list[dict[str, Any]] = Field(default_factory=list)
@@ -876,9 +878,11 @@ class CaseIn(ApiModel):
 
 
 class CasesPayload(ApiModel):
-    """批量保存用例请求；单次请求内用例 id 不允许重复，避免 upsert 目标歧义。"""
+    """按修订号原子保存用例行与扩展列；单次请求内用例 id 不允许重复。"""
 
     cases: list[CaseIn] = Field(max_length=20_000)
+    expected_revision: int = Field(ge=0)
+    column_schema: list[ColumnSchemaItem] | None = None
 
     @model_validator(mode="after")
     def validate_unique_case_id(self) -> "CasesPayload":
@@ -886,6 +890,10 @@ class CasesPayload(ApiModel):
         ids = [case.id for case in self.cases if case.id]
         if len(ids) != len(set(ids)):
             raise ValueError("cases 中存在重复 id")
+        if self.column_schema is not None:
+            keys = [col.key for col in self.column_schema]
+            if len(keys) != len(set(keys)):
+                raise ValueError("column_schema 中存在重复 key")
         return self
 
 
@@ -893,8 +901,9 @@ class CaseConfirmIn(ApiModel):
     """确认/废弃用例集请求；ok=false 时置 cancelled 并联动关联任务。"""
 
     ok: bool
-    # edits / mapping_target / target_id 为契约预留字段：映射入库走 /map 接口，
-    # 本接口仅消费 ok 做状态流转，其余字段接收后仅记入审计明细
+    expected_revision: int = Field(ge=0)
+    # edits / mapping_target / target_id 仅为历史兼容字段，旧评测数据集映射已停用；
+    # 本接口仅消费 ok 与 expected_revision，其余字段只写审计明细。
     edits: dict[str, Any] | None = None
     mapping_target: Literal["dataset", "gold_qa"] | None = None
     target_id: str | None = Field(default=None, max_length=64)
@@ -903,11 +912,12 @@ class CaseConfirmIn(ApiModel):
 class CaseCancelIn(ApiModel):
     """废弃用例集请求，可附废弃原因。"""
 
+    expected_revision: int = Field(ge=0)
     reason: str | None = Field(default=None, max_length=2000)
 
 
 class CaseMapIn(ApiModel):
-    """批量映射用例到目标基准数据集或知识库黄金问答的请求。"""
+    """已停用映射端点的历史兼容请求契约。"""
 
     target: Literal["dataset", "gold_qa"]
     target_id: str = Field(min_length=1, max_length=64)

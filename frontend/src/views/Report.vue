@@ -21,17 +21,6 @@
             <span>在对话中解读</span>
           </button>
 
-          <button class="btn btn-secondary btn-sm" @click="openShareModal">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="18" cy="5" r="3"></circle>
-              <circle cx="6" cy="12" r="3"></circle>
-              <circle cx="18" cy="19" r="3"></circle>
-              <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line>
-              <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
-            </svg>
-            <span>分享 (7天)</span>
-          </button>
-
           <button class="btn btn-secondary btn-sm" @click="handleExportMd">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
@@ -404,11 +393,6 @@
       </template>
     </EmptyState>
 
-    <!-- 弹窗 -->
-    <ShareModal
-      v-model:show="showShareModal"
-      :share-url="shareUrl"
-    />
   </div>
 </template>
 
@@ -420,7 +404,6 @@ import { api } from '../api/http'
 import type { Report, RagScores, StressSeriesPoint } from '../api/types'
 import KindTag from '../components/common/KindTag.vue'
 import EmptyState from '../components/common/EmptyState.vue'
-import ShareModal from '../components/modals/ShareModal.vue'
 import RadarMetricsChart from '../components/charts/RadarMetricsChart.vue'
 import StressSeriesChart from '../components/charts/StressSeriesChart.vue'
 import { formatDateTime } from '../utils/format'
@@ -445,8 +428,6 @@ const normalizedScores = computed(() =>
   })),
 )
 
-const showShareModal = ref(false)
-const shareUrl = ref('')
 const sampleTab = ref<'all' | 'diff' | 'failed'>('all')
 // 压测时序数据：优先取报告内嵌 series，缺失时回退调 stress-series 接口补齐
 const stressSeries = ref<StressSeriesPoint[]>([])
@@ -597,16 +578,6 @@ async function loadReport() {
     message.error(err.message || '加载报告失败')
   } finally {
     loading.value = false
-  }
-}
-
-async function openShareModal() {
-  try {
-    const res = await api.reports.share(reportId.value, 7)
-    shareUrl.value = res.share_url
-    showShareModal.value = true
-  } catch (err: any) {
-    message.error(err.message || '获取分享链接失败')
   }
 }
 

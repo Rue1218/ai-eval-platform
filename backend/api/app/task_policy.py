@@ -5,7 +5,35 @@ from typing import Any
 from sqlalchemy.orm import Session
 
 from .errors import AppError, ErrorCode
-from .models import AuditLog, StoredFile, User
+from .models import AuditLog, CaseSet, StoredFile, Task, User
+
+
+def lock_owned_task_for_cancel(db: Session, task_id: str, user_id: str) -> Task:
+    """先锁用例集、再锁任务；并发生成刚完成时重试以保持锁序。"""
+    for _ in range(2):
+        case_set = (
+            db.query(CaseSet).filter(CaseSet.task_id == task_id)
+            .populate_existing().with_for_update().first()
+        )
+        task = (
+            db.query(Task).filter(Task.id == task_id)
+            .populate_existing().with_for_update().first()
+        )
+        if not task:
+            raise AppError(ErrorCode.NOT_FOUND, "任务不存在")
+        if task.created_by != user_id:
+            raise AppError(ErrorCode.UNAUTHORIZED, "没有权限做这件事")
+        if task.status == "awaiting_case_confirm" and case_set is None:
+            # 生成任务可能在首次查询后提交结果；释放 Task 锁后重按 CaseSet→Task 获取。
+            db.rollback()
+            continue
+        if task.status == "awaiting_case_confirm" and case_set and case_set.status == "generated":
+            case_set.status = "cancelled"
+        if task.kind == "stress" and task.status == "running":
+            # 外部压测引擎停发由 Worker 按此持久标记重试，API 只做快速取消。
+            task.result = {**(task.result or {}), "stress_stop_pending": True}
+        return task
+    raise AppError(ErrorCode.CONCURRENCY, "用例集正在生成，请重试取消")
 
 
 def require_owned_source_file(db: Session, file_id: str, user_id: str) -> StoredFile:

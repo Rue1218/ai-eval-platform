@@ -302,11 +302,16 @@ def _fail(db: Session, task_id: str, code: str, message: str) -> None:
     logger.info("stress task %s failed code=%s", task_id, code)
 
 
-def _stop_engine(task_id: str) -> None:
+def _stop_engine(task_id: str) -> bool:
     try:
-        _request_json("POST", "/stop", {"task_id": task_id}, timeout=5.0)
+        response = _request_json("POST", "/stop", {"task_id": task_id}, timeout=5.0)
     except Exception:
-        logger.info("stress stop 调用失败 task=%s", task_id)
+        logger.warning("stress stop 调用失败 task=%s", task_id)
+        return False
+    if response.get("status") == "stopping" and response.get("task_id") == task_id:
+        return True
+    logger.warning("stress stop 回执无效 task=%s", task_id)
+    return False
 
 
 def run_stress(task_id: str) -> None:
