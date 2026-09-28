@@ -99,7 +99,7 @@
             </div>
           </div>
           <div class="row-between" style="margin-top: 2px">
-            <span class="session-time">{{ formatRelativeTime(s.created_at) }}</span>
+            <span class="session-time">{{ formatSessionDate(s.created_at) }}</span>
           </div>
         </div>
         <div v-if="filteredSessions.length === 0" class="session-empty-filter">
@@ -396,14 +396,12 @@ function handleBatchDeleteSessions() {
 }
 
 
-/** 列表展示会话创建时间的相对值。 */
-function formatRelativeTime(dateStr?: string) {
-  if (!dateStr) return '刚刚'
-  const diff = Date.now() - new Date(dateStr).getTime()
-  const mins = Math.floor(diff / 60000)
-  if (mins < 1) return '刚刚'
-  if (mins < 60) return `${mins} 分钟前`
-  return `${Math.floor(mins / 60)} 小时前`
+/** 列表按本地时区展示会话创建日期。 */
+function formatSessionDate(dateStr?: string) {
+  if (!dateStr) return '—'
+  const date = new Date(dateStr)
+  if (Number.isNaN(date.getTime())) return '—'
+  return date.toLocaleDateString('zh-CN', { year: 'numeric', month: '2-digit', day: '2-digit' })
 }
 
 /** 服务端以 4404 收回会话后同步移除本地缓存，避免列表留下无法重连的幽灵项。 */
