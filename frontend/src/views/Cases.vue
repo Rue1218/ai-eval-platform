@@ -587,8 +587,8 @@
     <ImportCasesExcelModal v-model:show="showImportExcel" :current-set="importCurrentSet" @imported="onCasesImported" />
 
     <!-- ─── 右侧滑出抽屉：PRD 用例推导向导 ─── -->
-    <n-drawer v-model:show="aiGen.show" :width="drawerWidth" placement="right">
-      <n-drawer-content title="PRD 用例智能推导向导" closable>
+    <n-drawer v-model:show="aiGen.show" :width="drawerWidth" placement="right" :mask-closable="!aiGen.applying">
+      <n-drawer-content title="PRD 用例智能推导向导" :closable="!aiGen.applying">
         <div class="drawer-step-bar">
           <div class="step-badge" :class="{ active: aiGen.step === 1, done: aiGen.step === 2 }">
             <span class="step-idx">1</span>
@@ -605,43 +605,44 @@
           <div class="field">
             <label class="field-label">需求来源</label>
             <div class="candidate-targets">
-              <label class="candidate-target"><input v-model="aiGen.sourceMode" type="radio" value="text" />粘贴需求文本</label>
-              <label class="candidate-target"><input v-model="aiGen.sourceMode" type="radio" value="file" />上传需求文件</label>
+              <label class="candidate-target"><input v-model="aiGen.sourceMode" type="radio" value="text" :disabled="aiGen.generating || aiGen.applying" />粘贴需求文本</label>
+              <label class="candidate-target"><input v-model="aiGen.sourceMode" type="radio" value="file" :disabled="aiGen.generating || aiGen.applying" />上传需求文件</label>
             </div>
           </div>
           <template v-if="aiGen.sourceMode === 'text'">
           <div class="field">
             <label class="field-label">PRD 需求预设模板</label>
-            <n-select v-model:value="aiGen.preset" :options="presetOptions" placeholder="可选示例，非真实需求来源" @update:value="onPresetChange" />
+            <n-select v-model:value="aiGen.preset" :options="presetOptions" :disabled="aiGen.generating || aiGen.applying" placeholder="可选示例，非真实需求来源" @update:value="onPresetChange" />
           </div>
 
           <div class="field">
             <label class="field-label">PRD 需求描述 / 业务规则 / 接口规范 <span class="req">*</span></label>
-            <n-input v-model:value="aiGen.prdText" class="mono" type="textarea" :autosize="{ minRows: 4, maxRows: 8 }" placeholder="粘贴需求文档段落、状态转移逻辑或 OpenAPI 规范..." />
+            <n-input v-model:value="aiGen.prdText" class="mono" type="textarea" :disabled="aiGen.generating || aiGen.applying" :autosize="{ minRows: 4, maxRows: 8 }" placeholder="粘贴需求文档段落、状态转移逻辑或 OpenAPI 规范..." />
           </div>
           </template>
           <div v-else class="field">
             <label class="field-label">需求文件（UTF-8 文本或 Excel）</label>
-            <input ref="sourceFileInput" type="file" accept=".txt,.md,.csv,.json,.yaml,.yml,.xlsx" class="source-file-input" aria-label="选择需求文件" @change="uploadSourceFile" />
-            <button class="btn btn-secondary btn-md" :disabled="aiGen.sourceUploading" @click="sourceFileInput?.click()">{{ aiGen.sourceUploading ? `上传中 ${aiGen.sourceUploadPercent}%…` : '选择需求文件' }}</button>
+            <input ref="sourceFileInput" type="file" accept=".txt,.md,.csv,.json,.yaml,.yml,.xlsx" class="source-file-input" aria-label="选择需求文件" :disabled="aiGen.sourceUploading || aiGen.generating || aiGen.applying" @change="uploadSourceFile" />
+            <button class="btn btn-secondary btn-md" :disabled="aiGen.sourceUploading || aiGen.generating || aiGen.applying" @click="sourceFileInput?.click()">{{ aiGen.sourceUploading ? `上传中 ${aiGen.sourceUploadPercent}%…` : '选择需求文件' }}</button>
             <p v-if="aiGen.sourceUploading" class="field-hint" role="status">已上传 {{ aiGen.sourceUploadPercent }}%，等待服务端保存…</p>
             <p class="field-hint">{{ aiGen.sourceFileName || '尚未选择文件；支持 UTF-8 文本、Markdown、CSV 和 Excel。' }}</p>
           </div>
 
-          <div class="divider-title">推导策略覆盖</div>
-          <div class="field">
-            <div class="row wrap" style="gap: 12px; font-size: 13.5px">
-              <n-checkbox v-for="s in STRATEGIES" :key="s" :checked="aiGen.strategies.includes(s)" @update:checked="toggleStrategy(s)">
-                {{ s }}策略
-              </n-checkbox>
-            </div>
+          <div class="divider-title">六策略生成配比</div>
+          <div class="strategy-weight-grid">
+            <label v-for="strategy in STRATEGY_OPTIONS" :key="strategy.key" class="strategy-weight-field">
+              <span>{{ strategy.label }}</span>
+              <input v-model.number="aiGen.strategyWeights[strategy.key]" type="number" min="0" max="100" step="1" :disabled="aiGen.generating || aiGen.applying" :aria-label="`${strategy.label}策略百分比`" />
+              <span>%</span>
+            </label>
           </div>
+          <p class="field-hint" :class="{ 'strategy-weight-error': !strategyWeightsValid }" aria-live="polite">合计 {{ strategyWeightTotal }}%，须为 100%；填 0 可关闭策略。</p>
 
           <div class="divider-title">生成参数</div>
           <div class="form-row-3">
             <div class="field">
               <label class="field-label">用例规模 (<b class="mono">{{ aiGen.count }}</b> 条)</label>
-              <n-slider v-model:value="aiGen.count" :min="1" :max="80" :step="1" />
+              <n-slider v-model:value="aiGen.count" :min="1" :max="80" :step="1" :disabled="aiGen.generating || aiGen.applying" />
             </div>
             <p class="field-hint">生成结果仅为候选；审核并保存草稿后才能确认入库。</p>
           </div>
@@ -683,15 +684,16 @@
 
         <template #footer>
           <div class="drawer-footer-row">
-            <n-button v-if="aiGen.step === 2" :disabled="!!aiGen.appliedToSetId" @click="aiGen.step = 1">← 返回调整 PRD</n-button>
+            <n-button v-if="aiGen.step === 2" :disabled="aiGen.applying || aiGen.generating || !!aiGen.appliedToSetId" @click="aiGen.step = 1">← 返回调整 PRD</n-button>
             <span v-else></span>
             <div class="row" style="gap: 8px">
-              <n-button @click="aiGen.show = false">取消</n-button>
-              <n-button v-if="aiGen.step === 1" type="primary" :loading="aiGen.generating" :disabled="aiGen.sourceUploading" @click="runAiGenerateCases()">
+              <n-button v-if="aiGen.appliedToSetId && !aiGen.applying" :disabled="savingCases" @click="moveCandidatesToNewDraft">{{ aiGen.rehomePending ? '返回当前草稿' : '改存新草稿' }}</n-button>
+              <n-button :disabled="aiGen.applying" @click="aiGen.show = false">取消</n-button>
+              <n-button v-if="aiGen.step === 1" type="primary" :loading="aiGen.generating" :disabled="aiGen.sourceUploading || aiGen.applying || !strategyWeightsValid" @click="runAiGenerateCases()">
                 {{ aiGen.generating ? '正在推导用例中…' : '推导候选用例 →' }}
               </n-button>
-              <n-button v-else type="primary" :loading="aiGen.applying" :disabled="aiSelectedCount === 0 || aiGen.applying || (!!aiGen.appliedToSetId && saveConflict)" @click="commitAiCandidates">
-                {{ aiGen.appliedToSetId ? (saveConflict ? '版本冲突，请先核对' : '重试保存候选') : `采纳并保存候选 (${aiSelectedCount} 条)` }}
+              <n-button v-else type="primary" :loading="aiGen.applying" :disabled="aiSelectedCount === 0 || aiGen.applying || aiGen.generating || (!!aiGen.appliedToSetId && !aiGen.rehomePending && saveConflict)" @click="commitAiCandidates">
+                {{ aiGen.rehomePending ? `采纳并保存候选 (${aiSelectedCount} 条)` : aiGen.appliedToSetId ? (saveConflict ? '版本冲突，请先核对' : '重试保存候选') : `采纳并保存候选 (${aiSelectedCount} 条)` }}
               </n-button>
             </div>
           </div>
@@ -830,6 +832,14 @@ type CtxMenuType = 'file' | 'folder' | 'row'
 
 const STRATEGIES: CaseStrategy[] = ['正向', '反向', '边界', '等价类', '状态迁移', '场景']
 const PRIORITIES: CasePriority[] = ['HX', 'FHX', 'BJ', 'YC', 'ZD', 'BL']
+const STRATEGY_OPTIONS = [
+  { label: '正向', key: 'positive', weight: 40 },
+  { label: '反向', key: 'negative', weight: 25 },
+  { label: '边界', key: 'boundary', weight: 15 },
+  { label: '等价类', key: 'equivalence', weight: 10 },
+  { label: '状态迁移', key: 'state', weight: 5 },
+  { label: '场景', key: 'scenario', weight: 5 },
+] as const
 
 // ─── 右键菜单 SVG 图标辅助渲染 ───
 const message = useMessage()
@@ -1317,6 +1327,10 @@ async function selectCaseSet(id: string) {
 }
 
 function requestSelectCaseSet(id: string, after?: () => void) {
+  if (caseEdit.value.show) {
+    message.warning('请先保存或关闭当前用例编辑窗口')
+    return
+  }
   if (id === activeSetId.value) {
     after?.()
     return
@@ -1336,7 +1350,12 @@ function requestSelectCaseSet(id: string, after?: () => void) {
       after?.()
     },
     onNegativeClick: () => {
-      if (aiGen.value.appliedToSetId === activeSetId.value) aiGen.value.appliedToSetId = ''
+      if (aiGen.value.appliedToSetId === activeSetId.value) {
+        aiGen.value.appliedToSetId = ''
+        aiGen.value.rehomePending = false
+        aiGen.value.appliedCaseIds = []
+        aiGen.value.appliedBaseSnapshot = ''
+      }
       void selectCaseSet(id).then(() => after?.())
     },
   })
@@ -1422,6 +1441,7 @@ async function persistCases(): Promise<boolean> {
   const version = loadVersion
   const expectedRevision = loadedRevision.value
   const rows = cases.value.slice()
+  const submittedIds = new Set(rows.map(row => row.id))
   const snapshot = JSON.stringify(rows.map(casePayload))
   const columns = JSON.stringify(customCols.value)
   saveConflict.value = false
@@ -1445,8 +1465,12 @@ async function persistCases(): Promise<boolean> {
         row.source = item
       })
       hasUnsavedChanges.value = !unchanged
-      if (unchanged && aiGen.value.appliedToSetId === set.id) {
+      if (aiGen.value.appliedToSetId === set.id && aiGen.value.appliedCaseIds.length > 0
+        && aiGen.value.appliedCaseIds.every(id => submittedIds.has(id))) {
         aiGen.value.appliedToSetId = ''
+        aiGen.value.rehomePending = false
+        aiGen.value.appliedCaseIds = []
+        aiGen.value.appliedBaseSnapshot = ''
         aiGen.value.candidates = []
       }
       justSaved.value = unchanged
@@ -1838,7 +1862,8 @@ async function confirmNameDialog() {
 // 用例结构化编辑弹窗
 const caseEdit = ref<{
   show: boolean
-  idx: number
+  setId: string
+  row: ExtendedTestCase | null
   code: string
   name: string
   module: string
@@ -1850,7 +1875,8 @@ const caseEdit = ref<{
   expected_result: string
 }>({
   show: false,
-  idx: -1,
+  setId: '',
+  row: null,
   code: '',
   name: '',
   module: '',
@@ -1868,7 +1894,8 @@ function openCaseEditModal(idx: number) {
   if (!c) return
   caseEdit.value = {
     show: true,
-    idx,
+    setId: activeSetId.value,
+    row: c,
     code: c.code,
     name: c.name,
     module: c.module || '通用',
@@ -1883,8 +1910,11 @@ function openCaseEditModal(idx: number) {
 
 function saveCaseEdit() {
   if (!canEditCases.value) return
-  const c = cases.value[caseEdit.value.idx]
-  if (!c) return
+  const c = caseEdit.value.row
+  if (caseEdit.value.setId !== activeSetId.value || !c || !cases.value.includes(c)) {
+    message.warning('原用例已切换或重新加载，请返回原草稿后重新打开编辑')
+    return
+  }
   c.name = caseEdit.value.name.trim()
   c.module = caseEdit.value.module.trim()
   c.feature_point = caseEdit.value.feature_point.trim()
@@ -1978,26 +2008,34 @@ const aiGen = ref({
   sourceFileName: '',
   sourceUploading: false,
   sourceUploadPercent: 0,
-  strategies: [...STRATEGIES],
+  strategyWeights: Object.fromEntries(STRATEGY_OPTIONS.map(({ key, weight }) => [key, weight])) as Record<(typeof STRATEGY_OPTIONS)[number]['key'], number>,
   count: 10,
   generating: false,
   applying: false,
   target: 'new' as 'current' | 'new',
   newSetName: '',
   appliedToSetId: '',
+  rehomePending: false,
+  appliedCaseIds: [] as string[],
+  appliedBaseSnapshot: '',
+  appliedBaseUnsaved: false,
   candidates: [] as AiCaseCandidate[],
 })
 
 const presetOptions = computed(() => PRD_PRESETS.map(p => ({ label: `${p.name} · ${p.desc.slice(0, 30)}...`, value: p.desc })))
 const aiSelectedCount = computed(() => aiGen.value.candidates.filter(c => c.selected).length)
 const aiAllSelected = computed(() => aiGen.value.candidates.length > 0 && aiSelectedCount.value === aiGen.value.candidates.length)
+const strategyWeightTotal = computed(() => Object.values(aiGen.value.strategyWeights).reduce((sum, weight) => sum + Number(weight || 0), 0))
+const strategyWeightsValid = computed(() => Object.values(aiGen.value.strategyWeights).every(weight => Number.isInteger(weight) && weight >= 0 && weight <= 100)
+  && strategyWeightTotal.value === 100)
 const sourceFileInput = ref<HTMLInputElement | null>(null)
+let candidateVersion = 0
 
 function openAiGenDrawer() {
   const hasCandidates = aiGen.value.candidates.length > 0
   aiGen.value.show = true
-  aiGen.value.step = hasCandidates ? 2 : 1
-  if (aiGen.value.appliedToSetId) aiGen.value.target = 'current'
+  aiGen.value.step = aiGen.value.generating ? 1 : hasCandidates ? 2 : 1
+  if (aiGen.value.appliedToSetId) aiGen.value.target = aiGen.value.rehomePending ? 'new' : 'current'
   else if (!hasCandidates) aiGen.value.target = 'new'
   if (!aiGen.value.newSetName) aiGen.value.newSetName = `需求用例-${new Date().toISOString().slice(0, 10)}`
 }
@@ -2008,6 +2046,7 @@ function onPresetChange(val: string) {
 /** 上传完成后才替换现有来源，慢上行时展示进度并延长单次请求期限。 */
 async function uploadSourceFile(e: Event) {
   const input = e.target as HTMLInputElement
+  if (aiGen.value.generating || aiGen.value.applying || aiGen.value.sourceUploading) return
   const file = input.files?.[0]
   if (!file) return
   if (!/\.(txt|md|csv|json|yaml|yml|xlsx)$/i.test(file.name)) {
@@ -2029,12 +2068,6 @@ async function uploadSourceFile(e: Event) {
     input.value = ''
   }
 }
-function toggleStrategy(s: CaseStrategy) {
-  const idx = aiGen.value.strategies.indexOf(s)
-  if (idx >= 0) aiGen.value.strategies.splice(idx, 1)
-  else aiGen.value.strategies.push(s)
-}
-
 function candidateNeedsClarification(c: AiCaseCandidate): boolean {
   return !c.name.trim() || !c.expected_result.trim() || !c.stepsText.trim()
 }
@@ -2058,7 +2091,7 @@ function candidatePayload(c: AiCaseCandidate): TestCaseInput {
 
 /** 仅在新候选成功生成后替换旧候选，失败时保留人工编辑。 */
 async function runAiGenerateCases(replaceExisting = false) {
-  if (aiGen.value.generating) return
+  if (aiGen.value.generating || aiGen.value.applying) return
   if (aiGen.value.sourceMode === 'text' && !aiGen.value.prdText.trim()) {
     message.warning('请填写需求描述')
     return
@@ -2067,8 +2100,8 @@ async function runAiGenerateCases(replaceExisting = false) {
     message.warning('请先上传需求文件')
     return
   }
-  if (!aiGen.value.strategies.length) {
-    message.warning('请至少选择一个测试策略')
+  if (!strategyWeightsValid.value) {
+    message.warning('六策略百分比须为 0 到 100 的整数，合计 100%')
     return
   }
   if (aiGen.value.candidates.length && !replaceExisting) {
@@ -2082,12 +2115,17 @@ async function runAiGenerateCases(replaceExisting = false) {
     return
   }
   aiGen.value.generating = true
+  const sourceMode = aiGen.value.sourceMode
+  const sourceText = aiGen.value.prdText.trim()
+  const sourceDocId = aiGen.value.sourceDocId
+  const count = aiGen.value.count
+  const weights = { ...aiGen.value.strategyWeights }
   try {
     let candidates: AiCaseCandidate[] = []
     if (api.isMock()) {
       await new Promise(resolve => setTimeout(resolve, 500))
-      const strats = aiGen.value.strategies
-      candidates = Array.from({ length: aiGen.value.count }, (_, i) => ({
+      const strats = STRATEGY_OPTIONS.filter(({ key }) => weights[key] > 0).map(({ label }) => label)
+      candidates = Array.from({ length: count }, (_, i) => ({
         selected: true,
         code: `TC-${String(i + 1).padStart(3, '0')}`,
         name: `验证跨境交易场景下的测试用例 #${i + 1}`,
@@ -2100,24 +2138,11 @@ async function runAiGenerateCases(replaceExisting = false) {
         expected_result: '返回扣款成功回调并在 100ms 内推送账单流水。',
       }))
     } else {
-      // 选中策略沿用默认配比并归一为整数百分比，未选策略明确传 0。
-      const defaults = [
-        ['正向', 'positive', 40], ['反向', 'negative', 25], ['边界', 'boundary', 15],
-        ['等价类', 'equivalence', 10], ['状态迁移', 'state', 5], ['场景', 'scenario', 5],
-      ] as const
-      const selected = defaults.filter(([strategy]) => aiGen.value.strategies.includes(strategy))
-      const total = selected.reduce((sum, [, , weight]) => sum + weight, 0)
-      const weights: Record<string, number> = Object.fromEntries(defaults.map(([, key]) => [key, 0]))
-      let remaining = 100
-      selected.forEach(([, key, weight], index) => {
-        weights[key] = index === selected.length - 1 ? remaining : Math.floor(weight * 100 / total)
-        remaining -= weights[key]
-      })
       const generated = await api.cases.generateCases({
-        source_text: aiGen.value.sourceMode === 'text' ? aiGen.value.prdText.trim() : '',
-        ...(aiGen.value.sourceMode === 'file' ? { source_doc_id: aiGen.value.sourceDocId } : {}),
+        source_text: sourceMode === 'text' ? sourceText : '',
+        ...(sourceMode === 'file' ? { source_doc_id: sourceDocId } : {}),
         strategy_weights: weights,
-        max_count: aiGen.value.count,
+        max_count: count,
       })
       candidates = (generated as any[]).map((c, i) => ({
         selected: true,
@@ -2138,6 +2163,7 @@ async function runAiGenerateCases(replaceExisting = false) {
       return
     }
     aiGen.value.candidates = candidates
+    candidateVersion += 1
     aiGen.value.appliedToSetId = ''
     aiGen.value.target = 'new'
     aiGen.value.step = 2
@@ -2149,30 +2175,92 @@ async function runAiGenerateCases(replaceExisting = false) {
 }
 
 function toggleAllCandidates() {
-  if (aiGen.value.appliedToSetId || aiGen.value.applying) return
+  if (aiGen.value.appliedToSetId || aiGen.value.applying || aiGen.value.generating) return
   const target = aiSelectedCount.value < aiGen.value.candidates.length
   aiGen.value.candidates.forEach(c => { c.selected = target })
 }
 
+/** 把已追加行的后续编辑同步回候选；原草稿只在新草稿创建成功后移除本批行。 */
+function syncAppliedCandidateRows() {
+  const state = aiGen.value
+  const selected = state.candidates.filter(candidate => candidate.selected)
+  selected.forEach((candidate, index) => {
+    const row = cases.value.find(item => item.id === state.appliedCaseIds[index])
+    if (!row) return
+    candidate.name = row.name
+    candidate.module = row.module
+    candidate.feature_point = row.feature_point
+    candidate.strategy = row.strategy
+    candidate.priority = row.priority
+    candidate.preconditions = row.preconditions
+    candidate.stepsText = row.steps?.join('\n') || ''
+    candidate.expected_result = row.expected_result
+    candidate.source = { ...candidate.source, ...row.extras } as TestCase
+  })
+}
+
+function moveCandidatesToNewDraft() {
+  const state = aiGen.value
+  if (!state.appliedToSetId || state.applying || savingCases.value) return
+  if (activeSetId.value !== state.appliedToSetId || loadedSetId.value !== state.appliedToSetId) {
+    message.warning('请先返回原草稿核对候选，再改存新草稿')
+    return
+  }
+  if (state.rehomePending) {
+    state.rehomePending = false
+    state.target = 'current'
+    return
+  }
+  syncAppliedCandidateRows()
+  state.rehomePending = true
+  state.target = 'new'
+  message.info('新草稿保存成功后才会从原草稿移除本批候选；原有编辑将保留')
+}
+
+function finishCandidateRehome() {
+  const state = aiGen.value
+  const ids = new Set(state.appliedCaseIds)
+  cases.value = cases.value.filter(row => !ids.has(row.id))
+  selectedCaseIds.value = selectedCaseIds.value.filter(id => !ids.has(id))
+  hasUnsavedChanges.value = state.appliedBaseUnsaved
+    || JSON.stringify(cases.value.map(casePayload)) !== state.appliedBaseSnapshot
+  state.appliedToSetId = ''
+  state.appliedCaseIds = []
+  state.appliedBaseSnapshot = ''
+  state.rehomePending = false
+  state.target = 'new'
+}
+
 /** 新草稿原子创建，当前草稿采纳后保存；失败时保留候选以便核对与重试。 */
 async function commitAiCandidates() {
-  if (aiGen.value.applying) return
+  if (aiGen.value.applying || aiGen.value.generating) return
   const selected = aiGen.value.candidates.filter(c => c.selected)
   if (!selected.length) return
+  const batch = candidateVersion
   aiGen.value.applying = true
   try {
-    if (!aiGen.value.appliedToSetId && aiGen.value.target === 'new') {
+    if (aiGen.value.target === 'new' && (!aiGen.value.appliedToSetId || aiGen.value.rehomePending)) {
       const name = aiGen.value.newSetName.trim()
       if (!name) {
         message.warning('请输入新草稿名称')
         return
       }
+      if (aiGen.value.rehomePending) {
+        if (activeSetId.value !== aiGen.value.appliedToSetId || loadedSetId.value !== aiGen.value.appliedToSetId) {
+          message.warning('请先返回原草稿核对候选，再改存新草稿')
+          return
+        }
+        syncAppliedCandidateRows()
+      }
       const created = await api.cases.createSetFromCandidates({ name, cases: selected.map(candidatePayload) })
+      if (aiGen.value.rehomePending) finishCandidateRehome()
       caseSets.value.unshift(created)
       const root = folders.value.find(folder => folder.id === 'cases')
       if (root) root.items = caseSets.value
-      aiGen.value.candidates = []
-      aiGen.value.show = false
+      if (batch === candidateVersion) {
+        aiGen.value.candidates = []
+        aiGen.value.show = false
+      }
       message.success(`已保存 ${selected.length} 条候选到新草稿「${name}」，审核后再确认入库`)
       requestSelectCaseSet(created.id)
       return
@@ -2184,9 +2272,14 @@ async function commitAiCandidates() {
     if (aiGen.value.appliedToSetId && aiGen.value.appliedToSetId !== currentSet.value.id) return
     if (!aiGen.value.appliedToSetId) {
       let baseNum = cases.value.length
+      aiGen.value.appliedBaseUnsaved = hasUnsavedChanges.value
+      aiGen.value.appliedBaseSnapshot = JSON.stringify(cases.value.map(casePayload))
+      aiGen.value.appliedCaseIds = []
       selected.forEach(cand => {
+        const id = `temp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`
+        aiGen.value.appliedCaseIds.push(id)
         cases.value.push({
-          id: `temp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          id,
           set_id: activeSetId.value,
           code: `TC-${String(++baseNum).padStart(3, '0')}`,
           name: cand.name,
@@ -2206,12 +2299,22 @@ async function commitAiCandidates() {
       aiGen.value.appliedToSetId = currentSet.value.id
     }
     if (!await persistCases()) {
+      if (!aiGen.value.appliedToSetId) {
+        aiGen.value.show = false
+        message.info('候选已保存，后续本地修改仍待保存')
+        return
+      }
       if (!saveConflict.value) message.warning('候选已保留在当前草稿，保存失败；可重试保存')
       return
     }
     aiGen.value.appliedToSetId = ''
-    aiGen.value.candidates = []
-    aiGen.value.show = false
+    aiGen.value.rehomePending = false
+    aiGen.value.appliedCaseIds = []
+    aiGen.value.appliedBaseSnapshot = ''
+    if (batch === candidateVersion) {
+      aiGen.value.candidates = []
+      aiGen.value.show = false
+    }
     message.success(`已保存 ${selected.length} 条候选到当前草稿，审核后再确认入库`)
   } catch (err: any) {
     message.error(err.message || '采纳候选失败，候选仍保留在审核列表')
@@ -3200,6 +3303,27 @@ onUnmounted(() => {
   gap: 6px;
   font-size: 13px;
 }
+.strategy-weight-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 16px;
+}
+.strategy-weight-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+.strategy-weight-field span:first-child { min-width: 58px; }
+.strategy-weight-field input {
+  width: 78px;
+  padding: 5px 8px;
+  border: 1px solid var(--border-default);
+  border-radius: 5px;
+  background: var(--bg-main);
+  color: var(--text-primary);
+}
+.strategy-weight-error { color: var(--accent-error); }
 .source-file-input { display: none; }
 .candidate-list {
   max-height: 420px;
@@ -3238,6 +3362,7 @@ onUnmounted(() => {
 }
 .candidate-wide { grid-column: 1 / -1; }
 @media (max-width: 540px) {
+  .strategy-weight-grid { grid-template-columns: 1fr; }
   .candidate-fields { grid-template-columns: 1fr; }
   .candidate-wide { grid-column: auto; }
 }

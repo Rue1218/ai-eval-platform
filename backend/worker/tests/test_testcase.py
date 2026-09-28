@@ -5,6 +5,10 @@ from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
+from openpyxl import Workbook
+from sqlalchemy import event
+from sqlalchemy.dialects import postgresql
+
 from app import main, task_state, testcase
 from app.models import (
     CaseItem,
@@ -16,11 +20,6 @@ from app.models import (
     TaskEvent,
     utcnow,
 )
-from openpyxl import Workbook
-from sqlalchemy import event
-from sqlalchemy.dialects import postgresql
-
-
 def _file(path, filename="requirements.xlsx", kind="xlsx", owner="owner"):
     """构造与真实上传相同的无扩展名存储文件元数据。"""
     return StoredFile(
@@ -175,6 +174,48 @@ def test_generation_honors_snapshot_count_and_weights(worker_db_factory, monkeyp
     with worker_db_factory() as db:
         assert db.get(Task, "task").status == "awaiting_case_confirm"
         assert [row.name for row in db.query(CaseItem).order_by(CaseItem.sort_order)] == ["正向1", "正向2"]
+
+
+@pytest.mark.parametrize("max_count,budget", [(45, 8192), (80, 16384)])
+def test_generation_keeps_short_model_output_with_target_quota(
+    worker_db_factory, monkeypatch, max_count, budget,
+):
+    """模型少于目标条数时按目标配比裁剪，不对实际返回数再次缩额。"""
+    with worker_db_factory() as db:
+        db.add(ProtocolProfile(
+            id="profile", name="local", protocol="openai_chat",
+            base_url="https://example.test", model="local",
+        ))
+        db.add(Setting(key="agent_profile_id", value="profile"))
+        db.add(Task(
+            id="task", kind="testcase", status="running", created_by="owner",
+            claimed_by_worker_id="worker", claim_expires_at=utcnow() + timedelta(minutes=1),
+            config={"case_source": {"text": "登录需求"}, "max_count": max_count},
+        ))
+        db.commit()
+    monkeypatch.setattr(testcase, "profile_connection", lambda *_args, **_kwargs: (
+        "https://example.test", "local", "local-test-placeholder",
+    ))
+    monkeypatch.setattr(testcase, "read_profile_env", lambda _id: SimpleNamespace(full_url=False))
+    calls = []
+
+    def fake_model(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(text=(
+            '[{"name":"正向1","strategy":"正向","priority":"HX","expected":"成功"},'
+            '{"name":"正向2","strategy":"正向","priority":"HX","expected":"成功"},'
+            '{"name":"正向3","strategy":"正向","priority":"HX","expected":"成功"}]'
+        ))
+
+    monkeypatch.setattr(testcase, "call_protocol", fake_model)
+
+    testcase.run_testcase("task")
+    assert calls[0]["max_tokens"] == budget
+    with worker_db_factory() as db:
+        assert db.get(Task, "task").status == "awaiting_case_confirm"
+        assert [row.name for row in db.query(CaseItem).order_by(CaseItem.sort_order)] == [
+            "正向1", "正向2", "正向3",
+        ]
 
 
 def test_confirmation_expiry_only_cancels_eligible_locked_rows(worker_db_factory, monkeypatch):

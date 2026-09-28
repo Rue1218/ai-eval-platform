@@ -11,7 +11,7 @@
 | WS v2 修订日期 | 2026-09-26（§4A，摘要安全用量元数据与 v2.3 目录） |
 | 对应 PRD | V1.55（功能唯一权威） |
 | 对应设计规范 | V1.12（错误码文案、确认卡字段名、调度中心规范） |
-| 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.7.8（AgentLoop 单入口；JSON 仍以本文为准） |
+| 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.7.15（AgentLoop 单入口；JSON 仍以本文为准） |
 | 对应前端计划 | AgentLoop 前端计划 V0.5 |
 | 对应后端计划 | V1.5 |
 | 撰写日期 | 2026-08-18 |
@@ -249,7 +249,7 @@ WS `error` 事件 payload 与上表同一套 `code` + `message`（可带 `fields
 | **任务中心 (tasks.html)** | 24h 状态趋势 / 六态过滤表格 / 抽屉详情 / 取消与重跑 | `/api/tasks`, `/api/tasks/summary`, `/api/tasks/{id}`, `/api/tasks/{id}/cancel`, `/api/tasks/{id}/rerun` | GET/POST | 成员 · 全员同权 |
 | **报告中心 (report.html)** | 历史评测与压测报告只读查询、Markdown 导出；既有分享链接继续可读 | `/api/reports`, `/api/reports/{id}`, `/api/reports/{id}/samples` | GET | 成员 · 全员同权 |
 | **数据集工作台 (datasets.html)** | 数据集目录树 / 行内即点即改网格 / 自定义列扩展 / AI 数据集生成 | `/api/dataset-folders`, `/api/datasets`, `/api/datasets/{id}`, `/api/datasets/{id}/rows`, `/api/datasets/ai-generate`, `/api/kb` | GET/POST/PUT/DELETE | 成员 · 全员同权 |
-| **用例工作台 (cases.html)** | 6 大策略分布、自检、草稿编辑与审核、72h 倒计时、Excel 导入导出及 AI PRD 用例抽取；旧评测映射入口停用 | `/api/case-folders`, `/api/case-sets`, `/api/case-sets/{id}`, `/api/case-sets/{id}/cases`, `/api/case-sets/{id}/confirm`, `/api/case-sets/{id}/cancel`, `/api/case-sets/ai-generate`, `/api/case-sets/import-template`, `/api/case-sets/{id}/import`, `/api/case-sets/{id}/export` | GET/POST/PUT/DELETE | 成员 · 全员同权 |
+| **用例工作台 (cases.html)** | 6 大策略分布、自检、草稿编辑与审核、72h 倒计时、Excel 导入导出及 AI PRD 用例抽取；旧评测映射入口停用 | `/api/case-folders`, `/api/case-sets`, `/api/case-sets/from-candidates`, `/api/case-sets/{id}`, `/api/case-sets/{id}/cases`, `/api/case-sets/{id}/confirm`, `/api/case-sets/{id}/cancel`, `/api/case-sets/ai-generate`, `/api/case-sets/import-template`, `/api/case-sets/{id}/import`, `/api/case-sets/{id}/export` | GET/POST/PUT/DELETE | 成员 · 全员同权 |
 | **知识库 (kb.html)** | 3栏工作台 / 文档与切块预览 / 4模式检索 Playground / 黄金 QA | `/api/kb`, `/api/kb/{id}`, `/api/kb/{id}/documents`, `/api/kb/{id}/documents/{doc_id}/chunks`, `/api/kb/{id}/query`, `/api/kb/{id}/gold-qa` | GET/POST/DELETE | 成员 · 全员同权 |
 | **协议档与智能体 (admin-profiles.html)** | 4 Tab 架构（协议档、MCP 工具只读、技能受控说明、运行时治理）/ 连通性探活 Ping | `/api/profiles`, `/api/profiles/{id}/check`, `/api/mcp/tools`, `/api/admin/settings` | GET/POST/PUT/DELETE | 成员 · 全员同权 |
 | **压测治理 (admin-stress.html)** | 7天峰值 QPS 面积图 / Host 白名单表格 / 安全阈值 / 成本预算 / Prometheus `/metrics` | `/api/admin/stress/settings`, `/api/admin/stress/whitelist`, `/api/admin/stress/usage`, `/metrics` | GET/POST/PUT/DELETE | 成员 · 全员同权 |
@@ -1174,7 +1174,7 @@ JSON body 必须传读取时的整数 `expected_revision`，可附 `reason`。�
 
 #### `POST /api/case-sets/ai-generate`
 
-根据 PRD / OpenAPI / Excel 文档，按 6 大策略精细配比（正向 40% / 反向 25% / 边界 15% / 等价类 10% / 状态迁移 5% / 场景 5%）智能生成候选用例集。
+根据 PRD / OpenAPI / Excel 文档，按用户指定的六大策略整数百分比智能生成候选用例；未指定时使用正向 40% / 反向 25% / 边界 15% / 等价类 10% / 状态迁移 5% / 场景 5% 的默认配比。
 
 ```json
 {
@@ -3878,14 +3878,15 @@ Excel 导入在本批缓存已写入但尚未 flush 的用例，重复编号按�
 ## V2.37 用例生成与审核工作台闭环（2026-09-28）
 
 - `POST /api/case-sets/ai-generate` 只返回候选，`max_count` 限 1–80；按所选策略配额过滤后若没有有效用例，返回 `UPSTREAM`，不以空列表表示生成成功。未知策略和零权重策略不会进入候选结果。
+- API 与 Worker 共用模型输出预算：目标 1–45 条时请求 8192 tokens，46–80 条时请求 16384 tokens。`max_count` 是候选上限，不保证模型返回足量；协议档或模型无法满足预算、输出不可解析时按上游失败处理，不补造用例。
 - `POST /api/case-sets/from-candidates` 以一次事务保存新草稿、已审核候选和服务端自检，返回修订号与真实行 ID；失败不保留空集。对现有可编辑草稿的采纳仍通过带 `expected_revision` 的 `PUT /api/case-sets/{id}/cases` 完成。确认空集返回 `VALIDATION`；需求缺少确定结果时允许草稿用例标注待澄清，由人工审核后决定是否确认。
 - `POST /api/tasks` 和 Agent `task.create` 的 `kind=testcase` 可选 `max_count`（整数 1–80）及 `strategy_weights`（六类策略整数百分比，各 0–100、合计 100，省略键视为 0）。参数随任务快照交给 Worker；省略时沿用 45 条和默认 40/25/15/10/5/5 配比。其他任务类型不能携带这两个参数。
 - Hybrid Workflow 确认卡保留已形成的数量与配比槽位，并对无效值分别提示；旧 W1 不从自由文本自动提取数量或百分比，未形成槽位时仍使用默认值。该灰度路径不承诺自然语言参数抽取。
-- `/cases` 展示服务端自检、缺项摘要和完整用例字段；AI 候选审核后可选择新草稿或当前可编辑草稿，保存成功后才提示采纳完成。来源文档上传使用现有文件接口并传 `source_doc_id`，与粘贴文本共用生成规则；已确认用例集保持只读。
+- `/cases` 展示服务端自检、缺项摘要和完整用例字段；生成向导允许调整六类策略的整数百分比（合计 100，零权重不生成），并在提交前校验。AI 候选审核后可选择新草稿或当前可编辑草稿，保存成功后才提示采纳完成。来源文档上传使用现有文件接口并传 `source_doc_id`，与粘贴文本共用生成规则；已确认用例集保持只读。
 
 ### 修改代码文件与作用清单
 
-- `backend/shared/casegen.py`、`backend/api/app/routers/cases.py`、`schemas.py`：策略裁剪、空候选错误、原子采纳及任务参数校验。
-- `backend/api/app/harness/execution/registry.py`、`harness/orchestration/{confirm,confirm_spec}.py`、`agent/workflow_nodes.py`、`agent/expert_prompts/testcase_agent.md`、`harness/skills/files/skill-testcase/SKILL.md`、`backend/worker/app/testcase.py`：Agent 可见参数、确认卡与 Workflow 透传及 Worker 按任务快照生成。
-- `frontend/src/views/Cases.vue`、`frontend/src/api/http.ts`：候选审核、来源文档、草稿采纳、完整编辑及自检展示。
+- `backend/shared/casegen.py`、`backend/api/app/routers/cases.py`、`schemas.py`：策略裁剪、分段输出预算、空候选错误、原子采纳及任务参数校验。
+- `backend/api/app/harness/execution/registry.py`、`harness/orchestration/{confirm,confirm_spec}.py`、`agent/workflow_nodes.py`、`agent/expert_prompts/testcase_agent.md`、`harness/skills/files/skill-testcase/SKILL.md`、`backend/worker/app/testcase.py`：Agent 可见参数、确认卡与 Workflow 透传及 Worker 按任务快照和输出预算生成。
+- `frontend/src/views/Cases.vue`、`frontend/src/api/http.ts`：候选审核、来源文档、六策略百分比配置、草稿采纳、完整编辑及自检展示。
 - 对应 API、Worker 与前端测试：验证失败无副作用、策略与数量传递、保存冲突和人工审核流程。

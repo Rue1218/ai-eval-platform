@@ -1219,13 +1219,15 @@ Excel 同一批次内的重复用例编号按最后一条更新，不重复创�
 
 ## V1.55 用例生成与审核工作台（2026-09-28）
 
-`/cases` 围绕“提供需求来源 → 生成候选 → 审核完整用例 → 保存草稿 → 确认入库”组织。来源可为粘贴的需求文本或本人已上传的需求文件；生成数量和六类测试策略配比由用户指定，Agent 创建的异步用例任务也遵循同一规则。模型输出不符合所选策略或没有有效用例时，应给出失败提示供补充需求后重试，不生成空草稿。
+`/cases` 围绕“提供需求来源 → 生成候选 → 审核完整用例 → 保存草稿 → 确认入库”组织。来源可为粘贴的需求文本或本人已上传的需求文件；用户可指定 1–80 条及六类测试策略各自的整数百分比（合计 100，零权重表示不生成该策略），Agent 创建的异步用例任务也遵循同一规则。模型输出不符合所选策略或没有有效用例时，应给出失败提示供补充需求后重试，不生成空草稿。
+
+生成数量是目标上限，实际候选可能少于指定条数；平台按 1–45 条与 46–80 条两档增加模型输出预算，但不因目标未达成而编造用例。模型配置无法满足预算或输出不可解析时明确提示失败。
 
 候选审核需看到并可修改名称、模块、功能点、策略、优先级、前置条件、执行步骤和预期结果。采纳可保存为新草稿，也可追加到当前可编辑草稿；新草稿一次保存用例与自检结果，失败不留空集。保存后展示服务端自检和待补全项，用户继续人工审核；需求没有确定预期时明确标注待澄清，不编造业务结论。空用例集不能确认入库，已确认集合不能继续编辑。页面不再显示停用的评测映射状态或将用例称为“测试问句”。本次仍只生成功能测试用例，不生成可执行测试脚本。
 
 ### 修改代码文件与作用清单
 
-- `backend/shared/casegen.py`、`backend/api/app/routers/cases.py`、`schemas.py`：候选过滤、原子保存及用例任务参数。
+- `backend/shared/casegen.py`、`backend/api/app/routers/cases.py`、`schemas.py`：候选过滤、分段输出预算、原子保存及用例任务参数。
 - `backend/api/app/harness/execution/registry.py`、`harness/orchestration/{confirm,confirm_spec}.py`、`agent/workflow_nodes.py`、`agent/expert_prompts/testcase_agent.md`、`harness/skills/files/skill-testcase/SKILL.md`、`backend/worker/app/testcase.py`：Agent 确认及 Worker 使用指定数量与策略快照。
-- `frontend/src/views/Cases.vue`、`frontend/src/api/http.ts`：来源输入、完整候选审核、草稿保存和自检展示。
+- `frontend/src/views/Cases.vue`、`frontend/src/api/http.ts`：来源输入、六策略百分比配置、完整候选审核、草稿保存和自检展示。
 - 对应 API、Worker 和前端回归测试：覆盖生成与审核主流程、保存失败和参数边界。

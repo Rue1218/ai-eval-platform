@@ -15,6 +15,11 @@ TARGET_COUNT = 45  # 目标条数：中等复杂度
 MAX_COUNT = 80  # 硬上限：复杂 PRD；超出即 failed 提示拆分，禁止灌水
 SOURCE_MAX_CHARS = 20_000  # 来源文档注入 prompt 的最大字符数（与 api 侧一致）
 
+
+def generation_token_budget(target_count: int) -> int:
+    """用例条数超过中等规模时增加输出预算，供 API 与 Worker 共用。"""
+    return 8192 if target_count <= TARGET_COUNT else 16384
+
 # 六大策略默认配比（正向40/反向25/边界15/等价类10/状态迁移5/场景5，与 api 侧一致）
 STRATEGY_WEIGHTS = {
     "positive": 40,

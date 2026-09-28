@@ -28,6 +28,7 @@ from shared.casegen import (
     SOURCE_MAX_CHARS,
     STRATEGY_WEIGHTS,
     build_prompts,
+    generation_token_budget,
     parse_cases,
     rebalance_by_strategy,
 )
@@ -244,7 +245,7 @@ def _upsert_case(
 
 
 def _merge_column_schema(case_set: CaseSet, extra_keys: list[str]) -> None:
-    """把导入 Excel 中未识别的扩展列并入 column_schema，已有 key 不覆盖。"""
+    """把用例中未登记的扩展列并入 column_schema，已有 key 不覆盖。"""
     schema = [col for col in (case_set.column_schema or []) if isinstance(col, dict)]
     existing = {str(col.get("key") or "") for col in schema}
     for key in extra_keys:
@@ -433,7 +434,8 @@ def ai_generate_cases(
     weights = body.strategy_weights or STRATEGY_WEIGHTS
     max_count = body.max_count
     system, user_prompt = build_prompts(source_text, max_count, weights=weights)
-    result = call_agent_model(db, system, user_prompt, temperature=0.3, max_tokens=8192)
+    result = call_agent_model(db, system, user_prompt, temperature=0.3,
+                              max_tokens=generation_token_budget(max_count))
     try:
         cases = parse_cases(result.text)
     except (ValueError, json.JSONDecodeError) as exc:
@@ -461,6 +463,8 @@ def create_case_set_from_candidates(
         case_set = CaseSet(name=name, folder_id=body.folder_id, created_by=user.id, revision=1)
         db.add(case_set)
         db.flush()
+        extra_keys = [key for case_in in body.cases for key in (case_in.model_extra or {})]
+        _merge_column_schema(case_set, extra_keys)
         for index, case_in in enumerate(body.cases):
             # 候选不能指定持久身份；只采纳正文和业务扩展列。
             _upsert_case(db, case_set, case_in.model_copy(update={"id": None}), None, index)
