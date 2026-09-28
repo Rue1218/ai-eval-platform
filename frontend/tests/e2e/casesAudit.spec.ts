@@ -12,6 +12,7 @@ async function setup(page: Page) {
   const saves: { id: string; cases: Record<string, unknown>[]; expected_revision: number; column_schema: Record<string, unknown>[] }[] = []
   const confirms: string[] = []
   const generations: Record<string, unknown>[] = []
+  const imports: { id: string; mode: string | null; expectedRevision: string | null }[] = []
   const held: Record<string, Route> = {}
   const holds = new Set<string>()
   let failSave = false
@@ -21,7 +22,16 @@ async function setup(page: Page) {
   await page.route(/^http:\/\/127\.0\.0\.1:5273\/api\//, async route => {
     const url = new URL(route.request().url())
     const id = url.pathname.split('/')[3]
-    if (url.pathname === '/api/case-sets') return route.fulfill({ json: { items: sets } })
+    if (url.pathname === '/api/case-sets') {
+      if (route.request().method() === 'POST') {
+        const created = { id: 'imported', task_id: null, name: route.request().postDataJSON().name, status: 'generated',
+          revision: 0, generated_count: 0, confirmed_count: 0, checks: [], column_schema: [] }
+        sets.push(created)
+        rows.imported = []
+        return route.fulfill({ json: created })
+      }
+      return route.fulfill({ json: { items: sets } })
+    }
     if (url.pathname === '/api/case-sets/ai-generate') {
       generations.push(route.request().postDataJSON())
       return route.fulfill({ json: { items: [row('candidate', '生成候选')] } })
@@ -55,6 +65,16 @@ async function setup(page: Page) {
       set.status = 'cancelled'
       return route.fulfill({ json: set })
     }
+    if (url.pathname.endsWith('/import')) {
+      imports.push({ id, mode: url.searchParams.get('mode'), expectedRevision: url.searchParams.get('expected_revision') })
+      const set = sets.find(s => s.id === id)!
+      if (Number(url.searchParams.get('expected_revision')) !== set.revision) {
+        return route.fulfill({ status: 409, json: { code: 'CONCURRENCY', message: '用例已更新' } })
+      }
+      set.revision++
+      rows[id] = [row('import-row', 'Excel 导入用例')]
+      return route.fulfill({ json: { ok: true, revision: set.revision, imported_count: 1, skipped_count: 0 } })
+    }
     if (url.pathname.endsWith('/export')) return route.fulfill({ body: `export:${url.searchParams.get('fmt')}` })
     if (url.pathname === `/api/case-sets/${id}`) {
       if (route.request().method() === 'PUT') return route.fulfill({ json: { ...sets.find(s => s.id === id), ...route.request().postDataJSON() } })
@@ -65,7 +85,7 @@ async function setup(page: Page) {
   })
   await page.goto('/tests/cases-audit-fixture.html')
   await expect(page.locator('.data-row')).toHaveCount(1)
-  return { saves, confirms, generations, held, holds, rows, sets, failSave: () => { failSave = true } }
+  return { saves, confirms, generations, imports, held, holds, rows, sets, failSave: () => { failSave = true } }
 }
 
 /** 双击单元格进入现有编辑交互，再显式失焦完成编辑。 */
@@ -184,6 +204,19 @@ test('废弃草稿保留只读记录并显示真实状态', async ({ page }) => 
   await expect(page.getByRole('button', { name: /批量删除/ })).toHaveCount(0)
 })
 
+test('侧栏废弃 B 不清除当前 A 的未保存草稿', async ({ page }) => {
+  const ctx = await setup(page)
+  await rename(page, 'A 待保存草稿')
+  await page.locator('.file-node').filter({ hasText: '用例集B' }).click({ button: 'right' })
+  await page.getByText('废弃草稿用例集', { exact: true }).click()
+  await page.getByRole('button', { name: '确认废弃' }).click()
+  await expect(page.locator('.file-node').filter({ hasText: '用例集B' })).toContainText('已废弃')
+  await expect(page.locator('.main-dataset-title')).toHaveText('用例集A')
+  await expect(page.locator('.data-row')).toContainText('A 待保存草稿')
+  await expect(page.getByRole('button', { name: '保存用例修改' })).toBeEnabled()
+  expect(ctx.saves).toHaveLength(0)
+})
+
 test('旧页面不能废弃他人已更新的草稿', async ({ page }) => {
   const ctx = await setup(page)
   ctx.sets[0].revision++
@@ -241,6 +274,32 @@ test('Excel 与 XMind 导出触发真实文件下载', async ({ page }) => {
     await page.getByText(label, { exact: true }).click()
     expect((await download).suggestedFilename()).toBe(`用例集A.${extension}`)
   }
+})
+
+test('Excel 导入入口将当前集修订号传给导入接口并刷新用例', async ({ page }) => {
+  const ctx = await setup(page)
+  await page.getByRole('button', { name: '导入 Excel 用例' }).click()
+  await expect(page.getByText('导入 Excel 用例', { exact: true })).toBeVisible()
+  await page.locator('.n-modal input[type=file]').setInputFiles({ name: 'cases.xlsx',
+    mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: Buffer.from('fixture') })
+  await page.getByRole('button', { name: '开始导入' }).click()
+  await expect.poll(() => ctx.imports).toEqual([{ id: 'a', mode: 'append', expectedRevision: '0' }])
+  await expect(page.locator('.data-row')).toContainText('Excel 导入用例')
+})
+
+test('当前集有未保存草稿时只能导入新集，导入完成仍保护原草稿', async ({ page }) => {
+  const ctx = await setup(page)
+  await rename(page, 'A 未保存草稿')
+  await page.getByRole('button', { name: '导入 Excel 用例' }).click()
+  await expect(page.getByRole('radio', { name: '导入到当前用例集' })).toBeDisabled()
+  await page.locator('.n-modal input[type=file]').setInputFiles({ name: 'cases.xlsx',
+    mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: Buffer.from('fixture') })
+  await page.getByRole('button', { name: '开始导入' }).click()
+  await expect.poll(() => ctx.imports).toEqual([{ id: 'imported', mode: 'replace', expectedRevision: '0' }])
+  await expect(page.getByText('存在未保存的用例修改')).toBeVisible()
+  await expect(page.locator('.main-dataset-title')).toHaveText('用例集A')
+  await expect(page.locator('.data-row')).toContainText('A 未保存草稿')
+  await expect(page.getByRole('button', { name: '保存用例修改' })).toBeEnabled()
 })
 
 test('确认操作等待正在保存的同一个请求，保存完成后只确认一次', async ({ page }) => {

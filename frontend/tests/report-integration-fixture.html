@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><title>历史报告联调夹具</title></head>
+<body>
+  <div id="app"></div>
+  <script type="module">
+    import { createApp, h } from 'vue'
+    import { createRouter, createMemoryHistory, RouterView } from 'vue-router'
+    import naive, { NMessageProvider } from 'naive-ui'
+    import Report from '../src/views/Report.vue'
+    import '../src/styles/tokens.css'
+    import '../src/styles/base.css'
+    // 挂载真实报告页，HTTP 响应由 Playwright 拦截提供。
+    const router = createRouter({ history: createMemoryHistory(), routes: [
+      { path: '/reports', component: Report },
+      { path: '/reports/:id', component: Report },
+    ] })
+    window.__reportRouter = router
+    const app = createApp({ render: () => h(NMessageProvider, {}, { default: () => h(RouterView) }) })
+    router.push('/reports').then(() => app.use(router).use(naive).mount('#app'))
+  </script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><title>数据集草稿回归夹具</title></head>
+<body>
+  <div id="app" style="height: 95vh"></div>
+  <script type="module">
+    import { createApp, h } from 'vue'
+    import naive, { NMessageProvider, NDialogProvider } from 'naive-ui'
+    import Datasets from '../src/views/Datasets.vue'
+    import '../src/styles/tokens.css'
+    import '../src/styles/base.css'
+    createApp({ render: () => h(NMessageProvider, {}, {
+      default: () => h(NDialogProvider, {}, { default: () => h(Datasets) }),
+    }) }).use(naive).mount('#app')
+  </script>
+</body>
+</html>

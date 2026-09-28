@@ -721,6 +721,16 @@ export interface StressSeriesResponse {
   series?: StressSeriesPoint[]
 }
 
+/** 历史报告列表只包含导航所需字段，详情由报告 ID 单独读取。 */
+export interface ReportListItem {
+  id: string
+  title: string
+  kind: TaskKind
+  task_id: string
+  child_stress_report_id?: string | null
+  created_at: string | null
+}
+
 export interface Report {
   id: string
   task_id: string

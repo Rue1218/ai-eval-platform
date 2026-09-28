@@ -1,6 +1,40 @@
 <template>
   <div class="report-page">
-    <template v-if="report">
+    <template v-if="!reportId">
+      <div class="row-between mb16">
+        <div>
+          <div class="panel-title">历史报告</div>
+          <div class="small tertiary">共 {{ reportTotal }} 份报告</div>
+        </div>
+        <button class="btn btn-secondary btn-sm" :disabled="loading" @click="loadReport">刷新</button>
+      </div>
+      <div v-if="loading" class="empty" style="min-height: 320px">报告列表加载中…</div>
+      <EmptyState v-else-if="loadError || !reportItems.length"
+        :title="loadError ? '报告列表未加载' : '暂无历史报告'"
+        :description="loadError ? '请稍后重试。' : '完成的历史评测报告会显示在这里。'">
+        <template v-if="loadError" #action>
+          <button class="btn btn-secondary btn-sm" @click="loadReport">重新加载</button>
+        </template>
+      </EmptyState>
+      <template v-else>
+        <div class="panel report-list">
+          <router-link v-for="item in reportItems" :key="item.id" class="report-list-item" :to="`/reports/${item.id}`">
+            <KindTag :kind="item.kind" />
+            <span class="report-list-title">{{ item.title || '评测报告' }}</span>
+            <span class="small tertiary mono">{{ formatDateTime(item.created_at || undefined) }}</span>
+            <span class="small tertiary mono">任务 {{ item.task_id }}</span>
+          </router-link>
+        </div>
+        <div class="row-between" v-if="reportTotal > reportPageSize">
+          <span class="small tertiary">第 {{ reportPage }} / {{ Math.ceil(reportTotal / reportPageSize) }} 页</span>
+          <div class="row" style="gap: 8px">
+            <button class="btn btn-secondary btn-sm" :disabled="reportPage === 1" @click="changeReportPage(-1)">上一页</button>
+            <button class="btn btn-secondary btn-sm" :disabled="reportPage * reportPageSize >= reportTotal" @click="changeReportPage(1)">下一页</button>
+          </div>
+        </div>
+      </template>
+    </template>
+    <template v-else-if="report">
       <!-- 头部操作条 -->
       <div class="row-between mb16" style="padding-bottom: 14px; border-bottom: 1px solid var(--border-subtle)">
         <div>
@@ -401,7 +435,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import { api } from '../api/http'
-import type { Report, RagScores, StressSeriesPoint } from '../api/types'
+import type { Report, ReportListItem, RagScores, StressSeriesPoint } from '../api/types'
 import KindTag from '../components/common/KindTag.vue'
 import EmptyState from '../components/common/EmptyState.vue'
 import RadarMetricsChart from '../components/charts/RadarMetricsChart.vue'
@@ -412,11 +446,17 @@ const route = useRoute()
 const router = useRouter()
 const message = useMessage()
 
-// /reports 列表路由与 /reports/:id 详情路由复用本组件；无 id 时不得发起 /api/reports/undefined 请求
+// /reports 列表路由与 /reports/:id 详情路由复用本组件。
 const reportId = computed(() => (route.params.id as string) || '')
 // 报告数据仅来自服务端 / Mock 夹具，加载失败时保持 null 并展示空态
 const report = ref<Report | null>(null)
 const loading = ref(true)
+const loadError = ref(false)
+const reportItems = ref<ReportListItem[]>([])
+const reportTotal = ref(0)
+const reportPage = ref(1)
+const reportPageSize = 20
+let reportRequestId = 0
 
 // 兼容 Worker 实际输出（score/latency_ms_avg）与旧 seed 字段（contain/latency）：
 // Worker 写主指标均值到 score，前端指标表按 contain 展示，此处归一化
@@ -548,52 +588,74 @@ function formatScore(val?: number) {
 }
 
 async function loadReport() {
-  if (!reportId.value) {
-    // 列表路由无报告 ID：直接展示空态（对齐原型 report.html 实时模式无数据行为）
-    report.value = null
-    loading.value = false
-    return
-  }
+  const requestId = ++reportRequestId
+  const id = reportId.value
   loading.value = true
+  loadError.value = false
+  report.value = null
   stressSeries.value = []
   try {
-    report.value = await api.reports.get(reportId.value)
+    if (!id) {
+      const result = await api.reports.list({ offset: (reportPage.value - 1) * reportPageSize, limit: reportPageSize })
+      if (requestId !== reportRequestId) return
+      reportItems.value = result.items
+      reportTotal.value = result.total
+      return
+    }
+    const loaded = await api.reports.get(id)
+    if (requestId !== reportRequestId) return
+    report.value = loaded
     // 压测报告：报告内嵌 series 缺失时，额外拉取 stress-series 时序接口（对齐原型 live 行为）
-    if (report.value?.kind === 'stress') {
-      if (report.value.series?.length) {
-        stressSeries.value = report.value.series
-      } else if (report.value.task_id) {
+    if (loaded.kind === 'stress') {
+      if (loaded.series?.length) {
+        stressSeries.value = loaded.series
+      } else if (loaded.task_id) {
         try {
-          const res = await api.tasks.getStressSeries(report.value.task_id)
+          const res = await api.tasks.getStressSeries(loaded.task_id)
+          if (requestId !== reportRequestId) return
           // 契约字段为 points；mock 与早期实现使用 series，两者兼容读取
           stressSeries.value = res?.points || res?.series || []
         } catch {
+          if (requestId !== reportRequestId) return
           // 时序接口失败不阻断报告主体展示
           stressSeries.value = []
         }
       }
     }
   } catch (err: any) {
+    if (requestId !== reportRequestId) return
     report.value = null
+    loadError.value = true
     message.error(err.message || '加载报告失败')
   } finally {
-    loading.value = false
+    if (requestId === reportRequestId) loading.value = false
   }
+}
+
+/** 历史报告按服务端分页读取，避免只显示默认的前 20 条。 */
+function changeReportPage(delta: number) {
+  reportPage.value += delta
+  void loadReport()
 }
 
 // 导出 Markdown：内容由服务端（GET /api/reports/{id}?fmt=md）或 Mock 夹具生成，前端仅触发 Blob 下载
 async function handleExportMd() {
+  const id = reportId.value
+  const requestId = reportRequestId
   try {
-    const md = await api.reports.get(reportId.value, 'md')
+    const md = await api.reports.get(id, 'md')
+    // 切换报告后，旧请求的内容和提示都不再属于当前页面。
+    if (id !== reportId.value || requestId !== reportRequestId) return
     const blob = new Blob([md], { type: 'text/markdown' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `Report-${reportId.value}.md`
+    a.download = `Report-${id}.md`
     a.click()
     URL.revokeObjectURL(url)
     message.success('Markdown 报告已导出')
   } catch (err: any) {
+    if (id !== reportId.value || requestId !== reportRequestId) return
     message.error(err.message || '导出失败')
   }
 }
@@ -615,6 +677,31 @@ watch(reportId, () => loadReport())
   display: flex;
   flex-direction: column;
   gap: 16px;
+}
+
+.report-list {
+  padding: 0;
+}
+.report-list-item {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 14px 16px;
+  color: var(--text-primary);
+  text-decoration: none;
+  border-bottom: 1px solid var(--border-subtle);
+}
+.report-list-item:last-child {
+  border-bottom: 0;
+}
+.report-list-item:hover {
+  background: var(--bg-elevated);
+}
+.report-list-title {
+  flex: 1;
+  min-width: 180px;
+  font-weight: 600;
 }
 
 .cascade-banner {

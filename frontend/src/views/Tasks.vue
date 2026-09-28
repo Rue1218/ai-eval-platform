@@ -1,37 +1,19 @@
 <template>
   <div class="tasks-page page-narrow" style="max-width: 1320px">
-    <!-- 顶部大盘与吞吐概览 (Prototype 高保真) -->
+    <!-- 当前页任务状态概览 -->
     <div class="panel glow mb16" style="--glow-c: var(--c-tasks)">
       <div class="row-between mb10" style="flex-wrap: wrap; gap: 8px">
-        <span class="eyebrow">近 24h 吞吐 · 状态分布大盘</span>
+        <span class="eyebrow">当前页任务状态分布</span>
         <router-link
           to="/dispatch"
           class="small tertiary mono"
           style="display: inline-flex; align-items: center; gap: 5px; text-decoration: none; cursor: pointer; transition: color 0.15s"
-          title="点击直达调度中心，查看 Worker 节点池与实时算力拓扑"
+          title="前往调度中心查看 Worker 状态"
         >
-          <span>Worker 节点在线 8/10 · 调度中心 🪐</span>
+          <span>查看调度中心 🪐</span>
         </router-link>
       </div>
       <div class="tasks-overview-row">
-        <div class="tasks-spark-wrap">
-          <svg class="tasks-spark-svg" viewBox="0 0 230 60" preserveAspectRatio="none" aria-hidden="true">
-            <polygon
-              points="2,58 2,54 11.9,56 21.8,52 31.7,54 41.7,50 51.6,46 61.5,48 71.4,42 81.3,44 91.3,40 101.2,46 111.1,38 121.0,42 131.0,36 140.9,40 150.8,34 160.7,44 170.7,40 180.6,38 190.5,42 200.4,34 210.3,30 220.3,36 228.0,32 228.0,58"
-              fill="var(--c-tasks)"
-              fill-opacity=".12"
-            />
-            <polyline
-              points="2,54 11.9,56 21.8,52 31.7,54 41.7,50 51.6,46 61.5,48 71.4,42 81.3,44 91.3,40 101.2,46 111.1,38 121.0,42 131.0,36 140.9,40 150.8,34 160.7,44 170.7,40 180.6,38 190.5,42 200.4,34 210.3,30 220.3,36 228.0,32"
-              fill="none"
-              stroke="var(--c-tasks)"
-              stroke-width="1.8"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            />
-          </svg>
-          <div class="small tertiary mono spark-caption">完成 {{ tasks.length }} 任务 / 24h</div>
-        </div>
         <div class="tasks-dist-wrap grow">
           <!-- 状态分布分段条 -->
           <div class="dist">
@@ -58,30 +40,12 @@
       </div>
     </div>
 
-    <!-- AI 巡检诊断卡片 -->
-    <div class="ai-card mb16">
-      <div class="ai-card-head" style="flex-wrap: wrap; gap: 6px">
-        <span class="ai-badge"><i class="ai-dot"></i>AI 巡检诊断</span>
-        <span class="small tertiary mono">近 24h · 自动异常归因</span>
-        <span class="grow"></span>
-        <button class="link-btn" style="font-size: 12px" @click="nextInsight">换一批</button>
-      </div>
-      <div class="ai-gen-line small" style="color: var(--text-secondary)">
-        {{ currentInsight.text }}
-      </div>
-      <div class="mt8">
-        <router-link :to="currentInsight.link" class="link-btn" style="font-size: 12px">
-          {{ currentInsight.actionText }} →
-        </router-link>
-      </div>
-    </div>
-
     <!-- 筛选与操作工具栏 -->
     <div class="filter-bar row wrap" style="gap: 10px; margin-bottom: 14px">
       <div class="filter-inputs-row">
         <n-input
           v-model:value="searchKw"
-          placeholder="搜索任务 ID / 关联资产 / 创建者…"
+          placeholder="搜索当前页任务 ID / 资产 / 创建者…"
           class="filter-search-input"
           clearable
         />
@@ -381,6 +345,14 @@
       />
     </div>
 
+    <div v-if="!loading && totalTasks > pageSize" class="row-between mt8 small tertiary">
+      <span>第 {{ page }} 页 · 共 {{ totalTasks }} 项</span>
+      <div class="row" style="gap: 8px">
+        <button class="btn btn-secondary btn-sm" :disabled="page <= 1" @click="changePage(page - 1)">上一页</button>
+        <button class="btn btn-secondary btn-sm" :disabled="page * pageSize >= totalTasks" @click="changePage(page + 1)">下一页</button>
+      </div>
+    </div>
+
     <!-- 任务详情抽屉 -->
     <TaskDetailDrawer
       v-model:show="showDetailDrawer"
@@ -394,7 +366,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useMessage, useDialog, NInput, NSelect } from 'naive-ui'
 import { api } from '../api/http'
@@ -415,6 +387,12 @@ const loading = ref(false)
 const filterStatus = ref('')
 const filterKind = ref('')
 const searchKw = ref('')
+const page = ref(1)
+const pageSize = 50
+const totalTasks = ref(0)
+let taskRequestId = 0
+let routeTaskRequestId = 0
+let openedRouteTaskId = ''
 
 const showDetailDrawer = ref(false)
 const selectedTask = ref<Task | null>(null)
@@ -446,32 +424,6 @@ const statusPercentages = computed(() => {
   })
   return map
 })
-
-// 巡检异常诊断轮播
-const insights = [
-  {
-    text: '2 个失败任务（t-9c21、g7b3d5）的 UPSTREAM 错误均指向协议档「rag-客服外挂」401，疑似 Key 失效。',
-    actionText: '去协议档做连通性检查',
-    link: '/admin/profiles',
-  },
-  {
-    text: '「smoke-20 v3」近 3 次评测 contain 连续下滑（0.86 → 0.81），退化集中在长上下文样本。',
-    actionText: '查看最近报告',
-    // 跳转报告列表页而非硬编码报告 ID，避免 live 模式下 404
-    link: '/reports',
-  },
-  {
-    text: '调度队列中有 1 个 prod 压测等待会签已 42 分钟，超过历史均值（12 分钟）。',
-    // 队列类异常应跳转调度中心，避免自跳转回本页。
-    actionText: '去调度中心查看',
-    link: '/dispatch',
-  },
-]
-const insightIdx = ref(0)
-const currentInsight = computed(() => insights[insightIdx.value % insights.length])
-function nextInsight() {
-  insightIdx.value++
-}
 
 function toggleStatusFilter(st: string) {
   filterStatus.value = filterStatus.value === st ? '' : st
@@ -531,11 +483,9 @@ function handleOpenDetail(t: Task) {
 
 async function handleCancel(t: Task) {
   dialog.warning({
-    title: t.kind === 'stress' ? '立即停止发压？' : '取消评测任务？',
-    content: t.kind === 'stress'
-      ? `压测任务 ${t.id} 正在对目标发压，确认后立即切断连接并停止发压。`
-      : `任务 ${t.id} 将在当前样本推理完成后安全停止，已完成的评测得分与报文将完整保留。`,
-    positiveText: t.kind === 'stress' ? '立即停止发压' : '确认取消',
+    title: '取消任务？',
+    content: `确认取消任务 ${t.id}？运行中的任务会在当前执行检查点停止。`,
+    positiveText: '确认取消',
     negativeText: '放弃',
     onPositiveClick: async () => {
       try {
@@ -560,35 +510,65 @@ async function handleRerun(t: Task) {
 }
 
 async function handleRefresh() {
-  loading.value = true
-  await new Promise(r => setTimeout(r, 350))
-  await loadTasks()
-  message.info('任务列表已刷新')
+  if (await loadTasks()) message.info('任务列表已刷新')
 }
 
-async function loadTasks() {
+async function loadTasks(): Promise<boolean> {
+  const requestId = ++taskRequestId
   loading.value = true
   try {
-    // 全量拉取，历史 benchmark/RAG/stress 任务仍可查看。
-    const res = await api.tasks.list({
+    const res = await api.tasks.listPage({
       status: filterStatus.value || undefined,
+      kind: filterKind.value || undefined,
+      limit: pageSize,
+      offset: (page.value - 1) * pageSize,
     })
-    tasks.value = Array.isArray(res) ? res : ((res as any).items || [])
-    checkRouteTaskId()
+    if (requestId !== taskRequestId) return false
+    if (page.value > 1 && (page.value - 1) * pageSize >= res.total) {
+      page.value = 1
+      void loadTasks()
+      return false
+    }
+    tasks.value = res.items
+    totalTasks.value = res.total
+    void checkRouteTaskId()
+    return true
   } catch (err: any) {
+    if (requestId !== taskRequestId) return false
+    tasks.value = []
+    totalTasks.value = 0
     message.error(err.message || '加载任务列表失败')
+    return false
   } finally {
-    loading.value = false
+    if (requestId === taskRequestId) loading.value = false
   }
 }
 
-function checkRouteTaskId() {
+function changePage(nextPage: number) {
+  page.value = nextPage
+  void loadTasks()
+}
+
+async function checkRouteTaskId() {
   const targetId = route.query.id as string | undefined
-  if (targetId) {
-    const match = tasks.value.find(t => t.id === targetId || t.id.startsWith(targetId))
-    if (match) {
-      handleOpenDetail(match)
-      message.info(`已聚焦任务 ${match.id.substring(0, 8)} 详情`)
+  if (!targetId || targetId === openedRouteTaskId) return
+  const requestId = ++routeTaskRequestId
+  const match = tasks.value.find(t => t.id === targetId || t.id.startsWith(targetId))
+  if (match) {
+    handleOpenDetail(match)
+    openedRouteTaskId = targetId
+    return
+  }
+  try {
+    // 历史任务可能位于其他分页；深链按完整 ID 直读详情。
+    const task = await api.tasks.get(targetId)
+    if (requestId === routeTaskRequestId && route.query.id === targetId) {
+      handleOpenDetail(task)
+      openedRouteTaskId = targetId
+    }
+  } catch (err: any) {
+    if (requestId === routeTaskRequestId && route.query.id === targetId) {
+      message.error(err.message || '任务不存在或无法访问')
     }
   }
 }
@@ -610,7 +590,18 @@ onMounted(() => {
 
 // 监听路由参数变化，支持外部页面直接透传跳转联动
 watch(() => route.query.id, () => {
-  checkRouteTaskId()
+  openedRouteTaskId = ''
+  void checkRouteTaskId()
+})
+
+watch([filterStatus, filterKind], () => {
+  page.value = 1
+  void loadTasks()
+})
+
+onUnmounted(() => {
+  taskRequestId++
+  routeTaskRequestId++
 })
 
 </script>
@@ -646,13 +637,6 @@ watch(() => route.query.id, () => {
   display: flex;
   align-items: center;
   gap: 28px;
-}
-.tasks-spark-wrap {
-  flex-shrink: 0;
-}
-.tasks-spark-svg {
-  width: 230px;
-  height: 60px;
 }
 .chart-legend {
   margin-top: 8px;
@@ -702,19 +686,6 @@ watch(() => route.query.id, () => {
     flex-direction: column;
     align-items: stretch;
     gap: 12px;
-  }
-  .tasks-spark-wrap {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-  }
-  .tasks-spark-svg {
-    width: 160px;
-    height: 48px;
-  }
-  .spark-caption {
-    margin-top: 0;
   }
   .chart-legend {
     gap: 6px;
@@ -846,13 +817,6 @@ watch(() => route.query.id, () => {
 @media (max-width: 420px) {
   .filter-inputs-row {
     grid-template-columns: 1fr;
-  }
-  .tasks-spark-wrap {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-  .tasks-spark-svg {
-    width: 100%;
   }
   .filter-actions-row {
     flex-wrap: wrap;

@@ -1519,29 +1519,45 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 }
 
-/** 全量刷新大盘指标、节点池与任务域（活跃任务进星图，近期任务进甘特）。 */
+/** 按状态读完活跃任务，避免旧任务被未过滤的历史任务首屏挤出。 */
+async function listActiveTasks(status: TaskStatus): Promise<Task[]> {
+  const items: Task[] = []
+  while (true) {
+    const page = await api.tasks.listPage({ status, limit: 200, offset: items.length })
+    items.push(...page.items)
+    if (!page.items.length || items.length >= page.total) return items
+  }
+}
+
+let liveLoadRequestId = 0
+
+/** 刷新大盘指标、节点池与任务域（活跃任务取全，近期任务只读首屏）。 */
 async function loadLiveAll() {
+  const requestId = ++liveLoadRequestId
   try {
-    const [ov, workers, allTasks] = await Promise.all([
+    const [ov, workers, recentPage, activePages] = await Promise.all([
       api.dispatch.overview(),
       api.dispatch.workers(),
-      api.tasks.list(),
+      api.tasks.listPage({ limit: 12, offset: 0 }),
+      Promise.all((['queued', 'running', 'awaiting_case_confirm'] as TaskStatus[]).map(listActiveTasks)),
     ])
+    if (requestId !== liveLoadRequestId) return
     if (ov) {
       overviewData.value = ov
       strategy.value = ov.strategy
       capacity.value = ov.max_running_tasks
     }
     if (workers) workerPool.value = workers.map(mapWorker)
-    const sorted = [...allTasks].sort((a, b) => +new Date(b.created_at) - +new Date(a.created_at))
-    liveActiveTasks.value = sorted.filter(t => ['queued', 'running', 'awaiting_case_confirm'].includes(t.status))
-    liveRecentTasks.value = sorted.slice(0, 12)
+    const activeById = new Map(activePages.flat().map(task => [task.id, task]))
+    liveActiveTasks.value = [...activeById.values()].sort((a, b) => +new Date(b.created_at) - +new Date(a.created_at))
+    liveRecentTasks.value = recentPage.items
     nowTs.value = Date.now()
     pushHist(histQueue.value, queueDepth.value)
     pushHist(histRunning.value, runningCount.value)
     pushHist(histCost.value, avgDispatchCost.value)
     pushHist(histAssigned.value, assignedTodayNum.value)
   } catch (err: any) {
+    if (requestId !== liveLoadRequestId) return
     message.error(err.message || '调度数据加载失败')
   }
 }
