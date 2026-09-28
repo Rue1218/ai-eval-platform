@@ -1167,6 +1167,19 @@ def _register_platform_task_tools(registry: ToolRegistry) -> None:
                         },
                         "description": "用例生成来源；file_id/text 二选一",
                     },
+                    "max_count": {
+                        "type": "integer", "minimum": 1, "maximum": 80,
+                        "description": "目标用例数；省略时默认 45 条",
+                    },
+                    "strategy_weights": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "properties": {
+                            key: {"type": "integer", "minimum": 0, "maximum": 100}
+                            for key in ("positive", "negative", "boundary", "equivalence", "state", "scenario")
+                        },
+                        "description": "六策略整数百分比，合计 100；省略时使用默认配比",
+                    },
                 },
                 "required": ["kind", "case_source"],
             },

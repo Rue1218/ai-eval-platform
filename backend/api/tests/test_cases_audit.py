@@ -8,11 +8,15 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import UploadFile
-from openpyxl import Workbook
+from fastapi.testclient import TestClient
+from openpyxl import Workbook, load_workbook
 from sqlalchemy import JSON, BigInteger, Integer, MetaData, create_engine, event, update
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import StaticPool
 
+from app.db import get_db
+from app.deps import get_current_user
 from app.errors import AppError, ErrorCode
 from app.harness.execution.task_tools import cancel_task_safe
 from app.models import (
@@ -36,6 +40,7 @@ from app.schemas import (
     CaseCancelIn,
     CaseConfirmIn,
     CaseMapIn,
+    CaseSetFromCandidatesIn,
     CaseSetUpdate,
     CasesPayload,
 )
@@ -63,7 +68,7 @@ def cases_db():
             if condition is not None:
                 index.dialect_options["sqlite"]["where"] = condition
         pending.extend(foreign.column.table for foreign in table.foreign_keys)
-    engine = create_engine("sqlite://")
+    engine = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     metadata.create_all(engine)
     try:
         with sessionmaker(engine, autoflush=False)() as db:
@@ -152,6 +157,108 @@ def test_generate_applies_requested_weights_and_drops_model_identity(cases_db, m
     assert all("id" not in item and item["strategy"] == "正向" for item in result["items"])
 
 
+@pytest.mark.parametrize("max_count,budget", [(45, 8192), (80, 16384)])
+def test_generate_uses_shared_output_budget(cases_db, monkeypatch, max_count, budget):
+    """页面候选生成按目标条数传递共享输出 token 预算。"""
+    calls = []
+
+    def fake_model(*_args, **kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(text='[{"name":"登录","strategy":"正向","priority":"HX"}]')
+
+    monkeypatch.setattr(routes, "call_agent_model", fake_model)
+    routes.ai_generate_cases(CaseAiGenerateIn(source_text="登录需求", max_count=max_count), cases_db, _actor())
+    assert calls[0]["max_tokens"] == budget
+
+
+def test_generate_rejects_when_selected_strategy_has_no_cases(cases_db, monkeypatch):
+    """模型只返回未选或未知策略时，不能把空候选伪装成成功。"""
+    output = [{"name": "反向", "strategy": "反向"}, {"name": "未知", "strategy": "其他"}]
+    monkeypatch.setattr(routes, "call_agent_model", lambda *a, **k: SimpleNamespace(text=json.dumps(output)))
+    with pytest.raises(AppError) as error:
+        routes.ai_generate_cases(
+            CaseAiGenerateIn(source_text="需求", strategy_weights={"positive": 100}),
+            cases_db, _actor(),
+        )
+    assert error.value.code == ErrorCode.UPSTREAM
+
+
+def test_candidates_create_one_complete_draft(cases_db):
+    """采纳候选后同一事务写入草稿、用例和审计，身份字段由服务端生成。"""
+    result = routes.create_case_set_from_candidates(CaseSetFromCandidatesIn(
+        name=" 登录用例 ", cases=[
+            {"id": "model-forged", "name": "登录成功", "strategy": "正向", "priority": "HX",
+             "module": "登录", "feature_point": "正确凭据", "steps": "输入有效凭据", "expected": "进入首页"},
+            {"name": "登录失败", "strategy": "反向", "priority": "YC",
+             "submodule": "密码", "test_type": "异常处理", "expected": "拒绝登录"},
+        ],
+    ), _request(), cases_db, _actor())
+    created = cases_db.get(CaseSet, result.id)
+    assert created.name == "登录用例" and created.status == "generated"
+    assert created.revision == 1 and created.generated_count == 2 and created.checks == []
+    assert [case["name"] for case in result.cases] == ["登录成功", "登录失败"]
+    assert result.cases[0]["id"] != "model-forged"
+    assert result.cases[0]["feature_point"] == "正确凭据"
+    assert result.cases[1]["test_type"] == "异常处理"
+    assert cases_db.query(AuditLog).filter_by(target_id=result.id).count() == 1
+
+
+def test_candidates_http_create_preserves_extension_in_export(cases_db):
+    """真实 HTTP 成功响应可序列化，候选扩展列随草稿进入详情和 Excel。"""
+    from app.main import app
+
+    app.dependency_overrides[get_db] = lambda: cases_db
+    app.dependency_overrides[get_current_user] = _actor
+    try:
+        client = TestClient(app)
+        response = client.post("/api/case-sets/from-candidates", json={
+            "name": "需求用例", "cases": [
+                {"name": "登录成功", "strategy": "正向", "priority": "HX",
+                 "expected": "进入首页", "requirement_id": "REQ-1", "mapped": True},
+            ],
+        })
+        assert response.status_code == 201, response.text
+        created = response.json()
+        assert created["revision"] == 1 and created["generated_count"] == 1
+        assert created["cases"][0]["requirement_id"] == "REQ-1"
+        assert created["cases"][0]["mapped"] is False
+        assert [column["key"] for column in created["column_schema"]] == ["requirement_id"]
+
+        detail = client.get(f"/api/case-sets/{created['id']}")
+        assert detail.status_code == 200
+        assert detail.json()["cases"][0]["requirement_id"] == "REQ-1"
+        exported = client.get(f"/api/case-sets/{created['id']}/export?fmt=xlsx")
+        assert exported.status_code == 200
+        workbook = load_workbook(BytesIO(exported.content), read_only=True, data_only=True)
+        try:
+            rows = list(workbook.active.values)
+        finally:
+            workbook.close()
+        assert rows[0][-1] == "requirement_id"
+        assert rows[1][-1] == "REQ-1"
+    finally:
+        app.dependency_overrides.pop(get_db, None)
+        app.dependency_overrides.pop(get_current_user, None)
+
+
+def test_candidates_write_failure_rolls_back_entire_draft(cases_db, monkeypatch):
+    """用例行写入失败时不留下空集或半写入审计。"""
+    write = routes._upsert_case
+
+    def fail_after_first(*args, **kwargs):
+        write(*args, **kwargs)
+        raise RuntimeError("模拟写入中断")
+
+    monkeypatch.setattr(routes, "_upsert_case", fail_after_first)
+    with pytest.raises(RuntimeError):
+        routes.create_case_set_from_candidates(CaseSetFromCandidatesIn(
+            name="失败候选集", cases=[{"name": "候选", "strategy": "正向", "priority": "HX"}],
+        ), _request(), cases_db, _actor())
+    assert cases_db.query(CaseSet).count() == 1
+    assert cases_db.query(CaseItem).count() == 0
+    assert cases_db.query(AuditLog).count() == 0
+
+
 def test_save_reorders_ids_recomputes_checks_and_ignores_workflow_fields(cases_db):
     """保存响应跟随提交顺序，真实状态不受客户端平铺的保留字段覆盖。"""
     _add_case(cases_db, "first", sort_order=0)
@@ -195,6 +302,15 @@ def test_stale_snapshot_cannot_delete_another_save(cases_db):
     assert newer["revision"] == cases_db.get(CaseSet, "set").revision == 1
     assert cases_db.query(CaseItem).count() == 2
     assert cases_db.get(CaseItem, "first").name == "first"
+
+
+def test_empty_draft_cannot_be_confirmed(cases_db):
+    """空用例集可暂存草稿，但审核入库至少需要一条用例。"""
+    with pytest.raises(AppError) as error:
+        routes.confirm_case_set("set", CaseConfirmIn(ok=True, expected_revision=0),
+                                _request(), cases_db, _actor())
+    assert error.value.code == ErrorCode.VALIDATION
+    assert cases_db.get(CaseSet, "set").status == "generated"
 
 
 def test_save_columns_and_rows_conflict_without_partial_metadata(cases_db):

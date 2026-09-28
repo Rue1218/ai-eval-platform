@@ -166,6 +166,8 @@ _TASK_SPEC_SLOT_KEYS = frozenset(
         "with_stress",
         "stress",
         "case_source",
+        "max_count",
+        "strategy_weights",
     }
 )
 
@@ -197,6 +199,12 @@ def _merge_slots_into_task_spec(
         elif key == "with_stress":
             if isinstance(value, bool):
                 spec[key] = value
+        elif key == "max_count" and spec.get("kind") == "testcase":
+            if type(value) is int:
+                spec[key] = value
+        elif key == "strategy_weights" and spec.get("kind") == "testcase":
+            if isinstance(value, Mapping):
+                spec[key] = dict(value)
         elif isinstance(value, str) and value:
             spec[key] = value
     return spec
@@ -468,12 +476,19 @@ def await_confirm_node(state: GraphState, *, config: RunnableConfig | None = Non
     if kind == "testcase":
         try:
             TaskCreate.model_validate({**spec, "kind": kind})
-        except ValidationError:
+        except ValidationError as exc:
+            fields = {str(part) for error in exc.errors() for part in error.get("loc", ())}
+            if "max_count" in fields:
+                message = "用例数量须为 1–80 的整数"
+            elif "strategy_weights" in fields:
+                message = "策略配比须为六类整数百分比且合计 100"
+            else:
+                message = "请提供文件或需求文本来源后再确认用例生成"
             return {
                 **_step("W5_await_confirm"),
                 "workflow_failed": True,
                 "pending_events": [
-                    *_error_events("VALIDATION", "请提供文件或需求文本来源后再确认用例生成"),
+                    *_error_events("VALIDATION", message),
                     make_event("response.completed", _completed_payload(state, "error")),
                 ],
             }

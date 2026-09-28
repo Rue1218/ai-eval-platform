@@ -168,6 +168,17 @@ def test_w4_merges_explicit_case_source_without_changing_kind() -> None:
     assert spec["with_stress"] is False
 
 
+def test_w4_keeps_testcase_generation_options() -> None:
+    """Workflow 确认卡带着来源、数量和配比，不在槽位合并时丢失。"""
+    state = _state("生成用例", skill_id="skill-testcase", slots={
+        "case_source": {"text": "登录需求"}, "max_count": 12,
+        "strategy_weights": {"positive": 75, "negative": 25},
+    })
+    spec = build_task_spec_node(state)["task_spec"]
+    assert spec["max_count"] == 12
+    assert spec["strategy_weights"] == {"positive": 75, "negative": 25}
+
+
 # ─── 3. W5–W7：确认 / 入队 / 收尾 ───
 
 
@@ -188,6 +199,24 @@ def test_w5_confirm_missing_case_source_rejected() -> None:
     error = next(e for e in update["pending_events"] if e["kind"] == "error")
     assert error["payload"]["code"] == "VALIDATION"
     assert "需求文本" in error["payload"]["message"]
+
+
+def test_w5_confirm_reports_invalid_generation_options() -> None:
+    """来源有效时，数量或配比错误应指向对应字段。"""
+    base = {"kind": "testcase", "case_source": {"text": "登录需求"}}
+    for option, expected in (
+        ({"max_count": 81}, "用例数量"),
+        ({"strategy_weights": {"positive": 99}}, "策略配比"),
+    ):
+        spec = {**base, **option}
+        update = await_confirm_node(
+            _state("生成用例", skill_id="skill-testcase", task_spec=spec),
+            config={"workflow_confirm": {"task_spec": spec}},
+        )
+        assert update["workflow_failed"] is True
+        error = next(e for e in update["pending_events"] if e["kind"] == "error")
+        assert error["payload"]["code"] == "VALIDATION"
+        assert expected in error["payload"]["message"]
 
 
 def test_w5_confirm_passes_and_updates_spec() -> None:

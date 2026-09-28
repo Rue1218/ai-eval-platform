@@ -244,6 +244,7 @@ export const api = {
     async upload(
       file: File,
       onProgress?: (percent: number) => void,
+      timeoutMs?: number,
     ): Promise<{ id: string; filename: string; size: number; content_type?: string | null }> {
       if (getDataMode() === 'mock') {
         onProgress?.(100)
@@ -253,6 +254,7 @@ export const api = {
       formData.append('file', file)
       const { data } = await http.post('/api/files', formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
+        ...(timeoutMs ? { timeout: timeoutMs } : {}),
         onUploadProgress: (event) => {
           if (event.total) onProgress?.(Math.min(100, Math.round((event.loaded * 100) / event.total)))
         },
@@ -822,6 +824,20 @@ export const api = {
       const { data } = await http.post('/api/case-sets', payload)
       return data
     },
+    /** 将已审核候选一次性保存为草稿；创建失败时服务端不留下空用例集。 */
+    async createSetFromCandidates(payload: { name: string; folder_id?: string | null; cases: TestCaseInput[] }): Promise<CaseSet & { cases: TestCase[] }> {
+      if (getDataMode() === 'mock') {
+        const created = await this.createSet({ name: payload.name, folder_id: payload.folder_id })
+        const cases = payload.cases.map((item, index) => ({ ...item, id: `c-${Date.now()}-${index}` })) as TestCase[]
+        mockStore.cases = cases
+        created.revision = 1
+        created.generated_count = cases.length
+        created.cases = cases
+        return { ...created, cases }
+      }
+      const { data } = await http.post('/api/case-sets/from-candidates', payload)
+      return data
+    },
     // 契约 PUT /api/case-sets/{id}：更新名称 / 目录归属 / 自定义列 column_schema；
     // 已确认用例集的非法修改由后端返回 VALIDATION，前端不做伪造成功。
     async updateSet(id: string, payload: { name?: string; folder_id?: string | null; column_schema?: Array<{ key: string; name: string; type?: string; sort_order?: number }> }): Promise<CaseSet> {
@@ -837,7 +853,7 @@ export const api = {
       return data
     },
     // 批量保存用例编辑结果，后端负责已确认用例集的不可编辑校验。
-    async saveCases(id: string, cases: TestCaseInput[], expectedRevision: number, columnSchema: ColumnSchemaItem[]): Promise<{ items: TestCase[]; revision: number }> {
+    async saveCases(id: string, cases: TestCaseInput[], expectedRevision: number, columnSchema: ColumnSchemaItem[]): Promise<{ items: TestCase[]; revision: number; checks?: CaseSet['checks'] }> {
       if (getDataMode() === 'mock') {
         const cs = mockStore.caseSets.find((x) => x.id === id)
         if (!cs) throw new ApiError('用例集不存在', ErrorCode.NOT_FOUND, 404)
@@ -846,13 +862,13 @@ export const api = {
         mockStore.cases = saved
         cs.column_schema = columnSchema
         cs.revision++
-        return { items: saved, revision: cs.revision }
+        return { items: saved, revision: cs.revision, checks: cs.checks }
       }
       const { data } = await http.put(`/api/case-sets/${id}/cases`, { cases, expected_revision: expectedRevision, column_schema: columnSchema })
-      return { items: data.items, revision: data.revision }
+      return { items: data.items, revision: data.revision, checks: data.checks }
     },
     // 仅生成未落库候选；调用方需要创建用例集并保存候选后才可显示创建成功。
-    async generateCases(payload: CaseGenerateInput): Promise<TestCase[]> {
+    async generateCases(payload: CaseGenerateInput & { source_doc_id?: string }): Promise<TestCase[]> {
       if (getDataMode() === 'mock') {
         return [{
           id: 'c-ai-' + Date.now(),

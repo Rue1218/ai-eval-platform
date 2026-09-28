@@ -17,6 +17,7 @@ from app.schemas import (
     CaseIn,
     CaseMapIn,
     CaseSetCreate,
+    CaseSetFromCandidatesIn,
     CaseSetUpdate,
     CasesPayload,
 )
@@ -27,6 +28,7 @@ from app.schemas import (
     [
         ("GET", "/api/case-sets", None),
         ("POST", "/api/case-sets", {"name": "登录模块用例集"}),
+        ("POST", "/api/case-sets/from-candidates", {"name": "草稿", "cases": []}),
         ("GET", "/api/case-sets/cs-1", None),
         ("PUT", "/api/case-sets/cs-1", {"name": "改名"}),
         (
@@ -65,6 +67,15 @@ def test_case_set_create_rejects_extra_field():
     # 输入模型继承 ApiModel，契约外字段一律拒绝
     with pytest.raises(ValidationError):
         CaseSetCreate(name="x", unknown_field=1)
+
+
+def test_from_candidates_requires_one_to_eighty_cases():
+    """候选批量保存遵守 Worker 的 80 条硬上限，拒绝空集合。"""
+    case = {"name": "登录", "strategy": "正向", "priority": "HX"}
+    assert len(CaseSetFromCandidatesIn(name="草稿", cases=[case]).cases) == 1
+    for cases in ([], [case] * 81):
+        with pytest.raises(ValidationError):
+            CaseSetFromCandidatesIn(name="草稿", cases=cases)
 
 
 def test_case_set_rejects_duplicate_column_key():
@@ -143,9 +154,11 @@ def test_ai_generate_max_count_bounds():
     with pytest.raises(ValidationError):
         CaseAiGenerateIn(source_text="x", max_count=0)
     with pytest.raises(ValidationError):
-        CaseAiGenerateIn(source_text="x", max_count=101)
-    ok = CaseAiGenerateIn(source_text="x", max_count=100)
-    assert ok.max_count == 100
+        CaseAiGenerateIn(source_text="x", max_count=81)
+    with pytest.raises(ValidationError):
+        CaseAiGenerateIn(source_text="x", max_count=True)
+    ok = CaseAiGenerateIn(source_text="x", max_count=80)
+    assert ok.max_count == 80
 
 
 def test_ai_generate_strategy_weights_passthrough():

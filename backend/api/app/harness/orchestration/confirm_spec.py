@@ -207,6 +207,11 @@ def build_confirm_payload(
     case_source = slots.get("case_source")
     if isinstance(case_source, Mapping):
         spec["case_source"] = dict(case_source)
+    if kind == "testcase":
+        if type(slots.get("max_count")) is int:
+            spec["max_count"] = slots["max_count"]
+        if isinstance(slots.get("strategy_weights"), Mapping):
+            spec["strategy_weights"] = dict(slots["strategy_weights"])
     if kind in {"benchmark", "rag"} and wants_stress(plan):
         spec["with_stress"] = True
     _prefill_from_observations(spec, _observations(observations))

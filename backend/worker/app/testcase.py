@@ -28,9 +28,11 @@ from shared.casegen import (
     SOURCE_MAX_CHARS,
     TARGET_COUNT,
     build_prompts,
+    generation_token_budget,
     parse_cases,
     rebalance_by_strategy,
     selfcheck,
+    validate_strategy_weights,
 )
 from sqlalchemy.orm import Session
 
@@ -54,7 +56,6 @@ logger = logging.getLogger("worker.testcase")
 
 # ─── 超时与确认窗口口径（PRD 5.4.1） ───
 LLM_TIMEOUT_S = 280.0  # 单次 LLM 调用超时；总预算 5 分钟留 20s 落库余量
-LLM_MAX_TOKENS = 8192  # 45 条用例的输出 token 预算
 CONFIRM_WINDOW_H = 72  # 确认窗口：72h 未确认由扫描器取消
 
 
@@ -177,6 +178,15 @@ def run_testcase(task_id: str) -> None:
             _fail(db, task, "VALIDATION", "来源文档内容为空，无法生成用例")
             return
 
+        max_count = config.get("max_count", TARGET_COUNT)
+        try:
+            if type(max_count) is not int or not 1 <= max_count <= MAX_COUNT:
+                raise ValueError("max_count 须为 1–80 的整数")
+            weights = validate_strategy_weights(config.get("strategy_weights"))
+        except ValueError as exc:
+            _fail(db, task, "VALIDATION", f"用例生成参数无效：{exc}")
+            return
+
         # ─── 解析 Agent 协议档并调用 LLM 生成（六策略配比） ───
         row = db.query(Setting).filter(Setting.key == "agent_profile_id").first()
         profile_id = row.value if row else None
@@ -202,7 +212,7 @@ def run_testcase(task_id: str) -> None:
             logger.info("testcase task %s cancelled before LLM call, skip", task_id)
             return
 
-        system, user = build_prompts(source_text, TARGET_COUNT)
+        system, user = build_prompts(source_text, max_count, weights=weights)
         try:
             result = call_protocol(
                 protocol=profile.protocol,
@@ -213,7 +223,7 @@ def run_testcase(task_id: str) -> None:
                 messages=[{"role": "user", "content": user}],
                 system=system,
                 temperature=0.3,
-                max_tokens=LLM_MAX_TOKENS,
+                max_tokens=generation_token_budget(max_count),
                 anthropic_version=profile.anthropic_version,
                 timeout_s=LLM_TIMEOUT_S,
             )
@@ -236,7 +246,7 @@ def run_testcase(task_id: str) -> None:
                 f"生成 {len(cases)} 条超过上限 {MAX_COUNT} 条，请拆分需求文档后重新发起",
             )
             return
-        cases = rebalance_by_strategy(cases, min(len(cases), TARGET_COUNT))
+        cases = rebalance_by_strategy(cases, max_count, weights=weights)
         if not cases:
             _fail(db, task, "UPSTREAM", "模型输出经配比校正后无有效用例")
             return
