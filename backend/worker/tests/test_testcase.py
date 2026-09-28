@@ -1,5 +1,6 @@
 """用例 Worker 的来源权限、文件格式、模型数据和确认超时回归。"""
 
+import json
 from datetime import timedelta
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -20,6 +21,13 @@ from app.models import (
     TaskEvent,
     utcnow,
 )
+def _analysis():
+    """只模拟第一阶段的测试设计，生成阶段另用用例输出。"""
+    return SimpleNamespace(text=json.dumps({"summary": "登录", "test_points": [{
+        "title": "登录行为", "source_quote": "登录需求", "risk": "high", "strategies": ["positive"],
+    }]}))
+
+
 def _file(path, filename="requirements.xlsx", kind="xlsx", owner="owner"):
     """构造与真实上传相同的无扩展名存储文件元数据。"""
     return StoredFile(
@@ -84,8 +92,9 @@ def test_generated_items_protect_identity_and_mark_missing_expected(worker_db_fa
 
 
 @pytest.mark.parametrize("interruption", [None, "cancelled", "expired"])
+@pytest.mark.parametrize("interrupt_stage", ["design", "cases"])
 def test_generation_persists_only_while_task_still_owns_execution(
-    worker_db_factory, monkeypatch, interruption,
+    worker_db_factory, monkeypatch, interruption, interrupt_stage,
 ):
     """真实执行入口正确落库；模型等待期间取消或回收租约时丢弃迟到结果。"""
     with worker_db_factory() as db:
@@ -105,9 +114,16 @@ def test_generation_persists_only_while_task_still_owns_execution(
     ))
     monkeypatch.setattr(testcase, "read_profile_env", lambda _id: SimpleNamespace(full_url=False))
 
-    def complete_model(**_kwargs):
+    calls = []
+    # 固定阶段耗时，不依赖 Windows 单调时钟的采样精度。
+    ticks = iter([1000.0, 1010.0])
+    monkeypatch.setattr(testcase, "time", SimpleNamespace(monotonic=lambda: next(ticks)))
+
+    def complete_model(**kwargs):
         """在模型返回边界模拟另一事务的取消或租约回收，不发网络请求。"""
-        if interruption:
+        calls.append(kwargs)
+        stage = "design" if "当前只执行需求分析阶段" in kwargs["system"] else "cases"
+        if interruption and stage == interrupt_stage:
             with worker_db_factory() as db:
                 task = db.get(Task, "task")
                 if interruption == "cancelled":
@@ -117,10 +133,15 @@ def test_generation_persists_only_while_task_still_owns_execution(
                 db.commit()
                 if interruption == "expired":
                     assert task_state.recover_expired_task_leases(db) == 1
-        return SimpleNamespace(text='[{"id":"model-id","name":"登录成功","strategy":"正向","priority":"HX","expected":"进入工作台"}]')
+        if "当前只执行需求分析阶段" in kwargs["system"]:
+            return _analysis()
+        return SimpleNamespace(text='[{"test_point_id":"TP-001","id":"model-id","name":"登录成功","strategy":"正向","priority":"HX","expected":"进入工作台"}]')
 
     monkeypatch.setattr(testcase, "call_protocol", complete_model)
     testcase.run_testcase("task")
+    assert len(calls) == (1 if interruption and interrupt_stage == "design" else 2)
+    if len(calls) == 2:
+        assert calls[1]["timeout_s"] == testcase.LLM_TIMEOUT_S - 10
     with worker_db_factory() as db:
         task = db.get(Task, "task")
         if interruption:
@@ -133,7 +154,11 @@ def test_generation_persists_only_while_task_still_owns_execution(
             item = db.query(CaseItem).one()
             assert case_set.created_by == "owner" and case_set.task_id == task.id
             assert case_set.expires_at is not None and case_set.generated_count == 1
+            assert "requirement_quote" in {column["key"] for column in case_set.column_schema}
             assert item.id != "model-id" and item.pending_complete is False
+            assert item.extras["test_point_id"] == "TP-001"
+            assert item.extras["requirement_quote"] == "登录需求"
+            assert task.result["skill"]["id"] == "functional-test-design"
 
 
 def test_generation_honors_snapshot_count_and_weights(worker_db_factory, monkeypatch):
@@ -159,18 +184,20 @@ def test_generation_honors_snapshot_count_and_weights(worker_db_factory, monkeyp
 
     def complete_model(**kwargs):
         calls.append(kwargs)
+        if "当前只执行需求分析阶段" in kwargs["system"]:
+            return _analysis()
         return SimpleNamespace(text=(
-            '[{"name":"正向1","strategy":"正向","priority":"HX","expected":"成功"},'
-            '{"name":"正向2","strategy":"正向","priority":"HX","expected":"成功"},'
-            '{"name":"反向","strategy":"反向","priority":"YC","expected":"拒绝"},'
-            '{"name":"未知","strategy":"其他","priority":"FHX","expected":"结果"}]'
+            '[{"test_point_id":"TP-001","name":"正向1","strategy":"正向","priority":"HX","expected":"成功"},'
+            '{"test_point_id":"TP-001","name":"正向2","strategy":"正向","priority":"HX","expected":"成功"},'
+            '{"test_point_id":"TP-001","name":"反向","strategy":"反向","priority":"YC","expected":"拒绝"},'
+            '{"test_point_id":"TP-001","name":"未知","strategy":"其他","priority":"FHX","expected":"结果"}]'
         ))
 
     monkeypatch.setattr(testcase, "call_protocol", complete_model)
     testcase.run_testcase("task")
-    assert len(calls) == 1
-    assert "不超过 2 条" in calls[0]["messages"][0]["content"]
-    assert "正向 100%" in calls[0]["messages"][0]["content"]
+    assert len(calls) == 2
+    assert "不超过 2 条" in calls[-1]["messages"][0]["content"]
+    assert "正向 100%" in calls[-1]["messages"][0]["content"]
     with worker_db_factory() as db:
         assert db.get(Task, "task").status == "awaiting_case_confirm"
         assert [row.name for row in db.query(CaseItem).order_by(CaseItem.sort_order)] == ["正向1", "正向2"]
@@ -201,21 +228,56 @@ def test_generation_keeps_short_model_output_with_target_quota(
 
     def fake_model(**kwargs):
         calls.append(kwargs)
+        if "当前只执行需求分析阶段" in kwargs["system"]:
+            return _analysis()
         return SimpleNamespace(text=(
-            '[{"name":"正向1","strategy":"正向","priority":"HX","expected":"成功"},'
-            '{"name":"正向2","strategy":"正向","priority":"HX","expected":"成功"},'
-            '{"name":"正向3","strategy":"正向","priority":"HX","expected":"成功"}]'
+            '[{"test_point_id":"TP-001","name":"正向1","strategy":"正向","priority":"HX","expected":"成功"},'
+            '{"test_point_id":"TP-001","name":"正向2","strategy":"正向","priority":"HX","expected":"成功"},'
+            '{"test_point_id":"TP-001","name":"正向3","strategy":"正向","priority":"HX","expected":"成功"}]'
         ))
 
     monkeypatch.setattr(testcase, "call_protocol", fake_model)
 
     testcase.run_testcase("task")
-    assert calls[0]["max_tokens"] == budget
+    assert calls[-1]["max_tokens"] == budget
     with worker_db_factory() as db:
         assert db.get(Task, "task").status == "awaiting_case_confirm"
         assert [row.name for row in db.query(CaseItem).order_by(CaseItem.sort_order)] == [
             "正向1", "正向2", "正向3",
         ]
+
+
+@pytest.mark.parametrize("text,raw,expected", [
+    ("", {"choices": [{"message": {"reasoning_content": "private"}}]}, "仅返回思考"),
+    ('[{"name":"登录"}]', {"choices": [{"finish_reason": "length"}]}, "长度上限"),
+    ("", {}, "空正文"),
+    ("{}", {}, "有效测试点"),
+])
+def test_generation_failure_has_safe_reason_and_no_draft(worker_db_factory, monkeypatch, text, raw, expected):
+    """空正文和截断输出必须落失败终态，不能生成空草稿或重放模型调用。"""
+    with worker_db_factory() as db:
+        db.add(ProtocolProfile(id="profile", name="local", protocol="openai_chat",
+                               base_url="https://unit.invalid", model="deepseek-flash"))
+        db.add(Setting(key="agent_profile_id", value="profile"))
+        db.add(Task(id="task", kind="testcase", status="running", created_by="owner",
+                    claimed_by_worker_id="worker", claim_expires_at=utcnow() + timedelta(minutes=1),
+                    config={"case_source": {"text": "登录需求"}}))
+        db.commit()
+    monkeypatch.setattr(testcase, "profile_connection", lambda *_args, **_kwargs: (
+        "https://unit.invalid", "deepseek-flash", "unit"))
+    monkeypatch.setattr(testcase, "read_profile_env", lambda _id: SimpleNamespace(full_url=False))
+    model = Mock(return_value=SimpleNamespace(text=text, raw=raw))
+    monkeypatch.setattr(testcase, "call_protocol", model)
+    testcase.run_testcase("task")
+    model.assert_called_once()
+    with worker_db_factory() as db:
+        task = db.get(Task, "task")
+        assert task.status == "failed" and task.finished_at is not None
+        assert task.result["error_code"] == "UPSTREAM"
+        assert expected in task.result["error_message"]
+        assert "private" not in task.result["error_message"]
+        assert db.query(CaseSet).count() == db.query(CaseItem).count() == 0
+        assert expected in db.query(TaskEvent).filter_by(event="error").one().message
 
 
 def test_confirmation_expiry_only_cancels_eligible_locked_rows(worker_db_factory, monkeypatch):

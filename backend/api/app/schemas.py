@@ -946,11 +946,25 @@ class CaseMapIn(ApiModel):
     case_ids: list[str] = Field(min_length=1, max_length=20_000)
 
 
-class CaseAiGenerateIn(ApiModel):
-    """AI 候选用例生成请求；仅返回未落库候选，不创建用例集。"""
+class CaseAiDesignIn(ApiModel):
+    """需求分析输入；技能固定为已安装目录，来源按当前成员权限读取。"""
 
     source_doc_id: str | None = Field(default=None, max_length=64)
     source_text: str | None = Field(default=None, max_length=1_000_000)
+    skill_id: Literal["functional-test-design"] = "functional-test-design"
+
+    @model_validator(mode="after")
+    def validate_source(self) -> "CaseAiDesignIn":
+        """需求来源至少一项；已有文档优先于文本，兼容原生成接口。"""
+        if not self.source_doc_id and not (self.source_text and self.source_text.strip()):
+            raise ValueError("source_doc_id 与 source_text 至少填一项")
+        return self
+
+
+class CaseAiGenerateIn(CaseAiDesignIn):
+    """按已确认测试点生成候选；旧客户端未传设计时仍可直接生成。"""
+
+    design: dict[str, Any] | None = None
     # 6 大策略配比（百分比），键取值 positive/negative/boundary/equivalence/state/scenario
     strategy_weights: dict[str, int] | None = None
     complexity: str | None = Field(default=None, max_length=32)
@@ -965,14 +979,13 @@ class CaseAiGenerateIn(ApiModel):
         validate_strategy_weights(value)
         return value
 
-    @model_validator(mode="after")
-    def validate_source(self) -> "CaseAiGenerateIn":
-        """source_doc_id 与 source_text 至少填一项，作为用例生成依据。"""
-        has_doc = bool(self.source_doc_id)
-        has_text = bool(self.source_text and self.source_text.strip())
-        if not (has_doc or has_text):
-            raise ValueError("source_doc_id 与 source_text 至少填一项")
-        return self
+    @field_validator("design")
+    @classmethod
+    def validate_design_snapshot(cls, value: Any) -> Any:
+        """仅接受有限且明确的人工测试点快照，不能混入任意控制字段。"""
+        from shared.case_design import validate_design
+
+        return validate_design(value) if value is not None else None
 
 
 class CaseAiFillIn(ApiModel):

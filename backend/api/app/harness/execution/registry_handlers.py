@@ -13,6 +13,16 @@ from collections.abc import Mapping
 from app.errors import AppError, ErrorCode
 
 
+def _case_skill_handler(arguments: Mapping[str, object], _sandbox_dir: str | None = None, _context: object | None = None) -> object:
+    """只读披露内置用例 Skill 的已登记章节；不访问工作区或任意文件路径。"""
+    from shared.case_skill import read_skill_section
+
+    try:
+        return read_skill_section(str(arguments.get("section") or "catalog"))
+    except (ValueError, OSError) as exc:
+        raise AppError(ErrorCode.VALIDATION, "用例技能章节不可用，请检查技能安装") from exc
+
+
 def _media_mcp_unavailable_handler(
     _arguments: Mapping[str, object],
     _sandbox_dir: str | None = None,

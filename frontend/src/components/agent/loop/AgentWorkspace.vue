@@ -67,6 +67,16 @@
                     <span v-else class="turn-segment-label process">执行过程 · step {{ row.correlation.step ?? '—' }}</span>
                   </div>
                 </header>
+                <section v-if="isSummaryAssistantRow(row) && taskSnapshotsByTurn.get(getTurnIdentifier(row))?.length" class="turn-task-latest" aria-label="任务最新状态" role="status">
+                  <strong>任务最新状态</strong>
+                  <div v-for="task in taskSnapshotsByTurn.get(getTurnIdentifier(row))" :key="task.taskId || task.action" :class="{ 'task-failed': task.status === 'failed' }">
+                    <b>{{ taskStatusLabels[task.status || ''] || '等待状态更新' }}</b>
+                    <span v-if="task.message"> · {{ task.message }}</span>
+                    <router-link v-if="task.kind === 'testcase' && ['awaiting_case_confirm', 'succeeded'].includes(task.status || '')" :to="{ path: '/cases', query: { task_id: task.taskId } }">{{ task.status === 'awaiting_case_confirm' ? '查看用例草稿' : '查看用例' }}</router-link>
+                    <router-link v-else :to="{ path: '/tasks', query: { id: task.taskId } }">查看任务</router-link>
+                  </div>
+                  <small>下方为回答生成时的说明；当前任务状态以此处为准。</small>
+                </section>
                 <ReasoningBlock v-if="row.reasoning && ui?.permissions.reasoning" :content="row.reasoning" :ended="row.ended" :interrupted="row.interrupted" :summary-mode="row.request_summary?.protocol === 'openai_responses'"/>
                 <template v-if="row.text">
                   <section v-for="part in responseParts(row)" :key="part.output_index" :data-response-phase="part.phase || undefined">
@@ -406,7 +416,7 @@ import TaskRunCard from './TaskRunCard.vue'
 import ReasoningBlock from './ReasoningBlock.vue'
 import TraceWorkspace from './TraceWorkspace.vue'
 import MediaResultPreview from './MediaResultPreview.vue'
-import { isTaskTool } from '../../../agent/loop/taskPresentation'
+import { isTaskTool, taskCardSnapshot, taskStatusLabels, type TaskCardSnapshot } from '../../../agent/loop/taskPresentation'
 import { calculateTurnSummaries, formatDuration, formatTokens, getTurnIdentifier, type TurnSummary } from '../../../agent/loop/turnSummary'
 import { mediaPreviewsFor, type MediaPreview } from '../../../agent/loop/mediaPresentation'
 import { assistantKeysByTurn, conversationMetricsFrom, effortPreferenceKey, finishLabels, firstAssistantInTurn, latestRequestSummary, phaseStatusText, pickAgent, pickProfile, preferenceKey, taskForToolRow } from '../../../agent/loop/workspaceDerived'
@@ -826,6 +836,22 @@ const summaryAssistantRowKeys = computed<Set<string>>(() =>
   new Set([...turnSummaryByLastRowKey.value.values()].map(summary => summary.summaryRow.key))
 )
 
+/** 按真实轮次和任务 ID 关联最新事实；只更新状态区，不改写历史模型回答。 */
+const taskSnapshotsByTurn = computed(() => {
+  const grouped = new Map<string, Map<string, TaskCardSnapshot>>()
+  for (const row of rows.value) {
+    if (!('status' in row && 'name' in row) || !isTaskTool((row as ToolRun).name)) continue
+    const tool = row as ToolRun
+    const snapshot = taskCardSnapshot(tool, taskForTool(tool))
+    if (!snapshot.taskId) continue
+    const turnKey = getTurnIdentifier(row)
+    const tasks = grouped.get(turnKey) || new Map<string, TaskCardSnapshot>()
+    tasks.set(snapshot.taskId, snapshot)
+    grouped.set(turnKey, tasks)
+  }
+  return new Map([...grouped].map(([key, tasks]) => [key, [...tasks.values()]]))
+})
+
 /** 将本轮完成的媒体工具结果放到总结消息之前，保持过程卡只呈现调用事实。 */
 const mediaPreviewsBySummaryRowKey = computed<Map<string, MediaPreview[]>>(() => {
   const previewsBySummary = new Map<string, MediaPreview[]>()
@@ -958,6 +984,13 @@ async function hydrateAttachments() {
 /* ReAct 过程与本轮总结使用服务端持久的工具调用字段分段，避免混入可操作回答。 */
 .loop-message.assistant.is-process { margin-bottom: 12px; }
 .loop-message.assistant.is-turn-summary { margin-top: 16px; }
+/* 异步任务状态随事实更新，历史回答保留时间语义。 */
+.turn-task-latest { margin: 8px 0 12px; padding: 12px 14px; border: 1px solid var(--border-subtle); border-radius: 10px; color: var(--text-primary); font-size: 13px; line-height: 1.7; }
+.turn-task-latest > strong { display: block; margin-bottom: 4px; }
+.turn-task-latest a { margin-left: 10px; color: var(--c-agent); }
+.turn-task-latest small { display: block; margin-top: 6px; color: var(--text-secondary); }
+.turn-task-latest .task-failed { color: #a44a27; }
+[data-theme='dark'] .turn-task-latest .task-failed { color: #ffb595; }
 .turn-process-tool { margin: 0 0 12px; }
 .turn-media-results { margin: 0 0 12px; }
 .turn-media-results > .turn-segment-label { margin: 0 0 2px; }

@@ -105,6 +105,7 @@ def test_default_registry_includes_bash() -> None:
         "TaskUpdate",
         "TaskList",
         "ask_user_question",
+        "case.skill",
         "task.create",
         "task.status",
         "task.cancel",

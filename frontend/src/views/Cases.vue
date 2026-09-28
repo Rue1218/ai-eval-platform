@@ -1,6 +1,13 @@
 <template>
   <div class="cases-workbench" @keydown="onWorkbenchKeydown">
-    <div class="nordic-layout" :style="{ '--tree-w': treeWidth + 'px' }">
+    <header class="workbench-header">
+      <div><h1>测试用例工作台</h1><p>需求分析、测试设计、候选审核与用例管理</p></div>
+      <nav class="workbench-tabs" aria-label="用例工作区">
+        <button :class="{ active: !aiGen.show }" :aria-pressed="!aiGen.show" :disabled="aiGen.applying" @click="aiGen.show = false">用例库</button>
+        <button :class="{ active: aiGen.show }" :aria-pressed="aiGen.show" @click="openAiGenDrawer">AI 生成工作台</button>
+      </nav>
+    </header>
+    <div v-show="!aiGen.show" class="nordic-layout" :style="{ '--tree-w': treeWidth + 'px' }">
       <!-- ─── 左侧：用例集资源树侧边栏 ─── -->
       <aside class="nordic-sidebar">
         <div class="sidebar-header">
@@ -36,6 +43,10 @@
             </svg>
             <input v-model="treeSearch" class="search-input" placeholder="搜索用例集..." aria-label="搜索用例集" />
             <button v-if="treeSearch" class="clear-search-btn" aria-label="清空搜索" @click="treeSearch = ''">✕</button>
+          </div>
+          <div class="library-status" aria-label="用例集状态筛选">
+            <button v-for="filter in libraryFilters" :key="filter.value" :class="{ active: libraryStatus === filter.value }"
+              :aria-pressed="libraryStatus === filter.value" @click="libraryStatus = filter.value">{{ filter.label }} <span>{{ filter.count }}</span></button>
           </div>
         </div>
 
@@ -93,7 +104,7 @@
               <circle cx="11" cy="11" r="8" />
               <line x1="21" y1="21" x2="16.65" y2="16.65" />
             </svg>
-            <p>{{ treeSearch.trim() ? `无匹配结果「${treeSearch.trim()}」` : '暂无用例集，点击上方「+ PRD 推导」或「+ 新建」' }}</p>
+            <p>{{ treeSearch.trim() || libraryStatus !== 'all' ? '没有符合筛选条件的用例集' : '暂无用例集，点击上方「+ PRD 推导」或「+ 新建」' }}</p>
           </div>
         </div>
 
@@ -586,120 +597,12 @@
 
     <ImportCasesExcelModal v-model:show="showImportExcel" :current-set="importCurrentSet" @imported="onCasesImported" />
 
-    <!-- ─── 右侧滑出抽屉：PRD 用例推导向导 ─── -->
-    <n-drawer v-model:show="aiGen.show" :width="drawerWidth" placement="right" :mask-closable="!aiGen.applying">
-      <n-drawer-content title="PRD 用例智能推导向导" :closable="!aiGen.applying">
-        <div class="drawer-step-bar">
-          <div class="step-badge" :class="{ active: aiGen.step === 1, done: aiGen.step === 2 }">
-            <span class="step-idx">1</span>
-            <span>PRD 需求与策略配置</span>
-          </div>
-          <span class="step-divider-line"></span>
-          <div class="step-badge" :class="{ active: aiGen.step === 2 }">
-            <span class="step-idx">2</span>
-            <span>候选用例审核与采纳</span>
-          </div>
-        </div>
-
-        <div v-show="aiGen.step === 1" class="drawer-body">
-          <div class="field">
-            <label class="field-label">需求来源</label>
-            <div class="candidate-targets">
-              <label class="candidate-target"><input v-model="aiGen.sourceMode" type="radio" value="text" :disabled="aiGen.generating || aiGen.applying" />粘贴需求文本</label>
-              <label class="candidate-target"><input v-model="aiGen.sourceMode" type="radio" value="file" :disabled="aiGen.generating || aiGen.applying" />上传需求文件</label>
-            </div>
-          </div>
-          <template v-if="aiGen.sourceMode === 'text'">
-          <div class="field">
-            <label class="field-label">PRD 需求预设模板</label>
-            <n-select v-model:value="aiGen.preset" :options="presetOptions" :disabled="aiGen.generating || aiGen.applying" placeholder="可选示例，非真实需求来源" @update:value="onPresetChange" />
-          </div>
-
-          <div class="field">
-            <label class="field-label">PRD 需求描述 / 业务规则 / 接口规范 <span class="req">*</span></label>
-            <n-input v-model:value="aiGen.prdText" class="mono" type="textarea" :disabled="aiGen.generating || aiGen.applying" :autosize="{ minRows: 4, maxRows: 8 }" placeholder="粘贴需求文档段落、状态转移逻辑或 OpenAPI 规范..." />
-          </div>
-          </template>
-          <div v-else class="field">
-            <label class="field-label">需求文件（UTF-8 文本或 Excel）</label>
-            <input ref="sourceFileInput" type="file" accept=".txt,.md,.csv,.json,.yaml,.yml,.xlsx" class="source-file-input" aria-label="选择需求文件" :disabled="aiGen.sourceUploading || aiGen.generating || aiGen.applying" @change="uploadSourceFile" />
-            <button class="btn btn-secondary btn-md" :disabled="aiGen.sourceUploading || aiGen.generating || aiGen.applying" @click="sourceFileInput?.click()">{{ aiGen.sourceUploading ? `上传中 ${aiGen.sourceUploadPercent}%…` : '选择需求文件' }}</button>
-            <p v-if="aiGen.sourceUploading" class="field-hint" role="status">已上传 {{ aiGen.sourceUploadPercent }}%，等待服务端保存…</p>
-            <p class="field-hint">{{ aiGen.sourceFileName || '尚未选择文件；支持 UTF-8 文本、Markdown、CSV 和 Excel。' }}</p>
-          </div>
-
-          <div class="divider-title">六策略生成配比</div>
-          <div class="strategy-weight-grid">
-            <label v-for="strategy in STRATEGY_OPTIONS" :key="strategy.key" class="strategy-weight-field">
-              <span>{{ strategy.label }}</span>
-              <input v-model.number="aiGen.strategyWeights[strategy.key]" type="number" min="0" max="100" step="1" :disabled="aiGen.generating || aiGen.applying" :aria-label="`${strategy.label}策略百分比`" />
-              <span>%</span>
-            </label>
-          </div>
-          <p class="field-hint" :class="{ 'strategy-weight-error': !strategyWeightsValid }" aria-live="polite">合计 {{ strategyWeightTotal }}%，须为 100%；填 0 可关闭策略。</p>
-
-          <div class="divider-title">生成参数</div>
-          <div class="form-row-3">
-            <div class="field">
-              <label class="field-label">用例规模 (<b class="mono">{{ aiGen.count }}</b> 条)</label>
-              <n-slider v-model:value="aiGen.count" :min="1" :max="80" :step="1" :disabled="aiGen.generating || aiGen.applying" />
-            </div>
-            <p class="field-hint">生成结果仅为候选；审核并保存草稿后才能确认入库。</p>
-          </div>
-        </div>
-
-        <div v-show="aiGen.step === 2" class="drawer-body">
-          <div class="field">
-            <label class="field-label">采纳目标</label>
-            <div class="candidate-targets">
-              <label v-if="canEditCases" class="candidate-target"><input v-model="aiGen.target" type="radio" value="current" :disabled="aiGen.applying || !!aiGen.appliedToSetId" />追加到当前草稿「{{ currentSet?.name }}」</label>
-              <label class="candidate-target"><input v-model="aiGen.target" type="radio" value="new" :disabled="aiGen.applying || !!aiGen.appliedToSetId" />新建草稿并保存候选</label>
-            </div>
-            <n-input v-if="aiGen.target === 'new'" v-model:value="aiGen.newSetName" :input-props="{ 'aria-label': '新草稿名称' }" placeholder="输入新草稿名称" />
-          </div>
-          <div class="row-between mb8">
-            <span class="bold" style="font-size: 13.5px">候选用例列表 (共 {{ aiGen.candidates.length }} 条)</span>
-            <button class="link-btn" :disabled="aiGen.applying || !!aiGen.appliedToSetId" @click="toggleAllCandidates">全选 / 全不选</button>
-          </div>
-          <div class="candidate-list custom-scroll">
-            <article v-for="(cand, ci) in aiGen.candidates" :key="ci" class="candidate-card">
-              <div class="candidate-card-head">
-                <label><input v-model="cand.selected" type="checkbox" :disabled="aiGen.applying || !!aiGen.appliedToSetId" :aria-label="`采纳候选 ${ci + 1}`" />候选 {{ ci + 1 }}</label>
-                <span v-if="candidateNeedsClarification(cand)" class="status-badge-amber">待澄清</span>
-                <button class="link-btn danger" :disabled="aiGen.applying || !!aiGen.appliedToSetId" @click="aiGen.candidates.splice(ci, 1)">移除</button>
-              </div>
-              <fieldset class="candidate-fields" :disabled="aiGen.applying || !!aiGen.appliedToSetId">
-                <div class="field"><label class="field-label">用例名称</label><n-input v-model:value="cand.name" :input-props="{ 'aria-label': `候选 ${ci + 1} 名称` }" /></div>
-                <div class="field"><label class="field-label">所属模块</label><n-input v-model:value="cand.module" :input-props="{ 'aria-label': `候选 ${ci + 1} 模块` }" /></div>
-                <div class="field"><label class="field-label">功能点</label><n-input v-model:value="cand.feature_point" :input-props="{ 'aria-label': `候选 ${ci + 1} 功能点` }" /></div>
-                <div class="field"><label class="field-label">测试策略</label><n-select v-model:value="cand.strategy" :disabled="aiGen.applying || !!aiGen.appliedToSetId" :options="STRATEGIES.map(s => ({ label: s, value: s }))" :aria-label="`候选 ${ci + 1} 策略`" /></div>
-                <div class="field"><label class="field-label">优先级</label><n-select v-model:value="cand.priority" :disabled="aiGen.applying || !!aiGen.appliedToSetId" :options="PRIORITIES.map(p => ({ label: p, value: p }))" :aria-label="`候选 ${ci + 1} 优先级`" /></div>
-                <div class="field candidate-wide"><label class="field-label">前置条件</label><n-input v-model:value="cand.preconditions" type="textarea" :autosize="{ minRows: 2, maxRows: 4 }" :input-props="{ 'aria-label': `候选 ${ci + 1} 前置条件` }" /></div>
-                <div class="field candidate-wide"><label class="field-label">执行步骤（每行一步）</label><n-input v-model:value="cand.stepsText" type="textarea" :autosize="{ minRows: 3, maxRows: 8 }" :input-props="{ 'aria-label': `候选 ${ci + 1} 执行步骤` }" /></div>
-                <div class="field candidate-wide"><label class="field-label">预期结果</label><n-input v-model:value="cand.expected_result" type="textarea" :autosize="{ minRows: 2, maxRows: 5 }" :input-props="{ 'aria-label': `候选 ${ci + 1} 预期结果` }" /></div>
-              </fieldset>
-            </article>
-          </div>
-        </div>
-
-        <template #footer>
-          <div class="drawer-footer-row">
-            <n-button v-if="aiGen.step === 2" :disabled="aiGen.applying || aiGen.generating || !!aiGen.appliedToSetId" @click="aiGen.step = 1">← 返回调整 PRD</n-button>
-            <span v-else></span>
-            <div class="row" style="gap: 8px">
-              <n-button v-if="aiGen.appliedToSetId && !aiGen.applying" :disabled="savingCases" @click="moveCandidatesToNewDraft">{{ aiGen.rehomePending ? '返回当前草稿' : '改存新草稿' }}</n-button>
-              <n-button :disabled="aiGen.applying" @click="aiGen.show = false">取消</n-button>
-              <n-button v-if="aiGen.step === 1" type="primary" :loading="aiGen.generating" :disabled="aiGen.sourceUploading || aiGen.applying || !strategyWeightsValid" @click="runAiGenerateCases()">
-                {{ aiGen.generating ? '正在推导用例中…' : '推导候选用例 →' }}
-              </n-button>
-              <n-button v-else type="primary" :loading="aiGen.applying" :disabled="aiSelectedCount === 0 || aiGen.applying || aiGen.generating || (!!aiGen.appliedToSetId && !aiGen.rehomePending && saveConflict)" @click="commitAiCandidates">
-                {{ aiGen.rehomePending ? `采纳并保存候选 (${aiSelectedCount} 条)` : aiGen.appliedToSetId ? (saveConflict ? '版本冲突，请先核对' : '重试保存候选') : `采纳并保存候选 (${aiSelectedCount} 条)` }}
-              </n-button>
-            </div>
-          </div>
-        </template>
-      </n-drawer-content>
-    </n-drawer>
+    <CaseGenerationStudio v-if="aiGen.show" v-model="aiGen" :skills="skills" :skills-loading="skillsLoading"
+      :skills-error="skillsError" :can-append="canEditCases" :current-set-name="currentSet?.name"
+      :save-conflict="saveConflict" :saving-cases="savingCases" @analyze="analyzeRequirements"
+      @generate="runAiGenerateCases()" @adopt="commitAiCandidates" @close="aiGen.show = false"
+      @upload="uploadSourceFile" @toggle-candidates="toggleAllCandidates"
+      @move-candidates="moveCandidatesToNewDraft" @reload-skills="loadSkills" />
 
     <!-- 弹窗与抽屉组件 (全居中显示) -->
     <n-dropdown
@@ -714,6 +617,9 @@
     />
 
     <n-modal v-model:show="caseEdit.show" preset="card" :title="`编辑用例 ${caseEdit.code}`" class="center-dialog-card" style="width: 660px; max-width: calc(100vw - 32px)">
+      <details v-if="editingCaseEvidence" class="case-evidence">
+        <summary>查看需求依据 · {{ editingCaseEvidence.id }}</summary><p>{{ editingCaseEvidence.quote }}</p>
+      </details>
       <div class="form-row">
         <div class="field">
           <label class="field-label">用例编码</label>
@@ -803,8 +709,8 @@ import type { CaseSet, TestCase, TestCaseInput, ColumnSchemaItem, TaskStatus } f
 import { escapeHtml, escapeRegex, renderIcon } from '../utils/render'
 import ImportCasesExcelModal from '../components/modals/ImportCasesExcelModal.vue'
 
-type CaseStrategy = '正向' | '反向' | '边界' | '状态迁移' | '场景' | '等价类'
-type CasePriority = 'HX' | 'FHX' | 'BJ' | 'YC' | 'ZD' | 'BL'
+import CaseGenerationStudio from '../components/cases/CaseGenerationStudio.vue'
+import { useCaseGeneration, candidatePayload, type CaseStrategy, type CasePriority } from '../composables/useCaseGeneration'
 
 /** 页面编辑字段与服务端原始行并存，保存时保留未直接展示的固定字段。 */
 interface ExtendedTestCase {
@@ -832,14 +738,7 @@ type CtxMenuType = 'file' | 'folder' | 'row'
 
 const STRATEGIES: CaseStrategy[] = ['正向', '反向', '边界', '等价类', '状态迁移', '场景']
 const PRIORITIES: CasePriority[] = ['HX', 'FHX', 'BJ', 'YC', 'ZD', 'BL']
-const STRATEGY_OPTIONS = [
-  { label: '正向', key: 'positive', weight: 40 },
-  { label: '反向', key: 'negative', weight: 25 },
-  { label: '边界', key: 'boundary', weight: 15 },
-  { label: '等价类', key: 'equivalence', weight: 10 },
-  { label: '状态迁移', key: 'state', weight: 5 },
-  { label: '场景', key: 'scenario', weight: 5 },
-] as const
+
 
 // ─── 右键菜单 SVG 图标辅助渲染 ───
 const message = useMessage()
@@ -847,6 +746,14 @@ const dialog = useDialog()
 const route = useRoute()
 
 const treeSearch = ref('')
+const libraryStatus = ref('all')
+/** 只筛选目录，不改变当前草稿或自动切换用户正在编辑的集合。 */
+const libraryFilters = computed(() => [
+  { value: 'all', label: '全部', count: caseSets.value.length },
+  { value: 'generated', label: '草稿', count: caseSets.value.filter(set => set.status === 'generated').length },
+  { value: 'confirmed', label: '已入库', count: caseSets.value.filter(set => set.status === 'confirmed').length },
+  { value: 'cancelled', label: '已废弃', count: caseSets.value.filter(set => set.status === 'cancelled').length },
+])
 const gridSearch = ref('')
 const caseSets = ref<CaseSet[]>([])
 const activeSetId = ref('')
@@ -918,7 +825,6 @@ function resetTreeWidth() {
   message.info('侧栏宽度已复位为 280px')
 }
 
-const drawerWidth = computed(() => (typeof window !== 'undefined' && window.innerWidth <= 720 ? '100%' : 640))
 
 interface TreeFolder {
   id: string
@@ -1187,11 +1093,18 @@ function scrollToFocusedRow(idx: number) {
 
 const filteredFolders = computed(() => {
   const keyword = treeSearch.value.trim().toLowerCase()
-  if (!keyword) return folders.value
+  if (!keyword && libraryStatus.value === 'all') return folders.value
   return folders.value.map(folder => ({
     ...folder,
-    items: folder.items.filter((item: CaseSet) => item.name.toLowerCase().includes(keyword)),
+    items: folder.items.filter((item: CaseSet) => item.name.toLowerCase().includes(keyword)
+      && (libraryStatus.value === 'all' || item.status === libraryStatus.value)),
   })).filter(folder => folder.items.length > 0)
+})
+
+/** 已采纳候选的来源随行保存，详情中可继续追溯需求原文。 */
+const editingCaseEvidence = computed(() => {
+  const source = caseEdit.value.row?.source
+  return source?.requirement_quote ? { id: source.test_point_id, quote: source.requirement_quote } : null
 })
 
 // 自定义列
@@ -1977,207 +1890,10 @@ function removeCustomCol(key: string) {
   message.info(`已移除列 ${key}`)
 }
 
-// 抽屉式 PRD 用例推导向导
-const PRD_PRESETS = [
-  { name: '收银台跨境支付与结算', desc: '用户在跨境电商结算时选用 Visa/MasterCard 外币快捷支付，涉及 3DS 认证、汇率换算与扣款回调。' },
-  { name: '账户风控防刷与封禁', desc: '同一 IP 短时间内频繁注册或登录密码连续输错 5 次，系统触发图形验证码或人脸核身并临时冻结 30 分钟。' },
-  { name: '全额退款与售后逆向', desc: '未发货订单申请全额退款原路退回；已发货订单需商家收货质检无误后 1-3 工作日释放资金。' },
-]
-
-interface AiCaseCandidate {
-  selected: boolean
-  code: string
-  name: string
-  module: string
-  feature_point: string
-  strategy: CaseStrategy
-  priority: CasePriority
-  preconditions: string
-  stepsText: string
-  expected_result: string
-  source?: TestCase
-}
-
-const aiGen = ref({
-  show: false,
-  step: 1 as 1 | 2,
-  preset: null as string | null,
-  prdText: '',
-  sourceMode: 'text' as 'text' | 'file',
-  sourceDocId: '',
-  sourceFileName: '',
-  sourceUploading: false,
-  sourceUploadPercent: 0,
-  strategyWeights: Object.fromEntries(STRATEGY_OPTIONS.map(({ key, weight }) => [key, weight])) as Record<(typeof STRATEGY_OPTIONS)[number]['key'], number>,
-  count: 10,
-  generating: false,
-  applying: false,
-  target: 'new' as 'current' | 'new',
-  newSetName: '',
-  appliedToSetId: '',
-  rehomePending: false,
-  appliedCaseIds: [] as string[],
-  appliedBaseSnapshot: '',
-  appliedBaseUnsaved: false,
-  candidates: [] as AiCaseCandidate[],
-})
-
-const presetOptions = computed(() => PRD_PRESETS.map(p => ({ label: `${p.name} · ${p.desc.slice(0, 30)}...`, value: p.desc })))
-const aiSelectedCount = computed(() => aiGen.value.candidates.filter(c => c.selected).length)
-const strategyWeightTotal = computed(() => Object.values(aiGen.value.strategyWeights).reduce((sum, weight) => sum + Number(weight || 0), 0))
-const strategyWeightsValid = computed(() => Object.values(aiGen.value.strategyWeights).every(weight => Number.isInteger(weight) && weight >= 0 && weight <= 100)
-  && strategyWeightTotal.value === 100)
-const sourceFileInput = ref<HTMLInputElement | null>(null)
-let candidateVersion = 0
-
-function openAiGenDrawer() {
-  const hasCandidates = aiGen.value.candidates.length > 0
-  aiGen.value.show = true
-  aiGen.value.step = aiGen.value.generating ? 1 : hasCandidates ? 2 : 1
-  if (aiGen.value.appliedToSetId) aiGen.value.target = aiGen.value.rehomePending ? 'new' : 'current'
-  else if (!hasCandidates) aiGen.value.target = 'new'
-  if (!aiGen.value.newSetName) aiGen.value.newSetName = `需求用例-${new Date().toISOString().slice(0, 10)}`
-}
-function onPresetChange(val: string) {
-  aiGen.value.prdText = val
-}
-
-/** 上传完成后才替换现有来源，慢上行时展示进度并延长单次请求期限。 */
-async function uploadSourceFile(e: Event) {
-  const input = e.target as HTMLInputElement
-  if (aiGen.value.generating || aiGen.value.applying || aiGen.value.sourceUploading) return
-  const file = input.files?.[0]
-  if (!file) return
-  if (!/\.(txt|md|csv|json|yaml|yml|xlsx)$/i.test(file.name)) {
-    message.warning('仅支持 UTF-8 文本、Markdown、CSV、JSON、YAML 或 Excel 文件')
-    input.value = ''
-    return
-  }
-  aiGen.value.sourceUploading = true
-  aiGen.value.sourceUploadPercent = 0
-  try {
-    const uploaded = await api.files.upload(file, percent => { aiGen.value.sourceUploadPercent = percent }, 180_000)
-    aiGen.value.sourceDocId = uploaded.id
-    aiGen.value.sourceFileName = uploaded.filename
-  } catch (err: any) {
-    aiGen.value.sourceUploadPercent = 0
-    message.error(err.message || '需求文件上传失败')
-  } finally {
-    aiGen.value.sourceUploading = false
-    input.value = ''
-  }
-}
-function candidateNeedsClarification(c: AiCaseCandidate): boolean {
-  return !c.name.trim() || !c.expected_result.trim() || !c.stepsText.trim()
-}
-
-/** 将人工审核后的候选字段转为入库输入，保留后端未在页面展示的扩展字段。 */
-function candidatePayload(c: AiCaseCandidate): TestCaseInput {
-  return {
-    ...c.source,
-    id: undefined,
-    code: c.code,
-    name: c.name.trim(),
-    module: c.module.trim(),
-    feature_point: c.feature_point.trim(),
-    strategy: c.strategy,
-    priority: c.priority,
-    precondition: c.preconditions.trim(),
-    steps: c.stepsText.trim(),
-    expected: c.expected_result.trim(),
-  }
-}
-
-/** 仅在新候选成功生成后替换旧候选，失败时保留人工编辑。 */
-async function runAiGenerateCases(replaceExisting = false) {
-  if (aiGen.value.generating || aiGen.value.applying) return
-  if (aiGen.value.sourceMode === 'text' && !aiGen.value.prdText.trim()) {
-    message.warning('请填写需求描述')
-    return
-  }
-  if (aiGen.value.sourceMode === 'file' && !aiGen.value.sourceDocId) {
-    message.warning('请先上传需求文件')
-    return
-  }
-  if (!strategyWeightsValid.value) {
-    message.warning('六策略百分比须为 0 到 100 的整数，合计 100%')
-    return
-  }
-  if (aiGen.value.candidates.length && !replaceExisting) {
-    dialog.warning({
-      title: '重新生成候选？',
-      content: '重新生成会覆盖已编辑的候选用例。',
-      positiveText: '覆盖并重新生成',
-      negativeText: '保留候选',
-      onPositiveClick: () => runAiGenerateCases(true),
-    })
-    return
-  }
-  aiGen.value.generating = true
-  const sourceMode = aiGen.value.sourceMode
-  const sourceText = aiGen.value.prdText.trim()
-  const sourceDocId = aiGen.value.sourceDocId
-  const count = aiGen.value.count
-  const weights = { ...aiGen.value.strategyWeights }
-  try {
-    let candidates: AiCaseCandidate[] = []
-    if (api.isMock()) {
-      await new Promise(resolve => setTimeout(resolve, 500))
-      const strats = STRATEGY_OPTIONS.filter(({ key }) => weights[key] > 0).map(({ label }) => label)
-      candidates = Array.from({ length: count }, (_, i) => ({
-        selected: true,
-        code: `TC-${String(i + 1).padStart(3, '0')}`,
-        name: `验证跨境交易场景下的测试用例 #${i + 1}`,
-        module: '收银支付',
-        feature_point: '跨境支付',
-        strategy: strats[i % strats.length],
-        priority: (i === 0 ? 'HX' : i % 2 === 0 ? 'FHX' : 'BJ') as CasePriority,
-        preconditions: '账户处于正常状态，绑卡成功',
-        stepsText: '1. 唤起收银台\n2. 选择外卡支付\n3. 完成 3DS 校验',
-        expected_result: '返回扣款成功回调并在 100ms 内推送账单流水。',
-      }))
-    } else {
-      const generated = await api.cases.generateCases({
-        source_text: sourceMode === 'text' ? sourceText : '',
-        ...(sourceMode === 'file' ? { source_doc_id: sourceDocId } : {}),
-        strategy_weights: weights,
-        max_count: count,
-      })
-      candidates = (generated as any[]).map((c, i) => ({
-        selected: true,
-        code: c.code || `TC-${String(i + 1).padStart(3, '0')}`,
-        name: c.name || c.question || '',
-        module: c.module || '通用',
-        feature_point: c.feature_point || '',
-        strategy: normalizeCaseStrategy(c.strategy),
-        priority: (c.priority as CasePriority) || 'HX',
-        preconditions: c.preconditions || c.precondition || '',
-        stepsText: Array.isArray(c.steps) ? c.steps.join('\n') : typeof c.steps === 'string' ? c.steps : '',
-        expected_result: c.expected_result || c.expected || c.reference || '',
-        source: c,
-      }))
-    }
-    if (!candidates.length) {
-      message.warning('未生成候选用例，请补充需求后重试')
-      return
-    }
-    aiGen.value.candidates = candidates
-    candidateVersion += 1
-    aiGen.value.appliedToSetId = ''
-    aiGen.value.target = 'new'
-    aiGen.value.step = 2
-  } catch (err: any) {
-    message.error(err.message || '推导用例失败')
-  } finally {
-    aiGen.value.generating = false
-  }
-}
-
-function toggleAllCandidates() {
-  if (aiGen.value.appliedToSetId || aiGen.value.applying || aiGen.value.generating) return
-  const target = aiSelectedCount.value < aiGen.value.candidates.length
-  aiGen.value.candidates.forEach(c => { c.selected = target })
-}
+// 生成工作台独立管理需求分析与候选，采纳沿用当前页面的草稿修订事务。
+const { aiGen, skills, skillsLoading, skillsError, candidateVersion,
+  loadSkills, openAiGenDrawer, uploadSourceFile, analyzeRequirements,
+  runAiGenerateCases, toggleAllCandidates } = useCaseGeneration()
 
 /** 把已追加行的后续编辑同步回候选；原草稿只在新草稿创建成功后移除本批行。 */
 function syncAppliedCandidateRows() {
@@ -2235,7 +1951,7 @@ async function commitAiCandidates() {
   if (aiGen.value.applying || aiGen.value.generating) return
   const selected = aiGen.value.candidates.filter(c => c.selected)
   if (!selected.length) return
-  const batch = candidateVersion
+  const batch = candidateVersion.value
   aiGen.value.applying = true
   try {
     if (aiGen.value.target === 'new' && (!aiGen.value.appliedToSetId || aiGen.value.rehomePending)) {
@@ -2256,7 +1972,7 @@ async function commitAiCandidates() {
       caseSets.value.unshift(created)
       const root = folders.value.find(folder => folder.id === 'cases')
       if (root) root.items = caseSets.value
-      if (batch === candidateVersion) {
+      if (batch === candidateVersion.value) {
         aiGen.value.candidates = []
         aiGen.value.show = false
       }
@@ -2310,7 +2026,7 @@ async function commitAiCandidates() {
     aiGen.value.rehomePending = false
     aiGen.value.appliedCaseIds = []
     aiGen.value.appliedBaseSnapshot = ''
-    if (batch === candidateVersion) {
+    if (batch === candidateVersion.value) {
       aiGen.value.candidates = []
       aiGen.value.show = false
     }
@@ -2355,11 +2071,27 @@ onUnmounted(() => {
   color: var(--text-primary);
 }
 
+.workbench-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 4px 2px 18px; flex-shrink: 0; }
+.workbench-header h1 { margin: 0 0 5px; font-size: 21px; }
+.workbench-header p { margin: 0; color: var(--text-secondary); font-size: 12px; }
+.workbench-tabs { display: flex; padding: 4px; background: var(--bg-elevated); border: 1px solid var(--border-subtle); border-radius: 10px; }
+.workbench-tabs button { border: 0; background: transparent; color: var(--text-secondary); border-radius: 7px; padding: 9px 15px; font: inherit; cursor: pointer; white-space: nowrap; }
+.workbench-tabs button.active { background: var(--t-agent); color: var(--c-agent); font-weight: 600; }
+@media (max-width: 760px) { .workbench-header { align-items: flex-start; flex-direction: column; } .workbench-tabs { align-self: stretch; } .workbench-tabs button { flex: 1; } }
+
+.library-status { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 10px; }
+.library-status button { padding: 5px 7px; border: 0; border-radius: 6px; background: transparent; color: var(--text-secondary); font: inherit; font-size: 11px; cursor: pointer; }
+.library-status button.active { background: var(--t-agent); color: var(--c-agent); }
+.library-status span { font-variant-numeric: tabular-nums; opacity: .8; }
+.case-evidence { padding: 12px; background: var(--bg-elevated); border-radius: 8px; margin-bottom: 14px; font-size: 12px; }
+.case-evidence p { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.7; }
+
 /* ─── 布局骨架 ─── */
 .nordic-layout {
   display: grid;
   grid-template-columns: var(--tree-w, 280px) minmax(0, 1fr);
-  height: 100%;
+  flex: 1;
+  min-height: 0;
   min-width: 0;
   background: var(--bg-main);
   border-radius: 12px;
@@ -3231,148 +2963,6 @@ onUnmounted(() => {
   margin-top: 8px;
 }
 
-/* ─── 抽屉内样式 ─── */
-.drawer-step-bar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 22px;
-  padding-bottom: 16px;
-  border-bottom: 1px solid #E7E7E2;
-}
-.step-badge {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font-size: 13.5px;
-  color: #A1A1AA;
-}
-.step-badge.active {
-  color: #1E293B;
-  font-weight: 600;
-}
-.step-badge.done {
-  color: #15803D;
-}
-.step-idx {
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background: #F4F4F0;
-  display: grid;
-  place-items: center;
-  font-size: 11px;
-  font-family: var(--font-mono);
-}
-.step-badge.active .step-idx {
-  background: #1E293B;
-  color: #FFFFFF;
-}
-.step-badge.done .step-idx {
-  background: #15803D;
-  color: #FFFFFF;
-}
-.step-divider-line {
-  flex: 1;
-  height: 1px;
-  background: #E7E7E2;
-}
-
-.drawer-body {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.divider-title {
-  font-size: 13px;
-  font-weight: 600;
-  color: #71717A;
-  margin: 8px 0 3px;
-}
-
-.candidate-targets {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 12px;
-}
-.candidate-target {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 13px;
-}
-.strategy-weight-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px 16px;
-}
-.strategy-weight-field {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 13px;
-}
-.strategy-weight-field span:first-child { min-width: 58px; }
-.strategy-weight-field input {
-  width: 78px;
-  padding: 5px 8px;
-  border: 1px solid var(--border-default);
-  border-radius: 5px;
-  background: var(--bg-main);
-  color: var(--text-primary);
-}
-.strategy-weight-error { color: var(--accent-error); }
-.source-file-input { display: none; }
-.candidate-list {
-  max-height: 420px;
-  overflow-y: auto;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.candidate-card {
-  padding: 12px;
-  border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  background: var(--bg-main);
-}
-.candidate-card-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 12px;
-}
-.candidate-card-head label {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  font-weight: 600;
-}
-.candidate-fields {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-  margin: 0;
-  padding: 0;
-  border: 0;
-  min-width: 0;
-}
-.candidate-wide { grid-column: 1 / -1; }
-@media (max-width: 540px) {
-  .strategy-weight-grid { grid-template-columns: 1fr; }
-  .candidate-fields { grid-template-columns: 1fr; }
-  .candidate-wide { grid-column: auto; }
-}
-
-.drawer-footer-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-}
-
 /* ─── 底部固定分页工具栏 (Table Pagination Bar) ─── */
 .table-pagination-bar {
   display: flex;
@@ -3533,15 +3123,6 @@ onUnmounted(() => {
   .toolbar-default > .grow { display: none; }
   .keyboard-flow-hint {
     display: none;
-  }
-}
-@media (max-width: 540px) {
-  .drawer-footer-row {
-    flex-wrap: wrap;
-    gap: 10px;
-  }
-  .drawer-footer-row > .row {
-    flex-wrap: wrap;
   }
 }
 </style>

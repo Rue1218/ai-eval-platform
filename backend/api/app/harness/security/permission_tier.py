@@ -22,7 +22,7 @@ DEFAULT_TIER = TIER1
 # 恒自动（只读 + 交互/业务确认，后者走各自卡片，不叠加审批）。
 _ALWAYS_AUTO = frozenset(
     {
-        "read", "read_image", "glob", "grep", "history.read",
+        "read", "read_image", "glob", "grep", "history.read", "case.skill",
         "ask_user_question", "task.create", "task.status", "task.cancel", "task",
         "agent.list", "agent.spawn", "agent.status", "agent.wait", "agent.result", "agent.cancel",
     }

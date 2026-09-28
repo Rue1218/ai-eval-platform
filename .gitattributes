@@ -6,3 +6,5 @@ Dockerfile text eol=lf
 *.yaml text eol=lf
 *.conf text eol=lf
 *.py text eol=lf
+# 上游 Skill 原件按字节保留，避免 Windows 换行转换破坏固定版本的 SHA-256 校验。
+backend/shared/case_skills/upstream/** -text

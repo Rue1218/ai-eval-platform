@@ -1,15 +1,15 @@
 # AI 测试与评估平台 — API 契约
 
-> ⚠️ **当前接口边界（2026-09-28）**：仅测试用例生成任务可新建和重跑；Benchmark、RAG 评测与压测写入口停用，历史任务和报告只读保留。本文旧评测字段与示例仅用于解释历史数据；冲突时以 §3.8、§3.10、§5 当前契约及 V2.34–V2.37 修订为准。
+> ⚠️ **当前接口边界（2026-09-28）**：仅测试用例生成任务可新建和重跑；Benchmark、RAG 评测与压测写入口停用，历史任务和报告只读保留。本文旧评测字段与示例仅用于解释历史数据；冲突时以 §3.8、§3.10、§5 当前契约及 V2.34–V2.39 修订为准。
 >
 > **文档维护提示（2026-09-11）**：部分章节含已删除模块的历史引用（如 `agent/react.py`、`plan_solve.py`）；当前实现与接口以 `AGENTS.md` 状态地图及本文最新修订为准。
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V2.37 |
-| 本轮审查日期 | 2026-09-28（用例生成与审核工作台重构） |
+| 文档版本 | V2.39 |
+| 本轮审查日期 | 2026-09-28（用例工作台重构与开源 Skill 渐进披露） |
 | WS v2 修订日期 | 2026-09-26（§4A，摘要安全用量元数据与 v2.3 目录） |
-| 对应 PRD | V1.55（功能唯一权威） |
+| 对应 PRD | V1.57（功能唯一权威） |
 | 对应设计规范 | V1.12（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.7.15（AgentLoop 单入口；JSON 仍以本文为准） |
 | 对应前端计划 | AgentLoop 前端计划 V0.5 |
@@ -3890,3 +3890,37 @@ Excel 导入在本批缓存已写入但尚未 flush 的用例，重复编号按�
 - `backend/api/app/harness/execution/registry.py`、`harness/orchestration/{confirm,confirm_spec}.py`、`agent/workflow_nodes.py`、`agent/expert_prompts/testcase_agent.md`、`harness/skills/files/skill-testcase/SKILL.md`、`backend/worker/app/testcase.py`：Agent 可见参数、确认卡与 Workflow 透传及 Worker 按任务快照和输出预算生成。
 - `frontend/src/views/Cases.vue`、`frontend/src/api/http.ts`：候选审核、来源文档、六策略百分比配置、草稿采纳、完整编辑及自检展示。
 - 对应 API、Worker 与前端测试：验证失败无副作用、策略与数量传递、保存冲突和人工审核流程。
+
+## V2.38 用例生成空正文与任务状态一致性（2026-09-28）
+
+- API 用例生成与 Worker 对支持显式思考开关的 DeepSeek Flash / V4 Flash / V4 Pro 使用非思考输出，避免默认思考耗尽正文预算。Chat、Messages 使用 `thinking.type=disabled`，Responses 使用 `reasoning.effort=none`；未知型号不新增该参数，模型名内嵌网关参数时不覆盖。显式开启思考的对话请求保留调用方选择。
+- Chat / Messages 的生成响应根据 `finish_reason` / `stop_reason` 区分长度截断、拒绝、仅思考与空正文；统一返回安全中文 `UPSTREAM` 错误，不回显上游原文或思考内容。截断响应即使含可解析片段也不生成候选或草稿；不自动重放模型请求。Responses 的不完整响应继续由现有适配器拒绝。
+- Agent 任务卡及回答上方的“任务最新状态”按任务 ID 消费持久事实，历史模型回答保持原文并明确标注其时间语义。`task.end` 后的迟到进度不得覆盖终态和原因，报告关联可继续补齐。终态隐藏进度条；用例草稿入口通过 `/cases?task_id=...` 关联已有生成结果。浅色/深色主题分别使用对应卡片背景和文字颜色；REST 与 WS 字段不变。
+
+### 修改代码文件与作用清单
+
+- `backend/shared/{reasoning,casegen}.py`、`backend/api/app/{adapters,responses_adapter}.py`、`backend/worker/app/protocol.py`：支持型号的非思考参数与安全输出诊断。
+- `backend/api/app/routers/cases.py`、`backend/worker/app/testcase.py`：统一失败判断，不写入空或截断草稿。
+- `frontend/src/agent/loop/{reducer,taskPresentation}.ts`、`frontend/src/components/agent/loop/{AgentWorkspace,TaskRunCard}.vue`：终态保护、最新任务状态、用例入口与主题样式。
+- 对应 API、Worker、前端单测及 Agent 浏览器回归：验证三协议参数、失败落库、迟到进度和主题可读性。
+
+
+## V2.39 用例 Skill 分阶段生成契约（2026-09-28）
+
+登录鉴权与来源文件属主校验沿用用例接口；固定路由声明在 `/{set_id}` 之前。
+
+| 接口 | 请求及返回 |
+| --- | --- |
+| `GET /api/case-sets/generation-skills` | 返回 `items[{id,name,description,version,license,source_url}]`，只读入口头部，不读正文及参考资料。当前注册 ID 为 `functional-test-design`。 |
+| `POST /api/case-sets/ai-design` | 请求 `source_text` 或 `source_doc_id`（文件优先），可选 `skill_id`。加载 workflow/design，返回 `design`、`skill`、`loaded_sections`；只生成预览，不创建任务或用例集。 |
+| `POST /api/case-sets/ai-generate` | 原有来源、`max_count`、`strategy_weights` 保留，新增可选 `skill_id` 与 `design`。返回 `items` 和 `skill`；旧客户端不传 design 时兼容直接生成。 |
+
+`design` 包含服务端计算的 `source_digest`（实际使用的前 20000 字符 SHA-256）、`summary`（≤2000 字）、`questions/assumptions`（各≤20 项，每项≤1000 字）及 `test_points`（1–24 项）。每个测试点含唯一 `id=TP-NNN`、必填 `title`（≤200）、`module`（≤100）、必填 `source_quote`（≤1000）、`risk=high|medium|low`、`expected/constraints`（各≤2000）、`strategies`（1–6 个已知英文策略）。首次模型编号由平台重建；人工可调整设计并只提交所选测试点。来源哈希与连续原文引用在生成前复验，不匹配报 VALIDATION，且不调用模型。模型设计不可解析或引用不存在报安全 UPSTREAM。
+
+生成阶段加载 workflow/cases；有边界或等价类权重才加载 inputs，有状态或场景权重才加载 flows。按最大余数法分配策略整数配额，配额总和等于目标条数，零权重不分配。带 design 的候选必须引用所选 `test_point_id`；未知关联被剔除，重复用例去重，`requirement_quote/risk` 由确认设计回填而非信任模型。全部被过滤则报 UPSTREAM。上述字段随业务扩展列保存并导出。
+
+技能入口、所需参考文件缺失或入口元信息损坏时，目录、分析和生成接口返回 `INTERNAL`，提示管理员检查技能资源；分析和生成在调用模型前完成资源检查。Excel 导出将用例内容、需求引用及自定义列标题按字面文本保存，即使以 `=` 开头也不解释为公式。
+
+对话工具 `case.skill({section?})` 默认为 catalog，只接受 `catalog|workflow|design|cases|inputs|flows|review` 枚举，不能传入任意文件路径。general/testcase Agent 可按需读取；`task.create` 仍只入队。Worker 顺序执行需求分析和用例生成，共享原有 280 秒调用总时限，阶段间复验取消/租约；最终草稿和任务结果保存设计及 Skill 来源信息。任务不因拆分阶段自动重试，确认入库契约不变。
+
+修改代码文件与作用清单：`shared/case_skill.py` 与 `shared/case_skills/**` 注册固定版本 Skill 和分层资源；`shared/case_design.py` 约束测试设计、来源与候选关联；`shared/casegen.py` 共用 Skill 提示词及整数配额；API `schemas.py/routers/cases.py` 新增设计及目录接口；Harness `registry.py/registry_handlers.py/permission_tier.py` 和 Agent 白名单接入只读分层工具；Worker `testcase.py` 接入两阶段调用；前端 `api/{types,http}.ts` 同步契约。详见《AI测试与评估平台-用例Skill二次开发》。

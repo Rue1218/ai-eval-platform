@@ -121,6 +121,61 @@ async function setup(page: Page, holdNewReplay = false) {
   return {commands,sessionCreates,get submits(){return submit},get uploading(){return !!releaseUpload},release:()=>releaseUpload?.(),replay:()=>releaseReplay?.(),holdReplay:()=>{holdReplay=true},sockets,closed,requests}
 }
 
+test('异步用例失败刷新总结状态并保持任务卡片清晰', async ({page}, testInfo) => {
+  await page.setViewportSize({width:1440,height:1000})
+  const ctx = await setup(page)
+  await expect.poll(() => ctx.sockets.has('s')).toBe(true)
+  let cursor = 0
+  const correlation = {turn:1,turn_id:'s:1',step:1,attempt_id:'task-a',call_id:'task-call'}
+  const send = (type: string, data: Record<string, unknown>, c: Record<string, unknown> = correlation) => ctx.sockets.get('s').send(JSON.stringify({
+    protocol_version:2,type,durability:'persistent',cursor:++cursor,session_id:'s',
+    ts:'2026-09-28T00:00:00Z',correlation:c,data,
+  }))
+  send('turn.start',{})
+  send('tool.call',{name:'task.status',display:{arguments_preview:'{"task_id":"generated-task"}'}})
+  send('tool.result',{name:'task.status',status:'succeeded',display:{result_preview:'{"task_id":"generated-task","kind":"testcase","status":"running"}'}})
+  send('task.progress',{status:'running',progress:{percent:8,message:'正在生成用例'}},{task_id:'generated-task'})
+  send('assistant.start',{})
+  send('assistant.message',{content:'任务正在运行，用例草稿还没产出。'})
+  send('assistant.end',{outcome:'committed'})
+  send('turn.end',{reason:'completed'})
+  const latest = page.getByRole('status',{name:'任务最新状态'})
+  const card = page.locator('.task-run-card')
+  await expect(latest).toContainText('执行中')
+  await expect(card.getByRole('progressbar')).toBeVisible()
+  // 浅色主题的标题背景不能被未限定的深色规则覆盖。
+  await expect(card.locator('.task-run-summary')).toHaveCSS('background-color','rgb(244, 251, 247)')
+  send('task.progress',{progress:{message:'模型返回空正文，未生成用例'}},{task_id:'generated-task'})
+  send('task.end',{status:'failed'},{task_id:'generated-task'})
+  send('task.progress',{status:'running',progress:{percent:45,message:'迟到进度'}},{task_id:'generated-task'})
+  await expect(latest).toContainText('执行失败')
+  await expect(latest).toContainText('模型返回空正文')
+  await expect(latest).toContainText('下方为回答生成时的说明')
+  await expect(latest.getByRole('link',{name:'查看任务'})).toHaveAttribute('href','/tasks?id=generated-task')
+  await expect(card.locator('.task-run-outcome')).toContainText('模型返回空正文')
+  await expect(card.getByRole('progressbar')).toHaveCount(0)
+  await expect(page.getByText('任务正在运行，用例草稿还没产出。',{exact:true})).toBeVisible()
+  await page.screenshot({path:testInfo.outputPath('task-failed-light.png')})
+  // 深色模式仍应获得匹配的背景与前景颜色。
+  await page.getByTitle('切换深色模式').click()
+  await expect(card.locator('.task-run-summary')).toHaveCSS('background-color','rgb(23, 51, 37)')
+  await expect(card.locator('.task-run-title strong')).toHaveCSS('color','rgb(229, 247, 236)')
+  await page.screenshot({path:testInfo.outputPath('task-failed-dark.png')})
+  // 新一轮生成另一份草稿，最新状态和入口只关联到对应任务。
+  Object.assign(correlation,{turn:2,turn_id:'s:2',attempt_id:'draft-a',call_id:'draft-call'})
+  send('turn.start',{})
+  send('tool.result',{name:'task.create',status:'succeeded',display:{result_preview:'{"task_id":"draft-task","kind":"testcase","status":"queued"}'}})
+  send('task.progress',{status:'awaiting_case_confirm'},{task_id:'draft-task'})
+  send('assistant.start',{})
+  send('assistant.message',{content:'新的用例已生成。'})
+  send('assistant.end',{outcome:'committed'})
+  send('turn.end',{reason:'completed'})
+  await expect(latest).toHaveCount(2)
+  await expect(latest.first()).toContainText('执行失败')
+  await expect(latest.last()).toContainText('等待用例确认')
+  await expect(latest.last().getByRole('link',{name:'查看用例草稿'})).toHaveAttribute('href','/cases?task_id=draft-task')
+})
+
 test('工作台初始化不再预加载旧栈偏好、模型和确认卡选项', async ({page}) => {
   const ctx = await setup(page)
   await page.getByRole('textbox',{name:'消息'}).fill('初始化后可发送')

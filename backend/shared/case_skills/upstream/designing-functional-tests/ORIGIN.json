@@ -1,0 +1,12 @@
+{
+  "repository": "https://github.com/jaktestowac/awesome-copilot-for-testers",
+  "commit": "8910672e674853caf0e68dbffc59c39869990203",
+  "path": "skills/designing-functional-tests",
+  "license": "MIT",
+  "files_sha256": {
+    "SKILL.md": "61fb2fadba309743b72f51576b3d622ea5d2db0f589ee4ca031efeb482d57e73",
+    "resources/manual-test-cases-template.md": "877a989ceb13420e514bd5f301145412b6c5413042b1db4740fecf8ac37b9e77",
+    "resources/test-plan-template.md": "1577c16a8633389504e0c229a115b4c18d134b255c3a07d1a1474760678ba2bb",
+    "LICENSE": "e32449d23085399adc1222f7a17408b730550258e51627c153cb108ca9955823"
+  }
+}

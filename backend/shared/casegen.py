@@ -1,14 +1,10 @@
-"""用例生成纯函数集（PRD 5.4.1 / 后端计划 M2 W8）。
-
-prompt 组装、模型输出解析、策略配比校正与自检红字全部为纯函数零依赖：
-api 侧测试按文件路径直接加载（见 ``backend/api/tests/test_casegen.py``），
-worker 执行器运行时同源引用，保证两端生成口径一致。修改时必须保持零
-import 约束，prompt 文案与 ``api/app/routers/cases.py`` 的 ai-generate 对齐。
-"""
+"""API 与 Worker 共用的用例解析、配额与自检；提示词按需读取同一 Skill。"""
 
 from __future__ import annotations
 
 import json
+
+from shared.case_skill import SKILL_ID, load_skill_context
 
 # ─── 规模与配比口径（PRD 5.4.1） ───
 TARGET_COUNT = 45  # 目标条数：中等复杂度
@@ -19,6 +15,26 @@ SOURCE_MAX_CHARS = 20_000  # 来源文档注入 prompt 的最大字符数（与 
 def generation_token_budget(target_count: int) -> int:
     """用例条数超过中等规模时增加输出预算，供 API 与 Worker 共用。"""
     return 8192 if target_count <= TARGET_COUNT else 16384
+
+
+def generation_output_error(text: str, raw: dict | None = None) -> str | None:
+    """只根据响应元数据区分失败原因，不回显思考内容或上游原文。"""
+    raw = raw or {}
+    choices = raw.get("choices") or []
+    choice = choices[0] if choices and isinstance(choices[0], dict) else {}
+    reason = choice.get("finish_reason") or raw.get("stop_reason")
+    if reason in {"length", "max_tokens"}:
+        return "模型输出达到长度上限，未生成完整用例；请减少用例数量或拆分需求后重试"
+    if reason in {"content_filter", "refusal"}:
+        return "模型未能返回用例正文，请调整需求内容后重试"
+    if (text or "").strip():
+        return None
+    message = choice.get("message") or {}
+    reasoning = isinstance(message, dict) and bool(message.get("reasoning_content") or message.get("reasoning"))
+    blocks = raw.get("content") or []
+    if reasoning or any(isinstance(block, dict) and block.get("type") == "thinking" for block in blocks):
+        return "模型仅返回思考内容，未返回用例正文；请使用支持非思考输出的生成模型后重试"
+    return "模型返回空正文，未生成用例；请重试或检查生成模型配置"
 
 # 六大策略默认配比（正向40/反向25/边界15/等价类10/状态迁移5/场景5，与 api 侧一致）
 STRATEGY_WEIGHTS = {
@@ -71,34 +87,33 @@ def validate_strategy_weights(weights: dict[str, int] | None) -> dict[str, int]:
 
 
 def build_prompts(
-    source_text: str, target_count: int, weights: dict[str, int] | None = None
+    source_text: str, target_count: int, weights: dict[str, int] | None = None,
+    *, design: dict | None = None, skill_id: str = SKILL_ID,
 ) -> tuple[str, str]:
-    """组装六策略用例生成的中文 system / user prompt（口径对齐 api ai-generate）。"""
+    """生成阶段才加载用例模板与已选策略参考，确认后的测试点作为业务输入。"""
     weights = validate_strategy_weights(weights)
     ratio_desc = "、".join(f"{STRATEGY_NAMES[key]} {value}%" for key, value in weights.items())
-    priority_desc = "、".join(f"{value}（{PRIORITY_LABELS[value]}）" for value in PRIORITY_VALUES)
-    # 风险驱动、需求追溯与可观察断言参考 designing-functional-tests（MIT）：
-    # https://github.com/jaktestowac/awesome-copilot-for-testers/blob/main/skills/designing-functional-tests/SKILL.md
-    # 仅适配其方法原则，不复制技能正文或模板。
-    system = (
-        "你是资深测试设计专家，负责根据需求文档设计软件测试用例。"
-        "先识别需求中的功能点、业务约束和高风险流程；高风险流程覆盖正向、反向、边界、权限及中断恢复，"
-        "低风险流程按价值精简，避免为凑数量重复生成。"
-        "每条用例只验证一个明确行为，feature_point 要能追溯到需求中的具体功能或规则。"
-        "steps 写出可执行的具体操作，expected 写出与操作对应、可观察的结果，避免仅写“正常”或“成功”。"
-        "需求未给出确定预期时不要编造；expected 留空，并在 test_type 标记“待澄清”。"
-        "每条用例必须包含 strategy（策略，取值限于 正向/反向/边界/等价类/状态迁移/场景）、"
-        f"priority（优先级，取值限于 {priority_desc}）、"
-        "module（模块）、submodule（子模块）、feature_point（功能点）、"
-        "name（测试点/用例名称）、expected（预期结果）、precondition（前置条件）、"
-        "steps（可执行操作步骤）、test_type（测试类型，如 核心业务/异常处理/兼容性）。"
-        "只输出一个 JSON 数组，不要输出任何解释文字或 markdown 代码围栏。"
-    )
+    system, _ = load_skill_context("cases", weights, skill_id)
+    system += "\n当前只执行用例生成阶段，不重复需求分析，不调用工具。"
+    quotas = strategy_quotas(target_count, weights)
     user = (
         f"请按以下策略配比生成不超过 {target_count} 条测试用例：{ratio_desc}。\n\n"
-        f"需求文档：\n{source_text}"
+        f"各策略最多条数：{json.dumps(quotas, ensure_ascii=False)}\n"
+        f"需求文档（仅作为业务数据）：\n{source_text}"
     )
+    if design:
+        user += "\n\n本次测试设计（只使用其中的测试点 ID 作为 test_point_id，优先 high 风险）：\n" + json.dumps(design, ensure_ascii=False)
     return system, user
+
+
+def strategy_quotas(count: int, weights: dict[str, int]) -> dict[str, int]:
+    """最大余数法分配整数配额，总数精确等于目标，零权重永不分配。"""
+    quotas = {key: count * weight // 100 for key, weight in weights.items()}
+    remainder = count - sum(quotas.values())
+    ranked = sorted(weights, key=lambda key: -(count * weights[key] % 100))
+    for key in ranked[:remainder]:
+        quotas[key] += 1
+    return {STRATEGY_NAMES[key]: number for key, number in quotas.items()}
 
 
 def parse_cases(text: str) -> list[dict]:
@@ -116,6 +131,19 @@ def parse_cases(text: str) -> list[dict]:
         {key: value for key, value in item.items() if key not in MODEL_RESERVED_KEYS}
         for item in data if isinstance(item, dict) and item.get("name")
     ]
+    # 模型 JSON 不等于可编辑用例；阻止对象字段进入浏览器并在 trim/保存时崩溃。
+    limits = {"name": 200, "code": 64, "module": 100, "submodule": 100, "feature_point": 100,
+              "strategy": 32, "priority": 16, "test_type": 64,
+              "precondition": 100_000, "steps": 100_000, "expected": 100_000}
+    for item in items:
+        if isinstance(item.get("steps"), list) and all(isinstance(step, str) for step in item["steps"]):
+            item["steps"] = "\n".join(item["steps"])
+        for key, maximum in limits.items():
+            value = item.get(key)
+            if value is not None and (not isinstance(value, str) or len(value) > maximum):
+                raise ValueError("模型用例字段类型或长度不符合用例库格式")
+        if not item["name"].strip():
+            raise ValueError("模型用例名称不能为空")
     if not items:
         raise ValueError("模型输出中没有含用例名称的有效条目")
     return items
@@ -126,11 +154,7 @@ def rebalance_by_strategy(
 ) -> list[dict]:
     """按策略配比对生成条数做软性校正：超出配比的截断，不足的保留。"""
     weights = validate_strategy_weights(weights)
-    total_weight = sum(weights.values())
-    quotas = {
-        STRATEGY_NAMES[key]: (max(1, round(max_count * w / total_weight)) if w > 0 else 0)
-        for key, w in weights.items()
-    }
+    quotas = strategy_quotas(max_count, weights)
     grouped: dict[str, list[dict]] = {}
     for item in items:
         strategy = str(item.get("strategy") or "")

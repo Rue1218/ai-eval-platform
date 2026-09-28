@@ -67,7 +67,7 @@ EXPERTS: tuple[ExpertDef, ...] = (
         description="根据需求发起测试用例生成任务，在「用例」页审核生成的草稿。",
         badge="用例设计",
         prompt_file="testcase_agent.md",
-        allowed_tools=("read", "write", "edit", "bash", "ask_user_question", "task.create", "task.status", "history.read"),
+        allowed_tools=("read", "write", "edit", "bash", "ask_user_question", "case.skill", "task.create", "task.status", "history.read"),
     ),
     ExpertDef(
         expert_id="benchmark-designer", name="基准设计专家", badge="基准设计",

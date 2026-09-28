@@ -19,15 +19,19 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from datetime import timedelta
 from pathlib import Path
 
+from shared.case_design import TRACE_COLUMNS, design_prompts, parse_design, trace_cases
+from shared.case_skill import skill_metadata
 from shared.casegen import (
     MAX_COUNT,
     MODEL_RESERVED_KEYS,
     SOURCE_MAX_CHARS,
     TARGET_COUNT,
     build_prompts,
+    generation_output_error,
     generation_token_budget,
     parse_cases,
     rebalance_by_strategy,
@@ -55,7 +59,7 @@ from .task_state import claim_running_task_for_terminal_write, is_cancelled
 logger = logging.getLogger("worker.testcase")
 
 # ─── 超时与确认窗口口径（PRD 5.4.1） ───
-LLM_TIMEOUT_S = 280.0  # 单次 LLM 调用超时；总预算 5 分钟留 20s 落库余量
+LLM_TIMEOUT_S = 280.0  # 分析与生成共享时限；总预算 5 分钟留 20s 落库余量
 CONFIRM_WINDOW_H = 72  # 确认窗口：72h 未确认由扫描器取消
 
 
@@ -203,35 +207,60 @@ def run_testcase(task_id: str) -> None:
             _fail(db, task, "VALIDATION", "未配置 Agent 协议档或未填写 API Key，无法生成用例")
             return
 
-        db.add(TaskEvent(task_id=task.id, event="progress", message="正在按六策略生成用例"))
+        db.add(TaskEvent(task_id=task.id, event="progress", message="正在加载测试设计技能并分析需求"))
         db.commit()
-        push_ws(task.session_id, "progress", {"percent": 20, "done": 0, "total": 1, "message": "正在生成用例"}, task_id=task.id)
+        push_ws(task.session_id, "progress", {"percent": 10, "done": 0, "total": 2, "message": "正在分析需求与测试点"}, task_id=task.id)
 
         # P4-2 取消传播：发起 LLM 调用前检查任务是否已取消（避免烧 token）
         if is_cancelled(db, task.id):
             logger.info("testcase task %s cancelled before LLM call, skip", task_id)
             return
 
-        system, user = build_prompts(source_text, max_count, weights=weights)
+        # 两阶段共享原有总调用时限；不因拆分阶段而放大 Worker 时间预算。
+        deadline = time.monotonic() + LLM_TIMEOUT_S
+        connection = dict(protocol=profile.protocol, base_url=base_url,
+                          full_url=read_profile_env(profile.id).full_url, model=model,
+                          api_key=api_key, anthropic_version=profile.anthropic_version)
+        design_system, design_user = design_prompts(source_text)
+        try:
+            analysis = call_protocol(**connection, system=design_system,
+                                     messages=[{"role": "user", "content": design_user}],
+                                     temperature=0.2, max_tokens=8192, timeout_s=min(120.0, LLM_TIMEOUT_S))
+            error = generation_output_error(analysis.text, getattr(analysis, "raw", None))
+            if error:
+                _fail(db, task, "UPSTREAM", error)
+                return
+            design = parse_design(analysis.text, source_text)
+        except ProtocolCallError as exc:
+            _fail(db, task, exc.code, f"需求分析失败：{exc.message}")
+            return
+        except (ValueError, TypeError):
+            _fail(db, task, "UPSTREAM", "需求分析未返回有效测试点与原文依据，请补充需求后重试")
+            return
+        if is_cancelled(db, task.id):
+            return
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            _fail(db, task, "TIMEOUT", "需求分析已达到生成时限，请拆分需求后重试")
+            return
+        push_ws(task.session_id, "progress", {"percent": 40, "done": 1, "total": 2,
+                "message": f"已分析 {len(design['test_points'])} 个测试点，正在按所选策略生成用例"}, task_id=task.id)
+        system, user = build_prompts(source_text, max_count, weights=weights, design=design)
         try:
             result = call_protocol(
-                protocol=profile.protocol,
-                base_url=base_url,
-                full_url=read_profile_env(profile.id).full_url,
-                model=model,
-                api_key=api_key,
+                **connection,
                 messages=[{"role": "user", "content": user}],
                 system=system,
                 temperature=0.3,
                 max_tokens=generation_token_budget(max_count),
-                anthropic_version=profile.anthropic_version,
-                timeout_s=LLM_TIMEOUT_S,
+                timeout_s=remaining,
             )
         except ProtocolCallError as exc:
             _fail(db, task, exc.code, f"用例生成失败：{exc.message}")
             return
-        if not (result.text or "").strip():
-            _fail(db, task, "UPSTREAM", "模型返回空内容，用例生成失败")
+        output_error = generation_output_error(result.text, getattr(result, "raw", None))
+        if output_error:
+            _fail(db, task, "UPSTREAM", output_error)
             return
 
         # ─── 解析与规模闸门 ───
@@ -246,7 +275,7 @@ def run_testcase(task_id: str) -> None:
                 f"生成 {len(cases)} 条超过上限 {MAX_COUNT} 条，请拆分需求文档后重新发起",
             )
             return
-        cases = rebalance_by_strategy(cases, max_count, weights=weights)
+        cases = rebalance_by_strategy(trace_cases(cases, design), max_count, weights=weights)
         if not cases:
             _fail(db, task, "UPSTREAM", "模型输出经配比校正后无有效用例")
             return
@@ -267,6 +296,7 @@ def run_testcase(task_id: str) -> None:
             confirmed_count=0,
             checks=selfcheck(cases),
             expires_at=expires_at,
+            column_schema=[{"key": key, "name": name, "type": "text"} for key, name in TRACE_COLUMNS.items()],
         )
         db.add(case_set)
         db.flush()
@@ -274,7 +304,8 @@ def run_testcase(task_id: str) -> None:
 
         task.status = "awaiting_case_confirm"
         task.progress = {"percent": 100, "done": len(cases), "total": len(cases), "message": "用例已生成，等待确认入库"}
-        task.result = {"case_set_id": case_set.id, "generated_count": len(cases)}
+        task.result = {"case_set_id": case_set.id, "generated_count": len(cases),
+                       "design": design, "skill": skill_metadata()}
         db.add(
             TaskEvent(
                 task_id=task.id,

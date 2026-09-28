@@ -12,6 +12,7 @@ async function setup(page: Page) {
   const saves: { id: string; cases: Record<string, unknown>[]; expected_revision: number; column_schema: Record<string, unknown>[] }[] = []
   const confirms: string[] = []
   const generations: Record<string, unknown>[] = []
+  const analyses: Record<string, unknown>[] = []
   const candidateCreates: { name: string; cases: Record<string, unknown>[] }[] = []
   const imports: { id: string; mode: string | null; expectedRevision: string | null }[] = []
   const newImports: string[] = []
@@ -66,11 +67,25 @@ async function setup(page: Page) {
       }
       return route.fulfill({ json: { items: sets } })
     }
+    if (url.pathname === '/api/case-sets/generation-skills') return route.fulfill({ json: { items: [{
+      id: 'functional-test-design', name: '功能测试设计', description: '风险与需求驱动的人工用例设计',
+      version: '1.0.0', license: 'MIT', source_url: 'https://github.com/jaktestowac/awesome-copilot-for-testers',
+    }] } })
+    if (url.pathname === '/api/case-sets/ai-design') {
+      const payload = route.request().postDataJSON()
+      analyses.push(payload)
+      if (holds.has('design')) { held.design = route; return }
+      return route.fulfill({ json: { design: { source_digest: '0'.repeat(64), summary: '登录功能测试设计', questions: ['错误提示需确认'], assumptions: [],
+        test_points: [1, 2].map(i => ({ id: `TP-00${i}`, title: `登录测试点 ${i}`, module: '账户', risk: 'high',
+          expected: '进入工作台', constraints: '', source_quote: payload.source_text || '登录需求', strategies: ['positive', 'negative'] })) },
+        loaded_sections: ['workflow', 'design'] } })
+    }
     if (url.pathname === '/api/case-sets/ai-generate') {
       generations.push(route.request().postDataJSON())
       if (failGenerate) return route.fulfill({ status: 502, json: { code: 'UPSTREAM', message: '生成失败' } })
       if (holds.has('generate')) { held.generate = route; return }
-      return route.fulfill({ json: { items: [row('candidate', '生成候选')] } })
+      return route.fulfill({ json: { items: [{ ...row('candidate', '生成候选'), test_point_id: 'TP-001',
+        requirement_quote: '登录功能需求', risk: 'high' }] } })
     }
     if (url.pathname.startsWith('/api/tasks/')) {
       const status = url.pathname.endsWith('task-failed') ? 'failed' : url.pathname.endsWith('task-cancelled') ? 'cancelled' : 'running'
@@ -121,7 +136,7 @@ async function setup(page: Page) {
   })
   await page.goto('/tests/cases-audit-fixture.html')
   await expect(page.locator('.data-row')).toHaveCount(1)
-  return { saves, confirms, generations, candidateCreates, imports, newImports, held, holds, rows, sets,
+  return { saves, confirms, generations, analyses, candidateCreates, imports, newImports, held, holds, rows, sets,
     get createCalls() { return createCalls }, failSave: () => { failSave = true }, recoverSave: () => { failSave = false },
     failNewImport: () => { failNewImport = true },
     failCandidateCreate: () => { failCandidateCreate = true }, recoverCandidateCreate: () => { failCandidateCreate = false },
@@ -140,7 +155,8 @@ async function rename(page: Page, text: string, index = 0) {
 async function generateCandidate(page: Page) {
   await page.getByRole('button', { name: 'PRD 用例推导向导', exact: true }).click()
   await page.getByPlaceholder('粘贴需求文档段落、状态转移逻辑或 OpenAPI 规范...').fill('登录功能需求')
-  await page.getByRole('button', { name: '推导候选用例 →' }).click()
+  if (await page.getByRole('button', { name: '分析需求与测试点' }).isVisible()) await page.getByRole('button', { name: '分析需求与测试点' }).click()
+  await page.getByRole('button', { name: '生成候选用例' }).click()
   await expect(page.getByRole('textbox', { name: '候选 1 名称' })).toBeVisible()
 }
 
@@ -148,9 +164,10 @@ test('PRD 生成请求遵循真实后端字段契约', async ({ page }) => {
   const ctx = await setup(page)
   await page.getByRole('button', { name: 'PRD 用例推导向导', exact: true }).click()
   await page.getByPlaceholder('粘贴需求文档段落、状态转移逻辑或 OpenAPI 规范...').fill('测试登录需求')
-  await page.getByRole('button', { name: '推导候选用例 →' }).click()
+  if (await page.getByRole('button', { name: '分析需求与测试点' }).isVisible()) await page.getByRole('button', { name: '分析需求与测试点' }).click()
+  await page.getByRole('button', { name: '生成候选用例' }).click()
   await expect.poll(() => ctx.generations.length).toBe(1)
-  expect(Object.keys(ctx.generations[0]).sort()).toEqual(['max_count', 'source_text', 'strategy_weights'])
+  expect(Object.keys(ctx.generations[0]).sort()).toEqual(['design', 'max_count', 'skill_id', 'source_text', 'strategy_weights'])
   expect(ctx.generations[0].source_text).toBeTruthy()
   await page.getByLabel('追加到当前草稿「用例集A」').check()
   await page.getByRole('button', { name: '采纳并保存候选 (1 条)' }).click()
@@ -439,7 +456,8 @@ test('真实六策略候选可筛选且保存规范名称，旧策略别名兼�
     ['正向', '反向', '边界', '等价类', '状态迁移', '场景'].map((strategy, i) => ({ ...row(`candidate-${i}`, `${strategy}候选`), strategy })) } }))
   await page.getByRole('button', { name: 'PRD 用例推导向导', exact: true }).click()
   await page.getByPlaceholder('粘贴需求文档段落、状态转移逻辑或 OpenAPI 规范...').fill('测试六策略需求')
-  await page.getByRole('button', { name: '推导候选用例 →' }).click()
+  if (await page.getByRole('button', { name: '分析需求与测试点' }).isVisible()) await page.getByRole('button', { name: '分析需求与测试点' }).click()
+  await page.getByRole('button', { name: '生成候选用例' }).click()
   await page.getByLabel('追加到当前草稿「用例集A」').check()
   await page.getByRole('button', { name: '采纳并保存候选 (6 条)' }).click()
   await expect(page.getByText('✓ 6 大策略完备覆盖')).toBeVisible()
@@ -524,7 +542,7 @@ test('当前草稿保存失败后可重试，候选不重复追加', async ({ pa
   await expect.poll(() => ctx.saves.length).toBe(1)
   await expect(page.getByRole('button', { name: '重试保存候选' })).toBeVisible()
   await expect(page.getByRole('textbox', { name: '候选 1 名称' })).toBeDisabled()
-  await page.locator('.n-drawer').getByRole('button', { name: '取消', exact: true }).click()
+  await page.getByRole('button', { name: '返回用例库', exact: true }).click()
   await page.getByRole('button', { name: 'PRD 用例推导向导', exact: true }).click()
   await expect(page.getByLabel('追加到当前草稿「用例集A」')).toBeChecked()
   await expect(page.getByRole('button', { name: '重试保存候选' })).toBeVisible()
@@ -551,14 +569,15 @@ test('已编辑候选关闭后重开仍保留，重新生成需确认覆盖', as
   await setup(page)
   await generateCandidate(page)
   await page.getByRole('textbox', { name: '候选 1 名称' }).fill('人工修订的候选')
-  await page.locator('.n-drawer').getByRole('button', { name: '取消', exact: true }).click()
+  await page.getByRole('button', { name: '返回用例库', exact: true }).click()
   await page.getByRole('button', { name: 'PRD 用例推导向导', exact: true }).click()
   await expect(page.getByRole('textbox', { name: '候选 1 名称' })).toHaveValue('人工修订的候选')
-  await page.getByRole('button', { name: '← 返回调整 PRD' }).click()
-  await page.getByRole('button', { name: '推导候选用例 →' }).click()
+  await page.getByRole('button', { name: '返回测试设计' }).click()
+  if (await page.getByRole('button', { name: '分析需求与测试点' }).isVisible()) await page.getByRole('button', { name: '分析需求与测试点' }).click()
+  await page.getByRole('button', { name: '生成候选用例' }).click()
   await expect(page.getByText('重新生成候选？')).toBeVisible()
   await page.getByRole('button', { name: '保留候选' }).click()
-  await page.locator('.n-drawer').getByRole('button', { name: '取消', exact: true }).click()
+  await page.getByRole('button', { name: '返回用例库', exact: true }).click()
   await page.getByRole('button', { name: 'PRD 用例推导向导', exact: true }).click()
   await expect(page.getByRole('textbox', { name: '候选 1 名称' })).toHaveValue('人工修订的候选')
 })
@@ -567,12 +586,13 @@ test('覆盖重新生成失败时仍保留已编辑候选', async ({ page }) => 
   const ctx = await setup(page)
   await generateCandidate(page)
   await page.getByRole('textbox', { name: '候选 1 名称' }).fill('保留的人工修订')
-  await page.getByRole('button', { name: '← 返回调整 PRD' }).click()
+  await page.getByRole('button', { name: '返回测试设计' }).click()
   ctx.failGenerate()
-  await page.getByRole('button', { name: '推导候选用例 →' }).click()
+  if (await page.getByRole('button', { name: '分析需求与测试点' }).isVisible()) await page.getByRole('button', { name: '分析需求与测试点' }).click()
+  await page.getByRole('button', { name: '生成候选用例' }).click()
   await page.getByRole('button', { name: '覆盖并重新生成' }).click()
   await expect.poll(() => ctx.generations.length).toBe(2)
-  await page.locator('.n-drawer').getByRole('button', { name: '取消', exact: true }).click()
+  await page.getByRole('button', { name: '返回用例库', exact: true }).click()
   await page.getByRole('button', { name: 'PRD 用例推导向导', exact: true }).click()
   await expect(page.getByRole('textbox', { name: '候选 1 名称' })).toHaveValue('保留的人工修订')
 })
@@ -606,13 +626,14 @@ test('上传需求文件通过 source_doc_id 生成，数量可调至 1–80', a
   await page.getByLabel('上传需求文件').check()
   await page.getByLabel('选择需求文件').setInputFiles({ name: '需求.md', mimeType: 'text/markdown', buffer: Buffer.from('登录需求') })
   await expect(page.getByText('需求.md', { exact: true })).toBeVisible()
-  await page.getByRole('button', { name: '推导候选用例 →' }).click()
+  if (await page.getByRole('button', { name: '分析需求与测试点' }).isVisible()) await page.getByRole('button', { name: '分析需求与测试点' }).click()
+  await page.getByRole('button', { name: '生成候选用例' }).click()
   await expect.poll(() => ctx.generations.length).toBe(1)
   expect(ctx.generations[0]).toMatchObject({ source_doc_id: 'source-doc-1', source_text: '' })
-  await page.getByRole('button', { name: '← 返回调整 PRD' }).click()
-  const slider = page.getByRole('slider')
-  await expect(slider).toHaveAttribute('aria-valuemin', '1')
-  await expect(slider).toHaveAttribute('aria-valuemax', '80')
+  await page.getByRole('button', { name: '返回测试设计' }).click()
+  const count = page.getByRole('spinbutton', { name: '最多生成条数' })
+  await expect(count).toHaveAttribute('min', '1')
+  await expect(count).toHaveAttribute('max', '80')
 })
 
 test('需求文件慢上传显示进度，且请求使用 180 秒超时', async ({ page }) => {
@@ -631,8 +652,8 @@ test('需求文件慢上传显示进度，且请求使用 180 秒超时', async 
   await page.getByLabel('选择需求文件').setInputFiles({ name: '需求.md', mimeType: 'text/markdown', buffer: Buffer.from('登录需求') })
   await expect.poll(() => !!ctx.held.fileUpload).toBe(true)
   await expect.poll(() => page.evaluate(() => (window as any).__fileUploadTimeouts)).toEqual([180_000])
-  await expect(page.getByRole('status')).toContainText(/已上传 \d+%/)
-  await expect(page.getByRole('button', { name: /上传中/ })).toBeDisabled()
+  await expect(page.locator('.source-upload [role=status]')).toContainText(/已上传 \d+%/)
+  await expect(page.getByLabel('选择需求文件')).toBeDisabled()
   await ctx.held.fileUpload.fulfill({ json: { id: 'source-doc-1', filename: '需求.md', size: 12 } })
   await expect(page.getByText('需求.md', { exact: true })).toBeVisible()
 })
@@ -646,12 +667,13 @@ test('替换需求文件上传失败时保留之前可用的来源', async ({ pa
   ctx.failUpload()
   await page.getByLabel('选择需求文件').setInputFiles({ name: '新需求.md', mimeType: 'text/markdown', buffer: Buffer.from('新需求') })
   await expect(page.getByText('需求.md', { exact: true })).toBeVisible()
-  await page.getByRole('button', { name: '推导候选用例 →' }).click()
+  if (await page.getByRole('button', { name: '分析需求与测试点' }).isVisible()) await page.getByRole('button', { name: '分析需求与测试点' }).click()
+  await page.getByRole('button', { name: '生成候选用例' }).click()
   await expect.poll(() => ctx.generations.length).toBe(1)
   expect(ctx.generations[0].source_doc_id).toBe('source-doc-1')
 })
 
-test('窄屏仍可操作保存、确认及候选审核抽屉', async ({ page }) => {
+test('窄屏仍可操作保存、确认及完整候选审核工作台', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 })
   await setup(page)
   for (const name of ['保存用例修改', '确认入库用例集']) {
@@ -667,7 +689,92 @@ test('窄屏仍可操作保存、确认及候选审核抽屉', async ({ page }) 
   const box = await apply.boundingBox()
   expect(box).not.toBeNull()
   expect(box!.x + box!.width).toBeLessThanOrEqual(390)
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390)
   if (process.env.CASE_REVIEW_SHOTS) await page.screenshot({ path: 'test-results/cases-candidate-mobile.png', fullPage: true })
+})
+
+test('目录发现后逐步分析、选择测试点，需求依据随候选保存', async ({ page }) => {
+  const ctx = await setup(page)
+  await page.getByRole('button', { name: 'AI 生成工作台', exact: true }).click()
+  await expect(page.getByRole('combobox', { name: '用例设计 Skill' })).toHaveValue('functional-test-design')
+  expect(ctx.analyses).toHaveLength(0)
+  expect(ctx.generations).toHaveLength(0)
+  await page.getByRole('textbox', { name: '需求正文' }).fill('登录功能需求')
+  await page.getByRole('button', { name: '分析需求与测试点' }).click()
+  await expect(page.getByRole('region', { name: '需求待澄清事项' })).toContainText('错误提示需确认')
+  await page.getByLabel('选择测试点 TP-002').uncheck()
+  await page.getByRole('textbox', { name: '测试点 TP-001 预期' }).fill('成功登录并进入工作台')
+  if (process.env.CASE_REVIEW_SHOTS) {
+    await page.locator('.studio-scroll').evaluate(node => { node.scrollTop = 0 })
+    await page.screenshot({ path: 'test-results/cases-design-desktop.png', fullPage: true })
+  }
+  await page.getByRole('button', { name: '生成候选用例', exact: true }).click()
+  await expect(page.getByRole('textbox', { name: '候选 1 名称' })).toBeVisible()
+  expect(ctx.analyses).toHaveLength(1)
+  expect(ctx.generations[0].design).toMatchObject({ test_points: [{ id: 'TP-001', expected: '成功登录并进入工作台' }] })
+  expect((ctx.generations[0].design as { test_points: unknown[] }).test_points).toHaveLength(1)
+  await page.getByText('需求依据', { exact: true }).click()
+  await expect(page.locator('.requirement-evidence')).toContainText('登录功能需求')
+  await page.getByRole('button', { name: '采纳并保存候选 (1 条)' }).click()
+  await expect.poll(() => ctx.candidateCreates.length).toBe(1)
+  expect(ctx.candidateCreates[0].cases[0]).toMatchObject({ test_point_id: 'TP-001', requirement_quote: '登录功能需求' })
+  await page.getByRole('button', { name: '详细编辑用例 TC-001' }).click()
+  await expect(page.locator('.case-evidence')).toContainText('TP-001')
+})
+
+test('技能目录失联不能开始分析，可重试后恢复', async ({ page }) => {
+  const ctx = await setup(page)
+  await page.route('**/api/case-sets/generation-skills', route => route.fulfill({ status: 503, json: { code: 'INTERNAL', message: '技能暂不可用' } }))
+  await page.getByRole('button', { name: 'AI 生成工作台', exact: true }).click()
+  await expect(page.getByRole('alert')).toContainText('技能暂不可用')
+  await expect(page.getByRole('button', { name: '分析需求与测试点' })).toBeDisabled()
+  expect(ctx.analyses).toHaveLength(0)
+  await page.unroute('**/api/case-sets/generation-skills')
+  await page.getByRole('button', { name: '重试加载' }).click()
+  await expect(page.getByRole('button', { name: '分析需求与测试点' })).toBeEnabled()
+})
+
+test('需求分析失败保留正文，修改来源后旧测试设计失效', async ({ page }) => {
+  const ctx = await setup(page)
+  await page.route('**/api/case-sets/ai-design', route => route.fulfill({ status: 502, json: { code: 'UPSTREAM', message: '需求分析失败' } }))
+  await page.getByRole('button', { name: 'AI 生成工作台', exact: true }).click()
+  await page.getByRole('textbox', { name: '需求正文' }).fill('第一版需求')
+  await page.getByRole('button', { name: '分析需求与测试点' }).click()
+  await expect(page.getByRole('alert')).toContainText('需求分析失败')
+  await expect(page.getByRole('textbox', { name: '需求正文' })).toHaveValue('第一版需求')
+  expect(ctx.generations).toHaveLength(0)
+  await page.unroute('**/api/case-sets/ai-design')
+  await page.getByRole('button', { name: '分析需求与测试点' }).click()
+  await page.getByRole('button', { name: '返回修改需求' }).click()
+  await page.getByRole('textbox', { name: '需求正文' }).fill('第二版需求')
+  await expect(page.getByRole('button', { name: '2 测试设计', exact: true })).toBeDisabled()
+  await page.getByRole('button', { name: '分析需求与测试点' }).click()
+  await expect(page.locator('.test-point blockquote').first()).toContainText('第二版需求')
+  expect(ctx.analyses.map(item => item.source_text)).toEqual(['第一版需求', '第二版需求'])
+})
+
+test('筛选库状态或候选不丢弃编辑，并支持暗色工作台', async ({ page }) => {
+  const ctx = await setup(page)
+  ctx.sets[1].status = 'confirmed'
+  await page.reload()
+  await rename(page, '保留的草稿')
+  await page.locator('.library-status').getByRole('button', { name: '已入库 1', exact: true }).click()
+  await expect(page.locator('.file-node')).toHaveCount(1)
+  await expect(page.locator('.data-row')).toContainText('保留的草稿')
+  await generateCandidate(page)
+  await page.getByRole('textbox', { name: '候选 1 名称' }).fill('人工核对后的用例')
+  await page.getByLabel('仅看待补全').check()
+  await expect(page.locator('.candidate-card')).toHaveCount(0)
+  await page.getByLabel('仅看待补全').uncheck()
+  await expect(page.getByRole('textbox', { name: '候选 1 名称' })).toHaveValue('人工核对后的用例')
+  await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'))
+  await expect(page.locator('.generation-studio')).toHaveCSS('background-color', 'rgb(17, 24, 39)')
+  if (process.env.CASE_REVIEW_SHOTS) {
+    await page.locator('.studio-scroll').evaluate(node => { node.scrollTop = 0 })
+    await page.screenshot({ path: 'test-results/cases-studio-dark.png', fullPage: true })
+  }
+  await page.getByRole('button', { name: '返回用例库' }).click()
+  await expect(page.locator('.data-row')).toContainText('保留的草稿')
 })
 
 test('六策略允许明确输入整数百分比，合计错误时阻止生成', async ({ page }) => {
@@ -677,12 +784,14 @@ test('六策略允许明确输入整数百分比，合计错误时阻止生成',
   const positive = page.getByRole('spinbutton', { name: '正向策略百分比' })
   await expect(positive).toHaveValue('40')
   await positive.fill('100')
-  await expect(page.getByRole('button', { name: '推导候选用例 →' })).toBeDisabled()
+  await page.getByRole('button', { name: '分析需求与测试点' }).click()
+  await expect(page.getByRole('button', { name: '生成候选用例' })).toBeDisabled()
   for (const label of ['反向', '边界', '等价类', '状态迁移', '场景']) {
     await page.getByRole('spinbutton', { name: `${label}策略百分比` }).fill('0')
   }
   await expect(page.getByText('合计 100%')).toBeVisible()
-  await page.getByRole('button', { name: '推导候选用例 →' }).click()
+  if (await page.getByRole('button', { name: '分析需求与测试点' }).isVisible()) await page.getByRole('button', { name: '分析需求与测试点' }).click()
+  await page.getByRole('button', { name: '生成候选用例' }).click()
   await expect.poll(() => ctx.generations.length).toBe(1)
   expect(ctx.generations[0].strategy_weights).toEqual({ positive: 100, negative: 0, boundary: 0, equivalence: 0, state: 0, scenario: 0 })
 })
@@ -693,9 +802,9 @@ test('新草稿保存未完成时不能返回或修改候选，旧响应只完�
   ctx.holds.add('candidateCreate')
   await page.getByRole('button', { name: '采纳并保存候选 (1 条)' }).click()
   await expect.poll(() => !!ctx.held.candidateCreate).toBe(true)
-  await expect(page.getByRole('button', { name: '← 返回调整 PRD' })).toBeDisabled()
+  await expect(page.getByRole('button', { name: '返回测试设计' })).toBeDisabled()
   await expect(page.getByRole('textbox', { name: '候选 1 名称' })).toBeDisabled()
-  await expect(page.locator('.n-drawer').getByRole('button', { name: '取消', exact: true })).toBeDisabled()
+  await expect(page.getByRole('button', { name: '返回用例库', exact: true })).toBeDisabled()
   const payload = ctx.candidateCreates[0]
   const created = { id: 'generated-slow', task_id: null, name: payload.name, status: 'generated',
     revision: 1, generated_count: payload.cases.length, confirmed_count: 0, checks: [], column_schema: [] }
@@ -710,12 +819,13 @@ test('推导请求进行中冻结来源和策略，不能并行采纳旧候选',
   ctx.holds.add('generate')
   await page.getByRole('button', { name: 'PRD 用例推导向导', exact: true }).click()
   await page.getByPlaceholder('粘贴需求文档段落、状态转移逻辑或 OpenAPI 规范...').fill('来源 A')
-  await page.getByRole('button', { name: '推导候选用例 →' }).click()
+  if (await page.getByRole('button', { name: '分析需求与测试点' }).isVisible()) await page.getByRole('button', { name: '分析需求与测试点' }).click()
+  await page.getByRole('button', { name: '生成候选用例' }).click()
   await expect.poll(() => !!ctx.held.generate).toBe(true)
-  await expect(page.getByPlaceholder('粘贴需求文档段落、状态转移逻辑或 OpenAPI 规范...')).toBeDisabled()
-  await expect(page.getByLabel('上传需求文件')).toBeDisabled()
+  await expect(page.getByRole('button', { name: '返回修改需求' })).toBeDisabled()
+  await expect(page.getByRole('textbox', { name: '测试点 TP-001 名称' })).toBeDisabled()
   await expect(page.getByRole('spinbutton', { name: '正向策略百分比' })).toBeDisabled()
-  await page.locator('.n-drawer').getByRole('button', { name: '取消', exact: true }).click()
+  await page.getByRole('button', { name: '返回用例库', exact: true }).click()
   await page.getByRole('button', { name: 'PRD 用例推导向导', exact: true }).click()
   await expect(page.getByRole('button', { name: /采纳并保存候选/ })).toHaveCount(0)
   await ctx.held.generate.fulfill({ json: { items: [row('candidate', '来源 A 候选')] } })
@@ -744,7 +854,7 @@ test('当前草稿拒绝保存时可改存新草稿，失败不移除旧行，�
   ctx.failSave()
   await page.getByRole('button', { name: '采纳并保存候选 (1 条)' }).click()
   await expect.poll(() => ctx.saves.length).toBe(1)
-  await page.locator('.n-drawer').getByRole('button', { name: '取消', exact: true }).click()
+  await page.getByRole('button', { name: '返回用例库', exact: true }).click()
   await rename(page, '本批候选的后续编辑', 1)
   await page.getByRole('button', { name: 'PRD 用例推导向导', exact: true }).click()
   await page.getByRole('button', { name: '改存新草稿' }).click()
@@ -752,7 +862,7 @@ test('当前草稿拒绝保存时可改存新草稿，失败不移除旧行，�
   ctx.failCandidateCreate()
   await page.getByRole('button', { name: '采纳并保存候选 (1 条)' }).click()
   await expect.poll(() => ctx.candidateCreates.length).toBe(1)
-  await page.locator('.n-drawer').getByRole('button', { name: '取消', exact: true }).click()
+  await page.getByRole('button', { name: '返回用例库', exact: true }).click()
   await expect(page.locator('.data-row')).toHaveCount(2)
   await expect(page.locator('.data-row').first()).toContainText('旧草稿原有编辑')
   await page.getByRole('button', { name: 'PRD 用例推导向导', exact: true }).click()

@@ -5,6 +5,37 @@ import pytest
 from app import protocol
 
 
+@pytest.mark.parametrize("kind", ["openai_chat", "anthropic_messages", "openai_responses"])
+@pytest.mark.parametrize("model", ["deepseek-flash", "deepseek-v4-pro", "deepseek-v4-flash-0731"])
+def test_deepseek_generation_reserves_budget_for_body(monkeypatch, kind, model):
+    """模拟默认思考耗尽预算：三协议必须显式关闭思考才能得到正文。"""
+    def post(url, body, headers, timeout_s):
+        """网关仅在收到协议对应的关闭参数时提供用例正文。"""
+        disabled = (body.get("reasoning") == {"effort": "none"} if kind == "openai_responses"
+                    else body.get("thinking") == {"type": "disabled"})
+        value = '[{"name":"登录成功"}]' if disabled else ""
+        return {"choices": [{"message": {"content": value, "reasoning_content": "private"}}],
+                "content": [{"type": "text", "text": value}], "status": "completed",
+                "output": [{"type": "message", "content": [{"type": "output_text", "text": value}]}]}
+
+    monkeypatch.setattr(protocol, "_post_json", post)
+    result = protocol.call_protocol(protocol=kind, base_url="https://unit.invalid/v1", model=model,
+                                    api_key="unit", messages=[], max_tokens=8192)
+    assert result.text == '[{"name":"登录成功"}]'
+
+
+@pytest.mark.parametrize("model", ["unit", "deepseek-chat", "deepseek-flash[reasoning=high]"])
+def test_other_models_keep_native_parameters(monkeypatch, model):
+    """不向未知型号和网关内嵌参数模型注入未经支持的 thinking 开关。"""
+    def post(url, body, headers, timeout_s):
+        assert "thinking" not in body
+        return {"choices": [{"message": {"content": "ok"}}]}
+
+    monkeypatch.setattr(protocol, "_post_json", post)
+    protocol.call_protocol(protocol="openai_chat", base_url="https://unit.invalid", model=model,
+                           api_key="unit", messages=[])
+
+
 def test_responses_worker_wire_usage_and_failure(monkeypatch):
     """评测发送 Responses 字段，记录真实用量，拒绝 HTTP 200 的截断输出。"""
     captured = []

@@ -538,8 +538,49 @@ export interface TestCase extends TestCaseInput {
 /** PRD 候选生成使用平台 Agent 协议档，页面仅提交来源、策略和数量。 */
 export interface CaseGenerateInput {
   source_text: string
+  source_doc_id?: string
+  skill_id?: string
+  design?: CaseDesign
   strategy_weights: Record<string, number>
   max_count: number
+}
+
+/** 已安装技能的发现元数据；不携带正文或参考资料。 */
+export interface CaseGenerationSkill {
+  id: string
+  name: string
+  description: string
+  version: string
+  license: string
+  source_url: string
+}
+
+/** 可人工确认的测试点，保留需求原文和不确定规则。 */
+export interface CaseTestPoint {
+  id: string
+  title: string
+  module: string
+  source_quote: string
+  risk: 'high' | 'medium' | 'low'
+  expected: string
+  constraints: string
+  strategies: string[]
+}
+
+/** 来源指纹随设计提交；服务端拒绝将旧设计用于新需求。 */
+export interface CaseDesign {
+  source_digest: string
+  summary: string
+  assumptions: string[]
+  questions: string[]
+  test_points: CaseTestPoint[]
+}
+
+/** 需求分析只产生设计，不会保存或确认用例。 */
+export interface CaseDesignResult {
+  design: CaseDesign
+  skill: CaseGenerationSkill
+  loaded_sections: string[]
 }
 
 export interface CaseFolder {

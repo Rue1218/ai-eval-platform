@@ -20,6 +20,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from shared.model_urls import model_request_url
+from shared.reasoning import supports_deepseek_thinking
 from shared.responses import response_body, response_text, response_usage
 
 # 契约支持的两类协议（与 protocol_profiles 的 CHECK 约束一致）
@@ -120,14 +121,16 @@ def call_protocol(
             "max_tokens": max_tokens,
         }
         # 推理模型默认输出 thinking 块，小预算下会吃掉全部输出 tokens 导致正文为空。
-        # 与 api 侧一致：xiaomimimo 系列与阿里云 MaaS 网关（deepseek-v4 / glm 等）显式关闭思考提速并避免正文为空
-        if "xiaomimimo" in base or "maas.aliyuncs.com" in base:
+        # 已知网关和支持开关的 DeepSeek 型号显式关闭思考，保留结构化正文预算。
+        if "xiaomimimo" in base or "maas.aliyuncs.com" in base or supports_deepseek_thinking(model):
             body["thinking"] = {"type": "disabled"}
         headers["Authorization"] = f"Bearer {api_key}"
 
     elif protocol == "openai_responses":
         body = response_body(model=model, messages=messages, system=system,
                              temperature=temperature, max_tokens=max_tokens)
+        if supports_deepseek_thinking(model):
+            body["reasoning"] = {"effort": "none"}
         headers["Authorization"] = f"Bearer {api_key}"
     else:  # anthropic_messages
         body = {
@@ -139,8 +142,8 @@ def call_protocol(
         if system:
             body["system"] = system
         # 推理模型默认输出 thinking 块，小预算下会吃掉全部输出 tokens 导致正文为空。
-        # 阿里云 MaaS 网关（deepseek-v4 / glm 等）显式关闭思考，保证评测正文非空
-        if "maas.aliyuncs.com" in base:
+        # 阿里云 MaaS 网关和支持开关的 DeepSeek 型号显式关闭思考。
+        if "maas.aliyuncs.com" in base or supports_deepseek_thinking(model):
             body["thinking"] = {"type": "disabled"}
         headers["x-api-key"] = api_key
         headers["anthropic-version"] = anthropic_version or "2023-06-01"

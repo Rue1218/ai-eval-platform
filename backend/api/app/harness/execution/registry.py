@@ -22,6 +22,7 @@ from .registry_handlers import (  # noqa: F401
     _ask_user_question_handler,
     _bash_handler,
     _board_from_context,
+    _case_skill_handler,
     _edit_handler,
     _glob_handler,
     _grep_handler,
@@ -1145,6 +1146,19 @@ def _register_media_mcp_tools(registry: ToolRegistry) -> None:
 def _register_platform_task_tools(registry: ToolRegistry) -> None:
     """platform.tasks 长任务 MCP：只入队/查询/取消，不等待终态。"""
     # ── platform.tasks 长任务 MCP：只入队/查询/取消，不等待终态 ──
+    registry.register(
+        ToolDef(
+            name="case.skill",
+            description="功能测试设计 Skill：默认只列名称与简介；确定需要后读取 workflow，再按当前阶段读取 design/cases/review，按策略读取 inputs/flows。",
+            parameters_schema={
+                "type": "object", "additionalProperties": False,
+                "properties": {"section": {"type": "string", "enum": ["catalog", "workflow", "design", "cases", "inputs", "flows", "review"]}},
+            },
+            permission="read", timeout_s=5.0, handler=_case_skill_handler,
+            display_name="读取用例设计技能", risk_level="read",
+            output_schema={}, transport="native", concurrency_class="read_only",
+        )
+    )
     registry.register(
         ToolDef(
             name="task.create",

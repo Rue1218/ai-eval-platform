@@ -10,6 +10,7 @@ import pytest
 from fastapi import UploadFile
 from fastapi.testclient import TestClient
 from openpyxl import Workbook, load_workbook
+from shared.case_design import parse_design
 from sqlalchemy import JSON, BigInteger, Integer, MetaData, create_engine, event, update
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import sessionmaker
@@ -35,6 +36,7 @@ from app.models import (
 from app.routers import cases as routes
 from app.routers import tasks as task_routes
 from app.schemas import (
+    CaseAiDesignIn,
     CaseAiFillIn,
     CaseAiGenerateIn,
     CaseCancelIn,
@@ -126,6 +128,118 @@ def test_generate_rejects_foreign_file_before_model_call(cases_db, monkeypatch):
     with pytest.raises(AppError) as error:
         routes.ai_generate_cases(CaseAiGenerateIn(source_doc_id="private"), cases_db, _actor())
     assert error.value.code == ErrorCode.UNAUTHORIZED
+    with pytest.raises(AppError) as design_error:
+        routes.ai_design_cases(CaseAiDesignIn(source_doc_id="private"), cases_db, _actor())
+    assert design_error.value.code == ErrorCode.UNAUTHORIZED
+
+
+def _design_json():
+    """分析样本携带真实需求引文，刻意不提供平台生成的稳定 ID。"""
+    return json.dumps({"summary": "登录", "test_points": [{"title": "登录成功",
+                      "source_quote": "登录需求", "risk": "high", "strategies": ["positive"]}]})
+
+
+def test_design_only_returns_traceable_preview_without_writing(cases_db, monkeypatch):
+    """独立设计只读来源并调用分析技能，不创建空用例集或后台任务。"""
+    calls = []
+
+    def model(_db, system, _prompt, **_kwargs):
+        calls.append(system)
+        return SimpleNamespace(text=_design_json())
+
+    monkeypatch.setattr(routes, "call_agent_model", model)
+    result = routes.ai_design_cases(CaseAiDesignIn(source_text="登录需求"), cases_db, _actor())
+    assert result["design"]["test_points"][0]["id"] == "TP-001"
+    assert result["loaded_sections"] == ["workflow", "design"]
+    assert "人工用例结构" not in calls[0]
+    assert cases_db.query(CaseSet).count() == 1 and cases_db.query(Task).count() == 0
+
+
+def test_generation_rejects_changed_source_before_model_and_filters_unselected_points(cases_db, monkeypatch):
+    """需求变更先拒绝调用；通过校验后只采纳有真实测试点关联的去重候选。"""
+    design = parse_design(_design_json(), "登录需求")
+    monkeypatch.setattr(routes, "call_agent_model", lambda *a, **k: pytest.fail("来源变化不能调用模型"))
+    with pytest.raises(AppError) as error:
+        routes.ai_generate_cases(CaseAiGenerateIn(source_text="修改需求", design=design), cases_db, _actor())
+    assert error.value.code == ErrorCode.VALIDATION
+    case = {"name": "登录", "strategy": "正向", "test_point_id": "TP-001", "requirement_quote": "伪造"}
+    output = [case, case, {**case, "test_point_id": "TP-002"}]
+    monkeypatch.setattr(routes, "call_agent_model", lambda *a, **k: SimpleNamespace(text=json.dumps(output)))
+    result = routes.ai_generate_cases(CaseAiGenerateIn(source_text="登录需求", design=design), cases_db, _actor())
+    assert result["items"] == [{**case, "requirement_quote": "登录需求", "risk": "high"}]
+
+
+def test_trace_columns_export_from_old_draft_without_registered_columns(cases_db):
+    """追加到旧草稿后，原列配置为空也不能使 Excel 丢失需求依据。"""
+    item = _add_case(cases_db, extras={"test_point_id": "TP-001", "requirement_quote": "登录需求", "risk": "high"})
+    data = routes._build_xlsx(cases_db.get(CaseSet, "set"), [item])
+    workbook = load_workbook(BytesIO(data), read_only=True)
+    try:
+        headers, values = list(workbook.active.values)
+        exported = dict(zip(headers, values))
+        assert exported["测试点编号"] == "TP-001"
+        assert exported["需求原文依据"] == "登录需求"
+    finally:
+        workbook.close()
+
+
+def test_skill_discovery_http_routes_and_source_validation():
+    """固定路由不被用例集 ID 吞掉，未知技能与异常设计使用标准校验错误。"""
+    from app.main import app
+
+    app.dependency_overrides[get_current_user] = _actor
+    try:
+        client = TestClient(app)
+        result = client.get("/api/case-sets/generation-skills")
+        assert result.status_code == 200
+        assert result.json()["items"][0]["id"] == "functional-test-design"
+        invalid = client.post("/api/case-sets/ai-design", json={"source_text": "需求", "skill_id": "../../.env"})
+        assert invalid.status_code == 400
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+
+
+def test_export_keeps_formula_like_requirements_and_headers_as_text(cases_db):
+    """模型、需求原文与自定义列标题均是文本，不能被 Excel 解释成公式。"""
+    case_set = cases_db.get(CaseSet, "set")
+    case_set.column_schema = [{"key": "custom", "name": "=1+1"}]
+    item = _add_case(cases_db, name="=2+2", extras={"requirement_quote": "=3+3", "custom": "=4+4"})
+    workbook = load_workbook(BytesIO(routes._build_xlsx(case_set, [item])))
+    try:
+        literal_cells = [cell for row in workbook.active for cell in row
+                         if isinstance(cell.value, str) and cell.value.startswith("=")]
+        assert {cell.value for cell in literal_cells} == {"=1+1", "=2+2", "=3+3", "=4+4"}
+        assert all(cell.data_type == "s" for cell in literal_cells)
+    finally:
+        workbook.close()
+
+
+@pytest.mark.parametrize("endpoint,metadata", [
+    ("generation-skills", None), ("generation-skills", "---\nname: broken\n---\n"),
+    ("ai-design", "---\ndescription: test\nlicense: MIT\n---\nworkflow"),
+    ("ai-generate", "---\ndescription: test\nlicense: MIT\n---\nworkflow"),
+])
+def test_missing_skill_resources_return_actionable_safe_error(cases_db, monkeypatch, tmp_path, endpoint, metadata):
+    """资源损坏在模型调用前报明确错误，不能泄漏服务器路径或调用模型浪费额度。"""
+    from shared import case_skill
+
+    from app.main import app
+
+    monkeypatch.setattr(case_skill, "SKILL_ROOT", tmp_path)
+    if metadata is not None:
+        (tmp_path / "SKILL.md").write_text(metadata, encoding="utf-8")
+    monkeypatch.setattr(routes, "call_agent_model", lambda *a, **k: pytest.fail("技能不可用不能调用模型"))
+    app.dependency_overrides[get_current_user] = _actor
+    app.dependency_overrides[get_db] = lambda: cases_db
+    try:
+        client = TestClient(app, raise_server_exceptions=False)
+        result = (client.get(f"/api/case-sets/{endpoint}") if endpoint == "generation-skills"
+                  else client.post(f"/api/case-sets/{endpoint}", json={"source_text": "登录需求"}))
+        assert result.status_code == 500
+        assert result.json() == {"code": "INTERNAL", "message": "用例生成技能不可用，请联系管理员检查技能资源"}
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
+        app.dependency_overrides.pop(get_db, None)
 
 
 def test_excel_source_uses_original_filename_with_bin_storage(cases_db, tmp_path):
@@ -169,6 +283,19 @@ def test_generate_uses_shared_output_budget(cases_db, monkeypatch, max_count, bu
     monkeypatch.setattr(routes, "call_agent_model", fake_model)
     routes.ai_generate_cases(CaseAiGenerateIn(source_text="登录需求", max_count=max_count), cases_db, _actor())
     assert calls[0]["max_tokens"] == budget
+
+
+@pytest.mark.parametrize("text,raw,expected", [
+    ("", {"choices": [{"message": {"reasoning_content": "private"}}]}, "仅返回思考"),
+    ('[{"name":"登录","strategy":"正向"}]', {"stop_reason": "max_tokens"}, "长度上限"),
+])
+def test_generate_rejects_unfinished_body(cases_db, monkeypatch, text, raw, expected):
+    """页面生成与 Worker 共用失败口径，截断的可解析片段也不能冒充完整结果。"""
+    monkeypatch.setattr(routes, "call_agent_model", lambda *a, **k: SimpleNamespace(text=text, raw=raw))
+    with pytest.raises(AppError) as error:
+        routes.ai_generate_cases(CaseAiGenerateIn(source_text="登录需求"), cases_db, _actor())
+    assert error.value.code == ErrorCode.UPSTREAM
+    assert expected in error.value.message and "private" not in error.value.message
 
 
 def test_generate_rejects_when_selected_strategy_has_no_cases(cases_db, monkeypatch):

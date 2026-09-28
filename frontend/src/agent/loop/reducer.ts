@@ -159,7 +159,9 @@ export function applyFrame(state: LoopState, frame: LoopFrame): 'applied' | 'dup
     // report/100% progress 不能覆盖持久 task.end，也不能自己合成 succeeded。
     const terminal = value.event === 'task.end'
     const status = value.status
-    Object.assign(value, d, { event: terminal ? 'task.end' : kind })
+    // 终态后的迟到进度不能覆盖失败原因；报告关联仍允许随后补齐。
+    if (!terminal || kind === 'task.end' && d.status === status) Object.assign(value, d, { event: terminal ? 'task.end' : kind })
+    else if (kind === 'task.report' && d.report_id) value.report_id = d.report_id
     if (terminal) value.status = status
   }
   if (kind.startsWith('execution.') && d.execution_id) {

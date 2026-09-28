@@ -3,6 +3,12 @@
 import re
 
 
+def supports_deepseek_thinking(model: str) -> bool:
+    """仅识别支持显式 thinking 开关的 DeepSeek 型号，保留网关内嵌参数。"""
+    name = model.strip().lower().rsplit("/", 1)[-1]
+    return "[" not in name and bool(re.match(r"^deepseek-(?:flash|v4-(?:flash|pro))(?:-|$)", name))
+
+
 def openai_effort(model: str, effort: str) -> str:
     """按已登记型号映射最高档，GPT-5.6 支持独立的原生 max。"""
     if effort not in {"max", "xhigh"}:

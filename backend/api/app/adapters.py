@@ -27,6 +27,7 @@ import anthropic
 import openai
 from anthropic import Anthropic
 from openai import OpenAI
+from shared.reasoning import supports_deepseek_thinking
 
 from .config import settings
 from .errors import AppError, ErrorCode
@@ -296,7 +297,7 @@ def _apply_compatible_thinking(
 ) -> None:
     """为已知 OpenAI 兼容推理端点设置 thinking 开关。"""
     target = f"{base} {model}".lower()
-    if "xiaomimimo" in target:
+    if "xiaomimimo" in target or supports_deepseek_thinking(model):
         body["thinking"] = {"type": "enabled" if enabled else "disabled"}
         return
 
@@ -698,7 +699,7 @@ def call_protocol(
         native_tools = _adapt_tools(tools, protocol)
         if native_tools:
             body["tools"] = native_tools
-        # 非流式调用默认关闭 Mimo 思考，避免规划 JSON 被 reasoning 占满；Agent
+        # 非流式调用默认关闭支持开关的 Mimo / DeepSeek 思考，避免 JSON 被 reasoning 占满；Agent
         # 若显式打开则由 ModelGateway 传入 reasoning_enabled=True。
         _apply_compatible_thinking(body, base, model, reasoning_enabled, reasoning_effort)
         _apply_openai_reasoning(
@@ -723,6 +724,9 @@ def call_protocol(
                 system_segments,
                 cache_enabled=_prompt_cache_flag(prompt_cache),
             )
+        if supports_deepseek_thinking(model) and not reasoning_enabled:
+            # 用例生成明确关闭默认思考，确保输出预算用于可解析的正文。
+            body["thinking"] = {"type": "disabled"}
         if reasoning_enabled and _supports_anthropic_thinking(model):
             body["thinking"] = {
                 "type": "enabled",

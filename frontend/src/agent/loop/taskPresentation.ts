@@ -28,7 +28,7 @@ export function isTaskTool(name: string): boolean {
 export const taskActionLabels: Record<string, string> = {
   'task.create': '创建用例生成任务',
   'task.status': '查询任务状态',
-  'task.cancel': '取消评测任务',
+  'task.cancel': '取消任务',
 }
 
 /** Task 状态文案与 Worker 持久事件保持同源，不以进度百分比合成终态。 */
@@ -78,12 +78,12 @@ export function taskCardSnapshot(tool: ToolRun, task: LoopRecord | null | undefi
     : resultPreview.progress && typeof resultPreview.progress === 'object' && !Array.isArray(resultPreview.progress)
       ? resultPreview.progress as Data
       : null
-  const message = typeof progress?.message === 'string'
-    ? progress.message
-    : typeof resultPreview.message === 'string'
-      ? resultPreview.message
-      : typeof taskData.message === 'string'
-        ? taskData.message
+  const message = typeof taskData.message === 'string'
+    ? taskData.message
+    : typeof progress?.message === 'string'
+      ? progress.message
+      : typeof resultPreview.message === 'string'
+        ? resultPreview.message
         : null
   return {
     action: canonicalTaskToolName(tool.name),

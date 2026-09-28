@@ -41,6 +41,8 @@ import {
   type TestCase,
   type TestCaseInput,
   type CaseGenerateInput,
+  type CaseGenerationSkill,
+  type CaseDesignResult,
   type WhitelistItem,
   type DispatchOverview,
   type DispatchWorker,
@@ -868,10 +870,28 @@ export const api = {
       return { items: data.items, revision: data.revision, checks: data.checks }
     },
     // 仅生成未落库候选；调用方需要创建用例集并保存候选后才可显示创建成功。
-    async generateCases(payload: CaseGenerateInput & { source_doc_id?: string }): Promise<TestCase[]> {
+    async generationSkills(): Promise<CaseGenerationSkill[]> {
+      if (getDataMode() === 'mock') return [{ id: 'functional-test-design', name: '功能测试设计（演示）',
+        description: '演示需求分析与人工用例审核流程', version: '1.0.0', license: 'MIT',
+        source_url: 'https://github.com/jaktestowac/awesome-copilot-for-testers/tree/main/skills/designing-functional-tests' }]
+      const { data } = await http.get('/api/case-sets/generation-skills')
+      return data.items
+    },
+    async designCases(payload: Pick<CaseGenerateInput, 'source_text' | 'source_doc_id' | 'skill_id'>): Promise<CaseDesignResult> {
+      if (getDataMode() === 'mock') return {
+        skill: (await this.generationSkills())[0]!, loaded_sections: ['workflow', 'design'],
+        design: { source_digest: '0'.repeat(64), summary: '演示测试设计', assumptions: [], questions: ['请用真实需求确认预期结果'],
+          test_points: [{ id: 'TP-001', title: '验证需求中的主要流程', module: '通用', source_quote: payload.source_text.slice(0, 100),
+            risk: 'high', expected: '', constraints: '演示数据', strategies: ['positive', 'negative'] }] },
+      }
+      const { data } = await http.post('/api/case-sets/ai-design', payload, { timeout: 130000 })
+      return data
+    },
+    async generateCases(payload: CaseGenerateInput): Promise<TestCase[]> {
       if (getDataMode() === 'mock') {
         return [{
           id: 'c-ai-' + Date.now(),
+          test_point_id: payload.design?.test_points[0]?.id,
           strategy: '反向',
           priority: 'FHX',
           module: '通用',

@@ -209,6 +209,21 @@ test('任务卡片只接纳登记的三层名称，并用 Worker 事实刷新工
   assert.equal(taskProgressPercent(snapshot.progress),42)
   assert.equal(taskProgressPercent({percent:180}),100)
 })
+
+test('任务失败后迟到进度不能覆盖错误，报告仍能补齐',()=>{
+  const s=createLoopState('s'),f=fixture(),c={task_id:'task'}
+  applyFrame(s,f('task.progress',{status:'running',progress:{percent:8,message:'生成中'}},c))
+  applyFrame(s,f('task.progress',{progress:{message:'模型返回空正文'}},c))
+  applyFrame(s,f('task.end',{status:'failed'},c))
+  applyFrame(s,f('task.progress',{status:'running',progress:{percent:50,message:'迟到进度'}},c))
+  applyFrame(s,f('task.report',{report_id:'report'},c))
+  const tool={name:'task.status',display:{result_preview:'{"task_id":"task","kind":"testcase","status":"running"}'}}
+  const snapshot=taskCardSnapshot(tool,s.tasks.task)
+  assert.equal(snapshot.status,'failed')
+  assert.equal(snapshot.message,'模型返回空正文')
+  assert.equal(snapshot.reportId,'report')
+  assert.equal(taskCardSnapshot(tool,{...s.tasks.task,message:'更新的终态原因'}).message,'更新的终态原因')
+})
 test('trace seq=0 独立去重，复制脱敏及安全链接',()=>{
   const s=createTrace(),f=fixture();const event=f('trace.event',{event:{seq:0,type:'tool/call',data:{}}},{},'control')
   applyTrace(s,event);applyTrace(s,event);assert.equal(s.events.length,1);assert.equal(s.seq,0)

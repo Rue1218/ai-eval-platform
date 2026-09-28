@@ -24,10 +24,19 @@ from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile
 from fastapi import Request as FastApiRequest
 from openpyxl import Workbook
 from pydantic import ValidationError
+from shared.case_design import (
+    TRACE_COLUMNS,
+    check_design_source,
+    design_prompts,
+    parse_design,
+    trace_cases,
+)
+from shared.case_skill import skill_metadata
 from shared.casegen import (
     SOURCE_MAX_CHARS,
     STRATEGY_WEIGHTS,
     build_prompts,
+    generation_output_error,
     generation_token_budget,
     parse_cases,
     rebalance_by_strategy,
@@ -56,6 +65,7 @@ from ..models import (
     uuid_str,
 )
 from ..schemas import (
+    CaseAiDesignIn,
     CaseAiFillIn,
     CaseAiGenerateIn,
     CaseCancelIn,
@@ -290,6 +300,10 @@ def _build_xlsx(case_set: CaseSet, cases: list[CaseItem]) -> bytes:
         (col.get("key", ""), col.get("name") or col.get("key", ""))
         for col in (case_set.column_schema or [])
     ]
+    # 追加到旧草稿时可能尚未登记追溯列，导出仍须保留生成来源。
+    declared = {key for key, _ in extra_columns}
+    extra_columns.extend((key, name) for key, name in TRACE_COLUMNS.items()
+                         if key not in declared and any(key in (case.extras or {}) for case in cases))
     sheet.append([title for _, title in EXPORT_FIXED_COLUMNS] + [name for _, name in extra_columns])
     for case in cases:
         item = _case_to_item(case)
@@ -301,6 +315,11 @@ def _build_xlsx(case_set: CaseSet, cases: list[CaseItem]) -> bytes:
             row.append(value)
         row.extend((case.extras or {}).get(key) for key, _ in extra_columns)
         sheet.append(row)
+    # 需求与模型输出是不可信文本，包括自定义表头也不能被解释为 Excel 公式。
+    for cells in sheet:
+        for cell in cells:
+            if isinstance(cell.value, str):
+                cell.data_type = "s"
     buffer = io.BytesIO()
     workbook.save(buffer)
     return buffer.getvalue()
@@ -416,34 +435,78 @@ def create_case_set(
     return case_set
 
 
-# 固定路径 /ai-generate 必须声明在 /{set_id} 之前，避免被路径参数吞掉
+# 固定的技能与生成路径声明在 /{set_id} 之前，避免被路径参数吞掉。
+@router.get("/generation-skills")
+def generation_skills(user: User = Depends(get_current_user)):
+    """发现阶段只返回已安装技能元数据，不预载正文和参考资料。"""
+    try:
+        return {"items": [skill_metadata()]}
+    except (ValueError, OSError) as exc:
+        raise AppError(ErrorCode.INTERNAL, "用例生成技能不可用，请联系管理员检查技能资源") from exc
+
+
+def _generation_source(body: CaseAiDesignIn, db: Session, user: User) -> str:
+    """分析与生成共享来源权限与截断规则，避免两阶段使用不同需求。"""
+    source = _read_stored_file_text(db, body.source_doc_id, user.id) if body.source_doc_id else body.source_text or ""
+    if not source.strip():
+        raise AppError(ErrorCode.VALIDATION, "请提供非空需求文本或可读的来源文档")
+    return source[:SOURCE_MAX_CHARS]
+
+
+@router.post("/ai-design")
+def ai_design_cases(body: CaseAiDesignIn, db: Session = Depends(get_db), user: User = Depends(get_current_user)):
+    """按需加载设计阶段 Skill，将需求转为供人工确认的测试点，不写用例库。"""
+    source = _generation_source(body, db, user)
+    try:
+        skill = skill_metadata(body.skill_id)
+        system, prompt = design_prompts(source, body.skill_id)
+    except (ValueError, OSError) as exc:
+        raise AppError(ErrorCode.INTERNAL, "用例生成技能不可用，请联系管理员检查技能资源") from exc
+    result = call_agent_model(db, system, prompt, temperature=0.2, max_tokens=8192)
+    error = generation_output_error(result.text, getattr(result, "raw", None))
+    if error:
+        raise AppError(ErrorCode.UPSTREAM, error)
+    try:
+        design = parse_design(result.text, source)
+    except (ValueError, TypeError) as exc:
+        raise AppError(ErrorCode.UPSTREAM, "需求分析未返回有效的测试点与原文依据，请补充需求后重试") from exc
+    return {"design": design, "skill": skill, "loaded_sections": ["workflow", "design"]}
+
+
 @router.post("/ai-generate")
 def ai_generate_cases(
     body: CaseAiGenerateIn,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """按 Agent 协议档生成候选用例（新八字段格式 + 新优先级）；候选不落库。"""
-    source_text = body.source_text or ""
-    if body.source_doc_id:
-        source_text = _read_stored_file_text(db, body.source_doc_id, user.id)
-    if not source_text.strip():
-        raise AppError(ErrorCode.VALIDATION, "需要提供需求文档内容 source_text 或来源文档 source_doc_id")
-    source_text = source_text[:SOURCE_MAX_CHARS]
+    """加载用例阶段 Skill，按用户确认的测试点和配额返回去重候选。"""
+    source_text = _generation_source(body, db, user)
+    if body.design:
+        try:
+            check_design_source(body.design, source_text)
+        except ValueError as exc:
+            raise AppError(ErrorCode.VALIDATION, str(exc)) from None
 
     weights = body.strategy_weights or STRATEGY_WEIGHTS
     max_count = body.max_count
-    system, user_prompt = build_prompts(source_text, max_count, weights=weights)
+    try:
+        skill = skill_metadata(body.skill_id)
+        system, user_prompt = build_prompts(source_text, max_count, weights=weights, design=body.design, skill_id=body.skill_id)
+    except (ValueError, OSError) as exc:
+        raise AppError(ErrorCode.INTERNAL, "用例生成技能不可用，请联系管理员检查技能资源") from exc
     result = call_agent_model(db, system, user_prompt, temperature=0.3,
                               max_tokens=generation_token_budget(max_count))
+    output_error = generation_output_error(result.text, getattr(result, "raw", None))
+    if output_error:
+        raise AppError(ErrorCode.UPSTREAM, output_error)
     try:
         cases = parse_cases(result.text)
     except (ValueError, json.JSONDecodeError) as exc:
         raise AppError(ErrorCode.UPSTREAM, "模型输出无法解析为用例") from exc
-    cases = rebalance_by_strategy(cases, max_count, weights=weights)
+    cases = rebalance_by_strategy(trace_cases(cases, body.design), max_count, weights=weights)
     if not cases:
         raise AppError(ErrorCode.UPSTREAM, "模型未返回符合所选策略的有效用例")
-    return {"items": cases}
+    return {"items": cases, "skill": skill}
 
 
 @router.post("/from-candidates", response_model=CaseSetDetailOut, status_code=201)

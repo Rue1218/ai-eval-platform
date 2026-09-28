@@ -7,11 +7,33 @@
 import importlib.util
 from pathlib import Path
 
+import pytest
+
 # 共用用例生成纯函数路径：backend/shared/casegen.py
 _CASEGEN_PATH = Path(__file__).resolve().parents[2] / "shared" / "casegen.py"
 _spec = importlib.util.spec_from_file_location("shared_casegen", _CASEGEN_PATH)
 casegen = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(casegen)
+
+
+@pytest.mark.parametrize("text,raw,expected", [
+    ("", {"choices": [{"finish_reason": "length", "message": {"reasoning_content": "private"}}]}, "长度上限"),
+    ('[{"name":"部分用例"}]', {"stop_reason": "max_tokens"}, "长度上限"),
+    ("", {"choices": [{"message": {"reasoning_content": "private"}}]}, "仅返回思考"),
+    ("", {"content": [{"type": "thinking", "thinking": "private"}]}, "仅返回思考"),
+    ("", {"choices": [{"finish_reason": "content_filter"}]}, "调整需求"),
+    ("  ", {}, "空正文"),
+])
+def test_generation_errors_are_specific_and_safe(text, raw, expected):
+    """区分预算耗尽、思考占用与空正文，同时禁止回显供应商原文。"""
+    message = casegen.generation_output_error(text, raw)
+    assert expected in message
+    assert "private" not in message
+
+
+def test_generation_accepts_complete_body():
+    """完整正文可解析，兼容只提供 text 的现有调用方。"""
+    assert casegen.generation_output_error('[{"name":"登录"}]') is None
 
 
 def test_build_prompts_contains_ratio_and_source():
@@ -29,10 +51,10 @@ def test_build_prompts_guides_risk_traceability_and_observable_cases():
     """两条生成路径共用风险驱动原则，参考 designing-functional-tests（MIT）。"""
     # https://github.com/jaktestowac/awesome-copilot-for-testers/blob/main/skills/designing-functional-tests/SKILL.md
     system, _ = casegen.build_prompts("支付需求", 10)
-    assert "高风险流程覆盖正向、反向、边界、权限及中断恢复" in system
+    assert "test_point_id" in system
     assert "每条用例只验证一个明确行为" in system
     assert "feature_point 要能追溯到需求" in system
-    assert "steps 写出可执行的具体操作" in system
+    assert "steps 写成逐行编号的具体操作" in system
     assert "steps（可执行操作步骤）" in system
     assert "expected 写出与操作对应、可观察的结果" in system
     assert "需求未给出确定预期时不要编造" in system
@@ -54,6 +76,16 @@ def test_parse_cases_rejects_invalid_payload():
         casegen.parse_cases('{"name": "对象而非数组"}')
     with pytest.raises(ValueError):
         casegen.parse_cases("[{\"strategy\": \"正向\"}]")  # 无 name 的条目被过滤后为空
+
+
+def test_parse_cases_rejects_structured_fields_but_accepts_step_lines():
+    """模型字段类型必须能被页面编辑和保存，常见步骤数组归一为逐行文本。"""
+    with pytest.raises(ValueError, match="字段类型"):
+        casegen.parse_cases('[{"name":{"title":"登录"},"strategy":"正向"}]')
+    with pytest.raises(ValueError, match="字段类型"):
+        casegen.parse_cases('[{"name":"登录","expected":{"result":"成功"}}]')
+    result = casegen.parse_cases('[{"name":"登录","steps":["1. 输入账号","2. 提交"]}]')
+    assert result[0]["steps"] == "1. 输入账号\n2. 提交"
 
 
 def test_rebalance_trims_overweight_strategy():

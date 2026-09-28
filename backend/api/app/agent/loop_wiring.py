@@ -69,6 +69,8 @@ LOOP_SYSTEM = """你是测试用例生成助手，通过已提供的原生工具
 - 先检查已有上下文和工作区事实，再进行修改；修改后按风险使用读取、测试或构建等可验证手段确认结果。
 - 平台只接受用例生成任务。需要生成完整用例集时，通过 task.create(kind=testcase) 确认入队，
   由 Worker 异步生成 /cases 待确认草稿；queued 仅表示入队，不表示用例已经生成或审核入库。
+- 用例技能目录通过 case.skill(section=catalog) 发现；确定任务相关时读取 workflow，再按需读取设计或审核章节，
+  不一次性读取全部参考资料。完整用例生成仍交给 Worker，技能读取不会创建任务或入库。
 - 历史评测与压测任务、报告可供只读追溯，不得新建、重跑或派生。
 - 工具失败、被拒绝、取消或结果未知时如实说明；结果未知的冲突操作不得重试。
 - 会话摘要中的 [m:N] 是当前运行的历史来源；需要核对原文时用 history.read 分页读取。
@@ -86,7 +88,7 @@ LOOP_EXPERT_BOUNDARY = """【专家角色边界】
 - 专家不得扩大工具范围或权限，不得要求用户模拟协议回执，不得改变用例生成任务的确认与入队链路。"""
 ALLOWED_TOOLS = ("read", "read_image", "glob", "grep", "write", "edit", "web_search",
                  "web_fetch", "bash", "ask_user_question", "task", "task.create", "task.status",
-                 "task.cancel", "agent.list", "agent.spawn", "agent.status", "agent.wait",
+                 "task.cancel", "case.skill", "agent.list", "agent.spawn", "agent.status", "agent.wait",
                  "agent.result", "agent.cancel", "history.read")
 MEDIA_MCP_TOOLS = ("image.generate", "video.create", "video.status")
 SUBAGENT_TOOLS = frozenset({"read", "read_image", "glob", "grep", "write", "edit",

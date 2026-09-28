@@ -3,14 +3,14 @@
 import time
 
 import openai
-from shared.reasoning import openai_effort
+from shared.reasoning import openai_effort, supports_deepseek_thinking
 from shared.responses import ResponsesStream, response_body, response_text, response_usage
 
 from .errors import AppError, ErrorCode
 
 
 def _body(*, model, messages, system, temperature, max_tokens, reasoning_enabled, reasoning_effort, tools):
-    """复用公共消息转换，仅为显式开启的请求添加 reasoning 参数。"""
+    """复用公共消息转换，按型号能力显式开启或关闭思考。"""
     from .adapters import _adapt_tools
 
     body = response_body(model=model, messages=messages, system=system,
@@ -18,7 +18,7 @@ def _body(*, model, messages, system, temperature, max_tokens, reasoning_enabled
     name = model.strip().lower().rsplit("/", 1)[-1]
     # 关闭旧推理模型时不发送不受支持的 none；固定思考能力由协议档探测约束。
     effort = openai_effort(model, reasoning_effort) if reasoning_enabled else (
-        "none" if name.startswith(("gpt-5.1", "gpt-5.2", "gpt-5.3", "gpt-5.4")) else None
+        "none" if name.startswith(("gpt-5.1", "gpt-5.2", "gpt-5.3", "gpt-5.4")) or supports_deepseek_thinking(model) else None
     )
     if effort and not ("[" in model and model.rstrip().endswith("]")):
         body["reasoning"] = {"effort": effort}

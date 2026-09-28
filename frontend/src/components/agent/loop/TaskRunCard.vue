@@ -15,7 +15,7 @@
     </header>
 
     <div class="task-run-body">
-      <div v-if="snapshot.progress || snapshot.status === 'queued' || snapshot.status === 'running'" class="task-run-progress">
+      <div v-if="snapshot.status === 'queued' || snapshot.status === 'running'" class="task-run-progress">
         <div class="task-run-progress-head">
           <span>{{ snapshot.message || (snapshot.status === 'queued' ? '已入队，等待 Worker 执行' : '正在同步 Worker 进度') }}</span>
           <strong v-if="percent !== null">{{ percent }}%</strong>
@@ -24,6 +24,7 @@
           <i :style="{ width: `${percent ?? 8}%` }" />
         </div>
       </div>
+      <p v-else-if="snapshot.message" class="task-run-outcome" role="status">{{ snapshot.message }}</p>
 
       <dl class="task-run-meta">
         <template v-if="snapshot.kind"><dt>类型</dt><dd>{{ snapshot.kind }}</dd></template>
@@ -31,6 +32,7 @@
       </dl>
 
       <router-link v-if="snapshot.reportId" class="task-run-report" :to="`/reports/${snapshot.reportId}`">查看评测报告</router-link>
+      <router-link v-if="snapshot.kind === 'testcase' && snapshot.taskId && ['awaiting_case_confirm', 'succeeded'].includes(snapshot.status || '')" class="task-run-report" :to="{ path: '/cases', query: { task_id: snapshot.taskId } }">{{ snapshot.status === 'awaiting_case_confirm' ? '查看用例草稿' : '查看用例' }}</router-link>
 
       <details class="task-run-details">
         <summary>调用详情</summary>
@@ -80,10 +82,12 @@ const percent = computed(() => taskProgressPercent(snapshot.value.progress))
 .task-run-title{display:flex;flex:1;min-width:0;flex-direction:column;gap:2px}.task-run-title strong{color:#193a2c;font-size:14px;font-weight:680}.task-run-title small{overflow:hidden;color:#6b8075;font:12px/1.3 var(--font-mono);text-overflow:ellipsis;white-space:nowrap}
 .task-run-state{flex:0 0 auto;padding:4px 8px;border-radius:999px;background:#e0f4e8;color:#176c50;font-size:12px;font-weight:650}.is-failed .task-run-state,.is-cancelled .task-run-state{background:#fff0e9;color:#a44a27}
 .task-run-body{padding:13px 15px 15px}.task-run-progress{margin-bottom:12px}.task-run-progress-head{display:flex;justify-content:space-between;gap:12px;color:#536b5e;font-size:12px;line-height:1.45}.task-run-progress-head strong{color:#1b7557;font-variant-numeric:tabular-nums}
+.task-run-outcome{margin:0 0 12px;color:var(--text-primary);font-size:13px;line-height:1.6}.is-failed .task-run-outcome{color:#a44a27}
+[data-theme='dark'] .is-failed .task-run-outcome{color:#ffb595}
 .task-run-progress-track{height:6px;margin-top:7px;overflow:hidden;border-radius:99px;background:#e3eee7}.task-run-progress-track i{display:block;min-width:8px;height:100%;border-radius:inherit;background:#2aa376;transition:width .42s cubic-bezier(.2,.8,.2,1)}
 .task-run-meta{display:grid;grid-template-columns:auto minmax(0,1fr);gap:5px 10px;margin:0;color:#536b5e;font-size:12px}.task-run-meta dt{color:#83968b}.task-run-meta dd{min-width:0;margin:0;overflow-wrap:anywhere}.task-run-id{color:#37584a;font-family:var(--font-mono);font-size:11.5px}
 .task-run-report{display:inline-flex;margin-top:12px;color:#177457;font-size:12px;font-weight:650;text-decoration:none}.task-run-report:hover{text-decoration:underline}
 .task-run-details{margin-top:12px;border-top:1px solid #e4eee8;padding-top:10px}.task-run-details>summary{color:#587166;font-size:12px;cursor:pointer}.task-run-details section{margin-top:10px}.task-run-details h4{margin:0 0 5px;color:#637a6f;font-size:12px}.task-run-details pre{max-height:280px;overflow:auto;margin:0;border:1px solid #dceae2;border-radius:7px;background:#f7fbf8;padding:9px;color:#285542;font:12px/1.6 var(--font-mono);overflow-wrap:anywhere;white-space:pre-wrap}.task-run-notice{margin:10px 0 0;color:#86623d;font-size:12px}
-[data-theme='dark'] .task-run-card{border-color:rgba(72,187,120,.25);background:#12251d;box-shadow:none}.task-run-summary{background:#173325;border-color:rgba(255,255,255,.08)}[data-theme='dark'] .task-run-icon{background:rgba(52,211,153,.16);color:#6ee7b7}[data-theme='dark'] .task-run-title strong{color:#e5f7ec}[data-theme='dark'] .task-run-title small,[data-theme='dark'] .task-run-meta{color:#afc8ba}[data-theme='dark'] .task-run-meta dt{color:#779587}[data-theme='dark'] .task-run-id{color:#c2ead3}[data-theme='dark'] .task-run-progress-head{color:#c4d9cd}[data-theme='dark'] .task-run-progress-track{background:#294638}[data-theme='dark'] .task-run-details{border-color:rgba(255,255,255,.1)}[data-theme='dark'] .task-run-details>summary,[data-theme='dark'] .task-run-details h4{color:#bbd4c6}[data-theme='dark'] .task-run-details pre{border-color:rgba(255,255,255,.1);background:#0e1b15;color:#c7ead5}
+[data-theme='dark'] .task-run-card{border-color:rgba(72,187,120,.25);background:#12251d;box-shadow:none}[data-theme='dark'] .task-run-summary{background:#173325;border-color:rgba(255,255,255,.08)}[data-theme='dark'] .task-run-icon{background:rgba(52,211,153,.16);color:#6ee7b7}[data-theme='dark'] .task-run-title strong{color:#e5f7ec}[data-theme='dark'] .task-run-title small,[data-theme='dark'] .task-run-meta{color:#afc8ba}[data-theme='dark'] .task-run-meta dt{color:#779587}[data-theme='dark'] .task-run-id{color:#c2ead3}[data-theme='dark'] .task-run-progress-head{color:#c4d9cd}[data-theme='dark'] .task-run-progress-track{background:#294638}[data-theme='dark'] .task-run-details{border-color:rgba(255,255,255,.1)}[data-theme='dark'] .task-run-details>summary,[data-theme='dark'] .task-run-details h4{color:#bbd4c6}[data-theme='dark'] .task-run-details pre{border-color:rgba(255,255,255,.1);background:#0e1b15;color:#c7ead5}
 @media(prefers-reduced-motion:reduce){.task-run-progress-track i{transition:none}}
 </style>
