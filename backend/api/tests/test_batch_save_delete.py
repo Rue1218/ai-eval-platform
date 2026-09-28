@@ -82,9 +82,9 @@ def _case(cid: str) -> CaseItem:
 
 def test_save_cases_deletes_omitted_cases():
     """载荷未包含的现有用例应被删除（前端批量删除的落库依据）。"""
-    case_set = CaseSet(id="s-1", name="集", status="generated", generated_count=2, column_schema=[], checks=[])
+    case_set = CaseSet(id="s-1", name="集", status="generated", generated_count=2, revision=0, column_schema=[], checks=[])
     db = _FakeDb({CaseSet: [case_set], CaseItem: [_case("c-1"), _case("c-2")]})
-    payload = CasesPayload(cases=[{
+    payload = CasesPayload(expected_revision=0, cases=[{
         "id": "c-1", "strategy": "正向", "priority": "FHX", "module": "m", "name": "用例 c-1", "expected": "e",
     }])
     result = save_cases("s-1", payload, db, SimpleNamespace(id="u-1"))
@@ -95,9 +95,9 @@ def test_save_cases_deletes_omitted_cases():
 
 def test_save_cases_keeps_all_when_full_list_sent():
     """全量载荷时不应删除任何行。"""
-    case_set = CaseSet(id="s-1", name="集", status="generated", generated_count=2, column_schema=[], checks=[])
+    case_set = CaseSet(id="s-1", name="集", status="generated", generated_count=2, revision=0, column_schema=[], checks=[])
     db = _FakeDb({CaseSet: [case_set], CaseItem: [_case("c-1"), _case("c-2")]})
-    payload = CasesPayload(cases=[
+    payload = CasesPayload(expected_revision=0, cases=[
         {"id": "c-1", "strategy": "正向", "priority": "FHX", "module": "m", "name": "用例 c-1", "expected": "e"},
         {"id": "c-2", "strategy": "正向", "priority": "FHX", "module": "m", "name": "用例 c-2", "expected": "e"},
     ])

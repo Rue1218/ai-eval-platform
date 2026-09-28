@@ -22,7 +22,7 @@ from app.harness.execution import (
 )
 from app.harness.execution.mcp import ToolExecutionContext
 from app.harness.execution.task_tools import cancel_task_safe, create_task_safe, status_task_safe
-from app.models import AuditLog, Dataset, ProtocolProfile, Task, TaskEvent
+from app.models import AuditLog, CaseSet, Dataset, ProtocolProfile, Task, TaskEvent
 from app.models import Session as AgentSession
 
 
@@ -51,6 +51,9 @@ class _Query:
         return self
 
     def with_for_update(self, **kwargs):
+        return self
+
+    def populate_existing(self):
         return self
 
     def first(self):
@@ -89,6 +92,8 @@ class _FakeDb:
         self.closed = False
 
     def query(self, model):
+        if model is CaseSet:
+            return _Query(None)
         if model is AgentSession:
             return _Query(self._session_row)
         if model is Dataset:

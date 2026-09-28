@@ -45,6 +45,7 @@ def test_cancel_non_testcase_tasks_is_idempotent_and_stops_running_stress(
         with worker_db_factory() as observer:
             assert observer.get(Task, task_id).status == "cancelled"
         stopped.append(task_id)
+        return True
 
     monkeypatch.setattr(stress, "_stop_engine", stop_engine)
     with worker_db_factory() as db:
@@ -60,6 +61,51 @@ def test_cancel_non_testcase_tasks_is_idempotent_and_stops_running_stress(
         assert db.get(Task, "testcase-running").status == "running"
         assert db.get(Task, "benchmark-done").status == "succeeded"
     assert stopped == ["stress-running"]
+
+
+def test_failed_stress_stop_is_retried_after_worker_restart(worker_db_factory, monkeypatch):
+    """停止接口短暂不可用时保留持久标记，下一轮重试后才清除。"""
+    with worker_db_factory() as db:
+        db.add(_task("stress-running", "stress", "running"))
+        db.commit()
+
+    attempts = []
+
+    def request(method, path, body, *, timeout):
+        """首个停止请求失败，下一轮恢复后返回引擎回执。"""
+        attempts.append((method, path, body, timeout))
+        if len(attempts) == 1:
+            raise RuntimeError("STRESS_UNAVAILABLE")
+        return {"status": "stopping", "task_id": body["task_id"]}
+
+    monkeypatch.setattr(stress, "_request_json", request)
+    with worker_db_factory() as db:
+        assert task_state.cancel_non_testcase_tasks(db) == 1
+        result = db.get(Task, "stress-running").result
+        assert result["stress_stop_pending"] is True
+        assert result["stress_stop_attempts"] == 1
+    with worker_db_factory() as db:
+        assert task_state.cancel_non_testcase_tasks(db) == 0
+        assert "stress_stop_pending" not in db.get(Task, "stress-running").result
+        assert task_state.cancel_non_testcase_tasks(db) == 0
+    assert len(attempts) == 2
+
+
+def test_stress_stop_retry_batch_rotates_failed_tasks(worker_db_factory, monkeypatch):
+    """限批停止不让永久失败的前几项饿死后续待停止任务。"""
+    with worker_db_factory() as db:
+        for index in range(4):
+            task = _task(f"stress-{index}", "stress", "cancelled")
+            task.result = {"stress_stop_pending": True}
+            db.add(task)
+        db.commit()
+    attempted = []
+    monkeypatch.setattr(stress, "_stop_engine", lambda task_id: attempted.append(task_id) or False)
+    with worker_db_factory() as db:
+        assert task_state.retry_pending_stress_stops(db) == 0
+        assert len(attempted) == task_state.STRESS_STOP_RETRY_BATCH
+        assert task_state.retry_pending_stress_stops(db) == 0
+    assert "stress-3" in attempted[task_state.STRESS_STOP_RETRY_BATCH:]
 
 
 def test_worker_only_claims_testcase_even_before_legacy_cleanup(worker_db_factory, monkeypatch):

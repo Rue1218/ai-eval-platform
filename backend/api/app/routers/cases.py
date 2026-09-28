@@ -31,7 +31,6 @@ from shared.casegen import (
     parse_cases,
     rebalance_by_strategy,
 )
-from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..case_excel import (
@@ -50,8 +49,6 @@ from ..models import (
     CaseFolder,
     CaseItem,
     CaseSet,
-    Dataset,
-    DatasetRow,
     Task,
     User,
     utcnow,
@@ -193,20 +190,6 @@ def _refresh_generated_count(db: Session, case_set: CaseSet) -> None:
     case_set.generated_count = (
         db.query(CaseItem).filter(CaseItem.case_set_id == case_set.id).count()
     )
-
-
-def _get_cases_by_ids(db: Session, case_set: CaseSet, case_ids: list[str]) -> list[CaseItem]:
-    """按 id 列表读取用例行；任一 id 不属于该用例集时抛出 VALIDATION。"""
-    rows = (
-        db.query(CaseItem)
-        .filter(CaseItem.case_set_id == case_set.id, CaseItem.id.in_(case_ids))
-        .all()
-    )
-    if len(rows) != len(set(case_ids)):
-        raise AppError(ErrorCode.VALIDATION, "case_ids 必须全部属于该用例集")
-    by_id = {row.id: row for row in rows}
-    # 按请求顺序返回，保证映射/补全的处理顺序与前端勾选顺序一致
-    return [by_id[case_id] for case_id in case_ids]
 
 
 def _upsert_case(
@@ -538,6 +521,11 @@ def update_case_set(
     """按提供的字段更新用例集；column_schema 整体替换，confirmed 集拒绝修改。"""
     case_set, _task = _lock_editable_case_set(db, set_id)
     values = body.model_dump(exclude_unset=True)
+    expected_revision = values.pop("expected_revision", None)
+    if "column_schema" in values and values["column_schema"] is None:
+        raise AppError(ErrorCode.VALIDATION, "column_schema 不能为 null，请传空数组清空扩展列")
+    if "column_schema" in values and expected_revision != case_set.revision:
+        raise AppError(ErrorCode.CONCURRENCY, "用例列已由其他操作更新，请刷新后再保存")
     if "folder_id" in values:
         folder_id = values.pop("folder_id")
         if folder_id is not None:
@@ -545,6 +533,7 @@ def update_case_set(
         case_set.folder_id = folder_id
     if "column_schema" in values:
         case_set.column_schema = values.pop("column_schema")
+        case_set.revision += 1
     for field, value in values.items():
         setattr(case_set, field, value)
     # 用例集元信息变更写审计（与 dataset_update / folder_update 口径一致）
@@ -572,6 +561,10 @@ def save_cases(
 ):
     """按用例 id 批量 upsert 用例行与扩展列；id 缺省时服务端生成，保存后重算 generated_count。"""
     case_set, _task = _lock_editable_case_set(db, set_id)
+    if case_set.revision != body.expected_revision:
+        raise AppError(ErrorCode.CONCURRENCY, "用例已由其他操作更新，请刷新后再保存")
+    if body.column_schema is not None:
+        case_set.column_schema = [column.model_dump() for column in body.column_schema]
     existing = {
         case.id: case
         for case in db.query(CaseItem).filter(CaseItem.case_set_id == case_set.id).all()
@@ -593,8 +586,10 @@ def save_cases(
     _refresh_generated_count(db, case_set)
     cases = _list_cases(db, case_set)
     case_set.checks = _selfcheck_items([_case_to_item(case) for case in cases])
+    case_set.revision += 1
     db.commit()
-    return {"items": [_case_to_item(case) for case in cases], "total": len(cases), "checks": case_set.checks}
+    return {"items": [_case_to_item(case) for case in cases], "total": len(cases),
+            "checks": case_set.checks, "revision": case_set.revision}
 
 
 @router.post("/{set_id}/confirm", response_model=CaseSetOut)
@@ -607,10 +602,12 @@ def confirm_case_set(
 ):
     """确认用例入库（ok=true）或废弃（ok=false），并联动关联 testcase 任务状态。
 
-    edits / mapping_target / target_id 为契约预留字段，仅记入审计明细；
-    实际映射入库走 POST /{set_id}/map。
+    edits / mapping_target / target_id 为兼容字段，仅记入审计明细；
+    旧评测数据集映射已停用。
     """
     case_set, task = _lock_editable_case_set(db, set_id)
+    if case_set.revision != body.expected_revision:
+        raise AppError(ErrorCode.CONCURRENCY, "用例已由其他操作更新，请刷新后再审核")
     if body.ok:
         case_set.status = "confirmed"
         case_set.confirmed_count = case_set.generated_count
@@ -652,6 +649,8 @@ def cancel_case_set(
 ):
     """废弃用例集；关联的 awaiting_case_confirm 任务同步置 cancelled。"""
     case_set, task = _lock_editable_case_set(db, set_id)
+    if case_set.revision != body.expected_revision:
+        raise AppError(ErrorCode.CONCURRENCY, "用例已由其他操作更新，请刷新后再废弃")
     case_set.status = "cancelled"
     if task:
         task.status = "cancelled"
@@ -679,84 +678,8 @@ def map_cases(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """批量映射用例到目标基准数据集；黄金 QA 域（M3）尚未上线，统一返回 VALIDATION。"""
-    case_set = _get_case_set_or_404(db, set_id, lock=True)
-    if case_set.status != "confirmed":
-        case_set, _task = _lock_editable_case_set(db, set_id)
-    if body.target == "gold_qa":
-        raise AppError(ErrorCode.VALIDATION, "知识库域尚未上线，暂不支持映射到黄金 QA")
-    dataset = db.query(Dataset).filter(Dataset.id == body.target_id).populate_existing().with_for_update().first()
-    if not dataset:
-        raise AppError(ErrorCode.VALIDATION, "目标 ID 类型不匹配或不存在")
-    if dataset.active_version_id:
-        raise AppError(ErrorCode.VALIDATION, "目标数据集已有发布版本，请通过受控导入创建新版本")
-    if case_set.status != "confirmed":
-        _assert_editable(case_set)
-    cases = _get_cases_by_ids(db, case_set, body.case_ids)
-    # 同一用例集和数据集分别持锁；重复请求或重复 case_ids 不产生重复映射行。
-    existing_ids = {
-        row.source_case_id for row in db.query(DatasetRow).filter(
-            DatasetRow.dataset_id == dataset.id,
-            DatasetRow.source_case_id.in_(body.case_ids),
-        ).all()
-    }
-    cases = list({case.id: case for case in cases}.values())
-    new_cases = [case for case in cases if case.id not in existing_ids]
-    max_row_no = (
-        db.query(func.max(DatasetRow.row_no)).filter(DatasetRow.dataset_id == dataset.id).scalar()
-        or 0
-    )
-    pending_count = 0
-    for offset, case in enumerate(new_cases, start=1):
-        question = (case.name or "").strip()
-        reference = (case.expected or "").strip()
-        context = (case.precondition or "").strip() or None
-        pending = not question or not reference
-        if pending:
-            pending_count += 1
-        db.add(
-            DatasetRow(
-                dataset_id=dataset.id,
-                row_no=max_row_no + offset,
-                question=question,
-                reference=reference,
-                context=context,
-                pending_complete=pending,
-                # 全部映射行回写来源用例，便于评测集待补全与版本溯源
-                source_case_id=case.id,
-                extras={"source_case_set_id": case_set.id},
-            )
-        )
-    for case in cases:
-        case.mapped = True
-    db.flush()
-    # 按 dataset_rows 实况重算目标集行数与待补全行数
-    rows = db.query(DatasetRow).filter(DatasetRow.dataset_id == dataset.id).all()
-    dataset.row_count = len(rows)
-    dataset.pending_complete_count = sum(1 for row in rows if row.pending_complete)
-    db.add(
-        AuditLog(
-            user_id=user.id,
-            action="case_set_map",
-            target_type="case_set",
-            target_id=case_set.id,
-            detail={
-                "name": case_set.name,
-                "target": body.target,
-                "target_id": body.target_id,
-                "case_count": len(new_cases),
-                "pending_count": pending_count,
-            },
-            ip=client_ip(request),
-        )
-    )
-    db.commit()
-    return {
-        "ok": True,
-        "mapped_count": len(new_cases),
-        "pending_count": pending_count,
-        "dataset_id": dataset.id,
-    }
+    """历史评测数据集映射已停用；用例审核后仅在用例域入库。"""
+    raise AppError(ErrorCode.VALIDATION, "评测数据集映射已停用，请在用例页审核入库")
 
 
 @router.post("/{set_id}/ai-fill")
@@ -839,6 +762,7 @@ async def import_case_set(
     mode: str = Query("append"),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
+    expected_revision: int = Query(..., ge=0),
 ):
     """从 Excel 导入用例行。mode=append 追加（同 id 则更新），replace 先清空再写入。"""
     case_set = _get_case_set_or_404(db, set_id)
@@ -857,6 +781,8 @@ async def import_case_set(
     parsed, fmt, skipped = parse_cases_xlsx(content)
     # 上传和解析期间不占业务行锁；写入前再获取最新状态并校验确认期限。
     case_set, _task = _lock_editable_case_set(db, set_id)
+    if case_set.revision != expected_revision:
+        raise AppError(ErrorCode.CONCURRENCY, "用例已由其他操作更新，请刷新后再导入")
     extra_keys: list[str] = []
     for item in parsed:
         extra_keys.extend((item.get("extras") or {}).keys())
@@ -893,6 +819,7 @@ async def import_case_set(
     db.flush()
     _refresh_generated_count(db, case_set)
     case_set.checks = _selfcheck_items([_case_to_item(case) for case in _list_cases(db, case_set)])
+    case_set.revision += 1
     db.add(
         AuditLog(
             user_id=user.id,
@@ -920,6 +847,7 @@ async def import_case_set(
         "skipped_count": skipped,
         "generated_count": case_set.generated_count,
         "checks": case_set.checks,
+        "revision": case_set.revision,
     }
 
 

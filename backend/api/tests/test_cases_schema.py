@@ -32,10 +32,10 @@ from app.schemas import (
         (
             "PUT",
             "/api/case-sets/cs-1/cases",
-            {"cases": [{"strategy": "正向", "priority": "P0", "name": "账密正确登录"}]},
+            {"expected_revision": 0, "cases": [{"strategy": "正向", "priority": "P0", "name": "账密正确登录"}]},
         ),
-        ("POST", "/api/case-sets/cs-1/confirm", {"ok": True}),
-        ("POST", "/api/case-sets/cs-1/cancel", {"reason": "需求变更"}),
+        ("POST", "/api/case-sets/cs-1/confirm", {"ok": True, "expected_revision": 0}),
+        ("POST", "/api/case-sets/cs-1/cancel", {"reason": "需求变更", "expected_revision": 0}),
         (
             "POST",
             "/api/case-sets/cs-1/map",
@@ -95,21 +95,30 @@ def test_case_in_requires_core_fields():
 def test_cases_payload_rejects_duplicate_id_and_accepts_empty():
     case = {"strategy": "正向", "priority": "P0", "name": "用例"}
     with pytest.raises(ValidationError):
-        CasesPayload(cases=[{**case, "id": "c-1"}, {**case, "id": "c-1"}])
-    assert CasesPayload(cases=[]).cases == []
+        CasesPayload(expected_revision=0, cases=[{**case, "id": "c-1"}, {**case, "id": "c-1"}])
+    assert CasesPayload(expected_revision=0, cases=[]).cases == []
+    with pytest.raises(ValidationError):
+        CasesPayload(cases=[])
+    with pytest.raises(ValidationError):
+        CasesPayload(expected_revision=0, cases=[], column_schema=[
+            {"key": "owner", "name": "负责人", "type": "string"},
+            {"key": "owner", "name": "重复", "type": "string"},
+        ])
 
 
 def test_case_confirm_schema():
     # ok 必填；mapping_target 仅接受契约两种取值
-    assert CaseConfirmIn(ok=True).mapping_target is None
+    assert CaseConfirmIn(ok=True, expected_revision=0).mapping_target is None
     with pytest.raises(ValidationError):
         CaseConfirmIn()
     with pytest.raises(ValidationError):
-        CaseConfirmIn(ok=True, mapping_target="excel")
+        CaseConfirmIn(ok=True, expected_revision=0, mapping_target="excel")
 
 
 def test_case_cancel_schema_default():
-    assert CaseCancelIn().reason is None
+    assert CaseCancelIn(expected_revision=0).reason is None
+    with pytest.raises(ValidationError):
+        CaseCancelIn()
 
 
 def test_case_map_schema():

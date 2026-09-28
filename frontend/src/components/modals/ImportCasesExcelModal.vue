@@ -88,7 +88,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'update:show', value: boolean): void
-  (e: 'imported', setId: string): void
+  (e: 'imported', setId: string, revision: number): void
 }>()
 
 const message = useMessage()
@@ -98,6 +98,7 @@ const importing = ref(false)
 const target = ref<'new' | 'current'>('new')
 const mode = ref<'append' | 'replace'>('append')
 const setName = ref('')
+const currentRevision = ref(0)
 
 const canImportCurrent = computed(() => props.currentSet?.status === 'generated')
 
@@ -114,6 +115,7 @@ watch(
     setName.value = ''
     mode.value = 'append'
     target.value = canImportCurrent.value ? 'current' : 'new'
+    currentRevision.value = props.currentSet?.revision ?? 0
     uploadRef.value?.clear()
   },
 )
@@ -160,18 +162,20 @@ async function handleImport() {
         folder_id: props.folderId || undefined,
       })
       setId = created.id
-      const result = await api.cases.importExcel(setId, file.value, 'replace')
+      const result = await api.cases.importExcel(setId, file.value, 'replace', created.revision)
       message.success(`已导入 ${result.imported_count} 条用例${result.skipped_count ? `，跳过 ${result.skipped_count} 行` : ''}`)
-      emit('imported', setId)
+      emit('imported', setId, result.revision)
       emit('update:show', false)
       return
     }
-    const result = await api.cases.importExcel(setId, file.value, mode.value)
+    const result = await api.cases.importExcel(setId, file.value, mode.value, currentRevision.value)
+    currentRevision.value = result.revision
     message.success(`已导入 ${result.imported_count} 条用例${result.skipped_count ? `，跳过 ${result.skipped_count} 行` : ''}`)
-    emit('imported', setId)
+    emit('imported', setId, result.revision)
     emit('update:show', false)
   } catch (err: any) {
-    message.error(err.message || '导入 Excel 失败')
+    if (err.status === 409) message.warning('用例已在其他窗口更新；文件选择已保留，请刷新用例集后再导入')
+    else message.error(err.message || '导入 Excel 失败')
   } finally {
     importing.value = false
   }

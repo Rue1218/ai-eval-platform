@@ -116,61 +116,8 @@ func handleRun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var job StressJob
-	if err := json.NewDecoder(r.Body).Decode(&job); err != nil {
-		http.Error(w, "invalid json", http.StatusBadRequest)
-		return
-	}
-	if job.TaskID == "" || job.URL == "" {
-		http.Error(w, "task_id and url required", http.StatusBadRequest)
-		return
-	}
-	if job.QPS < 1 {
-		job.QPS = 1
-	}
-	if job.QPS > 1000 {
-		job.QPS = 1000
-	}
-	if job.DurationS < 1 {
-		job.DurationS = 1
-	}
-	if job.DurationS > 1800 {
-		job.DurationS = 1800
-	}
-	if job.Method == "" {
-		if len(job.Body) > 0 {
-			job.Method = http.MethodPost
-		} else {
-			job.Method = http.MethodGet
-		}
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	runner := &runningJob{
-		job:       job,
-		cancel:    cancel,
-		status:    "running",
-		latencies: make([]float64, 0, 1024),
-		started:   time.Now().UTC(),
-	}
-
-	jobsMu.Lock()
-	if existing, ok := jobs[job.TaskID]; ok && existing.getStatus() == "running" {
-		jobsMu.Unlock()
-		cancel()
-		http.Error(w, "job already running", http.StatusConflict)
-		return
-	}
-	jobs[job.TaskID] = runner
-	jobsMu.Unlock()
-
-	log.Printf("stress job start task=%s env=%s model=%s qps=%d duration=%ds",
-		job.TaskID, job.Env, job.Model, job.QPS, job.DurationS)
-	go runner.loop(ctx)
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusAccepted)
-	_ = json.NewEncoder(w).Encode(map[string]any{"status": "accepted", "task_id": job.TaskID})
+	// 平台已停用全部压测；旧 Worker 的迟到请求也不能重新启动发压。
+	http.Error(w, "stress execution disabled", http.StatusGone)
 }
 
 func handleStatus(w http.ResponseWriter, r *http.Request) {

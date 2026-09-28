@@ -16,16 +16,12 @@ from .models import (
     Dataset,
     DatasetFolder,
     DatasetRow,
-    DispatchEvent,
     DispatchWorker,
     GoldQa,
     GoldQaItem,
     KnowledgeBase,
     ProtocolProfile,
-    Report,
     Setting,
-    Task,
-    TaskEvent,
     User,
 )
 
@@ -185,162 +181,6 @@ def _seed_workers(db: Session) -> list[DispatchWorker]:
     return workers
 
 
-def _seed_tasks_and_reports(
-    db: Session,
-    admin: User,
-    dataset: Dataset | None,
-    workers: list[DispatchWorker],
-    profiles: list[ProtocolProfile],
-) -> None:
-    """先评后压演示链路：benchmark 父任务 + stress 子任务 + RAG 任务，各配报告与事件。"""
-    if db.query(Task).count():
-        return
-    dataset_id = dataset.id if dataset else None
-    # 报告 scores 的 profile 字段引用真实协议档 ID，保证详情页可回溯
-    profile_ids = [p.id for p in profiles[:2]] or ["seed-profile-1", "seed-profile-2"]
-    started = _hours_ago(5)
-    finished = started + timedelta(minutes=12)
-
-    # 1) Benchmark 父任务（已成功）
-    bm = Task(
-        kind="benchmark",
-        status="succeeded",
-        config={
-            "dataset_id": dataset_id,
-            "dataset_version": 3,
-            "metric": "contain",
-            "profile_ids": profile_ids,
-            "with_stress": True,
-        },
-        progress={"done": 20, "total": 20, "percent": 100, "message": "评测完成"},
-        created_by=admin.id,
-        created_at=started,
-        started_at=started,
-        finished_at=finished,
-    )
-    db.add(bm)
-    db.flush()
-    db.add(
-        Report(
-            task_id=bm.id,
-            kind="benchmark",
-            created_at=finished,
-            metrics={
-                "scores": [
-                    {"profile": profile_ids[0], "profile_name": "GPT-4o", "contain": 0.87, "exact": 0.62, "rouge_l": 0.74, "fail_rate": 0.0, "latency": "1.2s", "judge": 4.3},
-                    {"profile": profile_ids[-1], "profile_name": "Claude Sonnet", "contain": 0.84, "exact": 0.58, "rouge_l": 0.71, "fail_rate": 0.02, "latency": "1.6s", "judge": 4.1},
-                ],
-                "judge_info": {"model": "claude-sonnet-4-20250514", "note": "裁判打分基于 5 分制 rubric"},
-                "sample_items": [],
-            },
-        )
-    )
-
-    # 2) 派生压测子任务（已成功，含时序曲线）
-    st_started = finished + timedelta(minutes=2)
-    st_finished = st_started + timedelta(minutes=8)
-    stress = Task(
-        kind="stress",
-        status="succeeded",
-        parent_task_id=bm.id,
-        config={"parent_task_id": bm.id, "stress": {"env": "test", "qps": 120, "duration_s": 480}},
-        progress={"done": 1, "total": 1, "percent": 100, "message": "压测完成"},
-        created_by=admin.id,
-        created_at=st_started,
-        started_at=st_started,
-        finished_at=st_finished,
-    )
-    db.add(stress)
-    db.flush()
-    series = [
-        {"ts": (st_started + timedelta(minutes=i)).isoformat(), "qps": qps, "rt_ms": rt, "error_rate": er}
-        for i, (qps, rt, er) in enumerate(
-            [(20, 280, 0.0), (55, 320, 0.0), (90, 450, 0.001), (118, 780, 0.002), (115, 1100, 0.004), (60, 520, 0.001)]
-        )
-    ]
-    db.add(
-        Report(
-            task_id=stress.id,
-            kind="stress",
-            created_at=st_finished,
-            metrics={
-                "qps_peak": 118,
-                "rt_avg_ms": 575,
-                "error_rate": 0.002,
-                "sla_p99_ms": 1100,
-                "est_cost_usd": 0.42,
-                "knee": {"qps": 118, "note": "P99 在 118 QPS 后出现拐点"},
-                "time_series": series,
-                "series": series,
-            },
-        )
-    )
-
-    # 3) RAG 评测任务（已成功，四模式对比）
-    rag_started = _hours_ago(2)
-    rag_finished = rag_started + timedelta(minutes=6)
-    rag = Task(
-        kind="rag",
-        status="succeeded",
-        config={"kb_id": "kb-default", "gold_qa_id": "qa-v1", "rag_mode": ["naive", "local", "global", "hybrid"]},
-        progress={"done": 50, "total": 50, "percent": 100, "message": "评测完成"},
-        created_by=admin.id,
-        created_at=rag_started,
-        started_at=rag_started,
-        finished_at=rag_finished,
-    )
-    db.add(rag)
-    db.flush()
-    db.add(
-        Report(
-            task_id=rag.id,
-            kind="rag",
-            created_at=rag_finished,
-            metrics={
-                "k": 5,
-                "hit_rate_at_k": 0.86,
-                "mrr": 0.78,
-                "recall_at_k": 0.90,
-                "answer_contain": 0.83,
-                "modes": ["naive", "local", "global", "hybrid"],
-                "rag_scores": {
-                    "naive": {"hit": 0.72, "mrr": 0.61, "recall": 0.78, "contain": 0.70},
-                    "local": {"hit": 0.84, "mrr": 0.76, "recall": 0.88, "contain": 0.81},
-                    "global": {"hit": 0.80, "mrr": 0.72, "recall": 0.85, "contain": 0.77},
-                    "hybrid": {"hit": 0.86, "mrr": 0.78, "recall": 0.90, "contain": 0.83},
-                },
-                "hit_denominator_note": "无 expected_doc_ids 的样本不计入 Hit Rate 分母",
-            },
-        )
-    )
-
-    # 4) 任务时间线事件
-    for task, label in [(bm, "Benchmark 评测"), (stress, "派生压测"), (rag, "RAG 评测")]:
-        db.add_all(
-            [
-                TaskEvent(task_id=task.id, event="queued", message=f"{label}任务已入队", payload={"status": "queued"}, ts=task.created_at),
-                TaskEvent(task_id=task.id, event="running", message=f"{label}任务开始执行", payload={"status": "running"}, ts=task.started_at),
-                TaskEvent(task_id=task.id, event="succeeded", message=f"{label}任务执行成功", payload={"status": "succeeded"}, ts=task.finished_at),
-            ]
-        )
-
-    # 5) 调度事件流：供调度中心日志与星图回放
-    w1 = workers[0].id if workers else "worker-01"
-    w4 = workers[3].id if len(workers) > 3 else "worker-04"
-    w2 = workers[1].id if len(workers) > 1 else "worker-02"
-    db.add_all(
-        [
-            DispatchEvent(task_id=bm.id, worker_id=w1, event="assigned", message=f"任务 {bm.id[:8]} 分配至 {w1} · 策略=负载均衡 · 耗时 82ms", ts=started),
-            DispatchEvent(task_id=bm.id, worker_id=w1, event="succeeded", message=f"{w1} 执行完成 {bm.id[:8]}，释放并发槽位", ts=finished),
-            DispatchEvent(task_id=stress.id, worker_id=w4, event="assigned", message=f"派生压测 {stress.id[:8]} 分配至 {w4} · env=test", ts=st_started),
-            DispatchEvent(task_id=stress.id, worker_id=w4, event="succeeded", message=f"{w4} 执行完成 {stress.id[:8]} · 峰值 118 QPS", ts=st_finished),
-            DispatchEvent(task_id=rag.id, worker_id=w2, event="assigned", message=f"RAG 评测 {rag.id[:8]} 分配至 {w2}", ts=rag_started),
-            DispatchEvent(task_id=rag.id, worker_id=w2, event="succeeded", message=f"{w2} 执行完成 {rag.id[:8]} · Hit@5=0.86", ts=rag_finished),
-        ]
-    )
-    logger.info("已播种先评后压演示任务链与 3 份报告")
-
-
 def _seed_kb(db: Session, admin: User) -> KnowledgeBase | None:
     """种子默认知识库与黄金 QA（不种子文档文件），保证黄金 QA 树首屏有数据。"""
     if db.query(KnowledgeBase).count():
@@ -377,13 +217,10 @@ def _seed_kb(db: Session, admin: User) -> KnowledgeBase | None:
 
 
 def bootstrap_preview_data(db: Session, admin: User) -> None:
-    """按域幂等播种预览数据；任一域已有数据即跳过该域。"""
-    profiles = _seed_profiles(db, admin)
-    if not profiles:
-        profiles = list(db.query(ProtocolProfile).order_by(ProtocolProfile.created_at.asc()).all())
-    dataset = _seed_datasets(db, admin)
+    """按域幂等播种预览数据，不伪造评测任务及报告。"""
+    _seed_profiles(db, admin)
+    _seed_datasets(db, admin)
     _seed_cases(db, admin)
     _seed_kb(db, admin)
-    workers = _seed_workers(db)
-    _seed_tasks_and_reports(db, admin, dataset, workers, profiles)
+    _seed_workers(db)
     db.commit()

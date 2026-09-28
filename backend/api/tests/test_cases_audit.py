@@ -14,24 +14,29 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import sessionmaker
 
 from app.errors import AppError, ErrorCode
+from app.harness.execution.task_tools import cancel_task_safe
 from app.models import (
     AuditLog,
+    CaseFolder,
     CaseItem,
     CaseSet,
     Dataset,
     DatasetRow,
     StoredFile,
     Task,
+    TaskEvent,
     User,
     utcnow,
 )
 from app.routers import cases as routes
+from app.routers import tasks as task_routes
 from app.schemas import (
     CaseAiFillIn,
     CaseAiGenerateIn,
     CaseCancelIn,
     CaseConfirmIn,
     CaseMapIn,
+    CaseSetUpdate,
     CasesPayload,
 )
 
@@ -41,7 +46,7 @@ def cases_db():
     """仅在内存库复制相关 DDL；保留 ORM 行为与事务，适配 JSONB 和自增主键。"""
     metadata = MetaData()
     pending = [model.__table__ for model in (
-        User, CaseSet, CaseItem, Task, Dataset, DatasetRow, StoredFile, AuditLog,
+        User, CaseFolder, CaseSet, CaseItem, Task, TaskEvent, Dataset, DatasetRow, StoredFile, AuditLog,
     )]
     while pending:
         table = pending.pop()
@@ -151,7 +156,7 @@ def test_save_reorders_ids_recomputes_checks_and_ignores_workflow_fields(cases_d
     """保存响应跟随提交顺序，真实状态不受客户端平铺的保留字段覆盖。"""
     _add_case(cases_db, "first", sort_order=0)
     _add_case(cases_db, "second", sort_order=1, strategy="反向")
-    result = routes.save_cases("set", CasesPayload(cases=[
+    result = routes.save_cases("set", CasesPayload(expected_revision=0, cases=[
         {"id": "second", "name": "反向", "strategy": "反向", "priority": "YC", "expected": "拒绝"},
         {"id": "first", "name": "正向", "strategy": "正向", "priority": "HX", "expected": "成功", "mapped": True},
         {"name": "新增", "strategy": "边界", "priority": "BJ", "expected": "边界有效"},
@@ -161,15 +166,87 @@ def test_save_reorders_ids_recomputes_checks_and_ignores_workflow_fields(cases_d
     assert result["items"][1]["mapped"] is False
     assert result["checks"] == []
     assert cases_db.get(CaseSet, "set").generated_count == 3
+    assert result["revision"] == 1
 
 
 def test_save_empty_clears_last_row_and_recomputes_checks(cases_db):
     """最后一条用例删除后允许提交空快照，计数和检查项跟随真实剩余行。"""
     _add_case(cases_db)
-    result = routes.save_cases("set", CasesPayload(cases=[]), cases_db, _actor())
+    result = routes.save_cases("set", CasesPayload(expected_revision=0, cases=[]), cases_db, _actor())
     assert result["items"] == [] and result["total"] == 0
     assert cases_db.get(CaseSet, "set").generated_count == 0
     assert len(result["checks"]) == 2
+
+
+def test_stale_snapshot_cannot_delete_another_save(cases_db):
+    """两人读取同一修订号后，旧快照不能删除先保存的新用例。"""
+    _add_case(cases_db, "first")
+    original = routes.get_case_set("set", cases_db, _actor())
+    assert original.revision == 0
+    newer = routes.save_cases("set", CasesPayload(expected_revision=original.revision, cases=[
+        {"id": "first", "name": "first", "strategy": "正向", "priority": "HX", "expected": "成功"},
+        {"name": "new", "strategy": "边界", "priority": "BJ", "expected": "有效"},
+    ]), cases_db, _actor())
+    with pytest.raises(AppError) as error:
+        routes.save_cases("set", CasesPayload(expected_revision=original.revision, cases=[
+            {"id": "first", "name": "旧页面", "strategy": "正向", "priority": "HX", "expected": "成功"},
+        ]), cases_db, _actor())
+    assert error.value.code == ErrorCode.CONCURRENCY
+    assert newer["revision"] == cases_db.get(CaseSet, "set").revision == 1
+    assert cases_db.query(CaseItem).count() == 2
+    assert cases_db.get(CaseItem, "first").name == "first"
+
+
+def test_save_columns_and_rows_conflict_without_partial_metadata(cases_db):
+    """旧修订号的列和用例行必须一起拒绝，不出现半次保存。"""
+    newer = routes.save_cases("set", CasesPayload(expected_revision=0, cases=[], column_schema=[
+        {"key": "owner", "name": "负责人", "type": "string"},
+    ]), cases_db, _actor())
+    assert newer["revision"] == 1
+    with pytest.raises(AppError) as error:
+        routes.save_cases("set", CasesPayload(expected_revision=0, cases=[], column_schema=[
+            {"key": "team", "name": "团队", "type": "string"},
+        ]), cases_db, _actor())
+    assert error.value.code == ErrorCode.CONCURRENCY
+    assert cases_db.get(CaseSet, "set").column_schema[0]["key"] == "owner"
+
+
+def test_independent_column_update_invalidates_stale_cases(cases_db):
+    """旧元信息接口修改列后也应让旧行快照保存收到冲突。"""
+    updated = routes.update_case_set("set", CaseSetUpdate(expected_revision=0, column_schema=[
+        {"key": "owner", "name": "负责人", "type": "string"},
+    ]), _request(), cases_db, _actor())
+    assert updated.revision == 1
+    with pytest.raises(AppError) as error:
+        routes.save_cases("set", CasesPayload(expected_revision=0, cases=[]), cases_db, _actor())
+    assert error.value.code == ErrorCode.CONCURRENCY
+
+
+def test_stale_independent_column_update_does_not_overwrite(cases_db):
+    """旧页面独立提交列定义时同样必须校验修订号。"""
+    cases_db.add(CaseFolder(id="folder", name="原目录"))
+    cases_db.get(CaseSet, "set").folder_id = "folder"
+    cases_db.commit()
+    routes.save_cases("set", CasesPayload(expected_revision=0, cases=[], column_schema=[
+        {"key": "owner", "name": "负责人", "type": "string"},
+    ]), cases_db, _actor())
+    with pytest.raises(AppError) as error:
+        routes.update_case_set("set", CaseSetUpdate(expected_revision=0, folder_id=None, column_schema=[
+            {"key": "team", "name": "团队", "type": "string"},
+        ]), _request(), cases_db, _actor())
+    assert error.value.code == ErrorCode.CONCURRENCY
+    assert cases_db.get(CaseSet, "set").column_schema[0]["key"] == "owner"
+    assert cases_db.get(CaseSet, "set").folder_id == "folder"
+
+
+def test_independent_column_update_rejects_null_without_db_error(cases_db):
+    """显式 null 应返回业务校验错误，不能写入非空列或推进修订号。"""
+    with pytest.raises(AppError) as error:
+        routes.update_case_set("set", CaseSetUpdate(expected_revision=0, column_schema=None),
+                               _request(), cases_db, _actor())
+    assert error.value.code == ErrorCode.VALIDATION
+    assert cases_db.get(CaseSet, "set").column_schema == []
+    assert cases_db.get(CaseSet, "set").revision == 0
 
 
 @pytest.mark.parametrize("status", ["confirmed", "cancelled"])
@@ -180,7 +257,7 @@ def test_terminal_set_rejects_save_and_ai_fill(cases_db, monkeypatch, status):
     cases_db.commit()
     monkeypatch.setattr(routes, "call_agent_model", lambda *a, **k: pytest.fail("终态不能补全"))
     with pytest.raises(AppError):
-        routes.save_cases("set", CasesPayload(cases=[]), cases_db, _actor())
+        routes.save_cases("set", CasesPayload(expected_revision=0, cases=[]), cases_db, _actor())
     with pytest.raises(AppError):
         routes.ai_fill_cases("set", CaseAiFillIn(case_ids=["case"]), cases_db, _actor())
     assert cases_db.query(CaseItem).count() == 1
@@ -190,10 +267,24 @@ def test_confirm_expired_set_cannot_succeed_before_expiry_scan(cases_db):
     """扫描尚未执行也不能确认过期结果，任务和用例集不会出现相反终态。"""
     task = _waiting_task(cases_db, expired=True)
     with pytest.raises(AppError) as error:
-        routes.confirm_case_set("set", CaseConfirmIn(ok=True), _request(), cases_db, _actor())
+        routes.confirm_case_set("set", CaseConfirmIn(ok=True, expected_revision=0), _request(), cases_db, _actor())
     assert error.value.code == ErrorCode.VALIDATION
     assert cases_db.get(CaseSet, "set").status == "generated"
     assert task.status == "awaiting_case_confirm"
+
+
+def test_confirm_rejects_revision_not_reviewed_by_user(cases_db):
+    """审核页读取后新增用例时，不可直接确认用户未看过的最新版本。"""
+    task = _waiting_task(cases_db)
+    routes.save_cases("set", CasesPayload(expected_revision=0, cases=[
+        {"name": "新用例", "strategy": "正向", "priority": "HX", "expected": "成功"},
+    ]), cases_db, _actor())
+    with pytest.raises(AppError) as error:
+        routes.confirm_case_set("set", CaseConfirmIn(ok=True, expected_revision=0),
+                                _request(), cases_db, _actor())
+    assert error.value.code == ErrorCode.CONCURRENCY
+    assert task.status == "awaiting_case_confirm"
+    assert cases_db.get(CaseSet, "set").status == "generated"
 
 
 def test_confirm_uses_case_set_then_task_locks_and_refreshes_stale_state(cases_db):
@@ -212,7 +303,7 @@ def test_confirm_uses_case_set_then_task_locks_and_refreshes_stale_state(cases_d
 
     event.listen(cases_db, "do_orm_execute", record_lock)
     with pytest.raises(AppError):
-        routes.confirm_case_set("set", CaseConfirmIn(ok=True), _request(), cases_db, _actor())
+        routes.confirm_case_set("set", CaseConfirmIn(ok=True, expected_revision=0), _request(), cases_db, _actor())
     assert locked == [CaseSet, Task]
     assert task.status == "cancelled"
     assert cases_db.get(CaseSet, "set").status == "generated"
@@ -221,35 +312,86 @@ def test_confirm_uses_case_set_then_task_locks_and_refreshes_stale_state(cases_d
 def test_cancel_transitions_case_set_and_task_together(cases_db):
     """废弃用例与关联任务在同一事务产生一致终态。"""
     task = _waiting_task(cases_db)
-    result = routes.cancel_case_set("set", CaseCancelIn(), _request(), cases_db, _actor())
+    result = routes.cancel_case_set("set", CaseCancelIn(expected_revision=0), _request(), cases_db, _actor())
     assert result.status == task.status == "cancelled"
     assert task.finished_at is not None
 
 
+def test_stale_cancel_cannot_discard_unreviewed_revision(cases_db):
+    """同事保存新版后，旧页面的废弃请求不得废弃新版草稿。"""
+    task = _waiting_task(cases_db)
+    routes.save_cases("set", CasesPayload(expected_revision=0, cases=[
+        {"name": "新用例", "strategy": "正向", "priority": "HX", "expected": "成功"},
+    ]), cases_db, _actor())
+    with pytest.raises(AppError) as error:
+        routes.cancel_case_set("set", CaseCancelIn(expected_revision=0), _request(), cases_db, _actor())
+    assert error.value.code == ErrorCode.CONCURRENCY
+    assert task.status == "awaiting_case_confirm"
+    assert cases_db.get(CaseSet, "set").status == "generated"
+
+
+def test_task_cancel_transitions_draft_with_case_set_first_lock(cases_db):
+    """任务中心取消待审核任务时同步废弃草稿，锁序与确认流程相同。"""
+    task = _waiting_task(cases_db)
+    locked = []
+
+    def record_lock(execute_state):
+        """SQLite 不执行行锁，用 SQLAlchemy 查询标记记录生产锁序。"""
+        statement = execute_state.statement
+        if execute_state.is_select and statement._for_update_arg is not None:
+            locked.append(statement.column_descriptions[0]["entity"])
+
+    event.listen(cases_db, "do_orm_execute", record_lock)
+    result = task_routes.cancel_task(task.id, _request(), cases_db, _actor())
+    assert result["status"] == "cancelled"
+    assert cases_db.get(CaseSet, "set").status == "cancelled"
+    assert locked[:2] == [CaseSet, Task]
+
+
+def test_running_stress_cancel_records_external_stop(cases_db):
+    """旧运行中压测取消后保留待停发标记，供 Worker 重试外部引擎。"""
+    cases_db.add(Task(id="stress", kind="stress", created_by="owner", status="running", result={}))
+    cases_db.commit()
+    result = task_routes.cancel_task("stress", _request(), cases_db, _actor())
+    assert result["status"] == "cancelled"
+    assert cases_db.get(Task, "stress").result["stress_stop_pending"] is True
+
+
+def test_agent_task_cancel_also_discards_generated_draft(cases_db, monkeypatch):
+    """Agent 工具入口与任务中心使用同一个取消状态联动。"""
+    from app import db as db_module
+
+    _waiting_task(cases_db)
+    monkeypatch.setattr(db_module, "SessionLocal", lambda: cases_db)
+    result = cancel_task_safe({"task_id": "task"}, SimpleNamespace(session_id="session", user_id="owner"))
+    assert result["status"] == "cancelled"
+    assert cases_db.get(CaseSet, "set").status == "cancelled"
+
+
 def test_map_rejects_published_dataset_without_legacy_write(cases_db):
-    """存在正式版本时映射必须显式拒绝，不能写入评测读取不到的 legacy 行。"""
+    """评测映射已经停用，任何目标数据集都不能再写入。"""
     _add_case(cases_db)
     cases_db.add(Dataset(id="dataset", name="已发布", active_version_id="version"))
     cases_db.commit()
     with pytest.raises(AppError) as error:
         routes.map_cases("set", CaseMapIn(target="dataset", target_id="dataset", case_ids=["case"]),
                          _request(), cases_db, _actor())
-    assert "受控导入" in error.value.message
+    assert "已停用" in error.value.message
     assert cases_db.query(DatasetRow).count() == 0
     assert cases_db.get(CaseItem, "case").mapped is False
 
 
-def test_map_legacy_is_idempotent_for_duplicate_ids_and_retry(cases_db):
-    """重复点击、网络重试和重复勾选均只写一份映射。"""
+def test_map_rejects_generated_draft_without_legacy_write(cases_db):
+    """未审核草稿不可通过旧映射接口进入评测数据集。"""
     _add_case(cases_db)
     cases_db.add(Dataset(id="dataset", name="旧数据集"))
     cases_db.commit()
     body = CaseMapIn(target="dataset", target_id="dataset", case_ids=["case", "case"])
-    first = routes.map_cases("set", body, _request(), cases_db, _actor())
-    second = routes.map_cases("set", body, _request(), cases_db, _actor())
-    assert first["mapped_count"] == 1 and second["mapped_count"] == 0
-    assert cases_db.query(DatasetRow).count() == 1
-    assert cases_db.get(Dataset, "dataset").row_count == 1
+    with pytest.raises(AppError) as error:
+        routes.map_cases("set", body, _request(), cases_db, _actor())
+    assert error.value.code == ErrorCode.VALIDATION
+    assert cases_db.query(DatasetRow).count() == 0
+    assert cases_db.get(CaseItem, "case").mapped is False
 
 
 def test_ai_fill_rejects_foreign_ids_and_filters_metadata(cases_db, monkeypatch):
@@ -293,9 +435,35 @@ def test_append_import_recomputes_checks_from_entire_set(cases_db):
     buffer.seek(0)
     result = asyncio.run(routes.import_case_set(
         "set", _request(), UploadFile(file=buffer, filename="补充.xlsx"), "append", cases_db, _actor(),
+        expected_revision=0,
     ))
     assert result["generated_count"] == 2
     assert result["checks"] == []
+    assert result["revision"] == 1
+    with pytest.raises(AppError) as error:
+        routes.save_cases("set", CasesPayload(expected_revision=0, cases=[]), cases_db, _actor())
+    assert error.value.code == ErrorCode.CONCURRENCY
+    assert cases_db.query(CaseItem).count() == 2
+
+
+def test_stale_replace_import_preserves_newer_cases(cases_db):
+    """旧页面的整集替换导入不能清除另一个页面新保存的用例。"""
+    routes.save_cases("set", CasesPayload(expected_revision=0, cases=[
+        {"name": "新保存", "strategy": "正向", "priority": "HX", "expected": "成功"},
+    ]), cases_db, _actor())
+    workbook = Workbook()
+    workbook.active.append(["用例名称", "预期结果"])
+    workbook.active.append(["旧导入", "旧结果"])
+    buffer = BytesIO()
+    workbook.save(buffer)
+    buffer.seek(0)
+    with pytest.raises(AppError) as error:
+        asyncio.run(routes.import_case_set(
+            "set", _request(), UploadFile(file=buffer, filename="旧页面.xlsx"),
+            "replace", cases_db, _actor(), expected_revision=0,
+        ))
+    assert error.value.code == ErrorCode.CONCURRENCY
+    assert [case.name for case in cases_db.query(CaseItem).all()] == ["新保存"]
 
 
 @pytest.mark.parametrize("mode", ["append", "replace"])
@@ -316,6 +484,7 @@ def test_import_repeated_ids_update_one_local_row(cases_db, mode, identity):
     buffer.seek(0)
     result = asyncio.run(routes.import_case_set(
         "set", _request(), UploadFile(file=buffer, filename="重复编号.xlsx"), mode, cases_db, _actor(),
+        expected_revision=0,
     ))
     rows = cases_db.query(CaseItem).filter(CaseItem.case_set_id == "set").all()
     assert result["generated_count"] == len(rows) == 1

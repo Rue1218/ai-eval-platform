@@ -557,6 +557,7 @@ export interface DatasetFolder {
 
 export interface CaseImportResult {
   ok: boolean
+  revision: number
   format: 'platform' | 'standard' | 'simple'
   mode: 'append' | 'replace'
   imported_count: number
@@ -570,6 +571,7 @@ export interface CaseSet {
   task_id?: string | null
   name: string
   status: 'generated' | 'confirmed' | 'cancelled'
+  revision: number
   generated_count: number
   confirmed_count: number
   expires_in_h?: number
