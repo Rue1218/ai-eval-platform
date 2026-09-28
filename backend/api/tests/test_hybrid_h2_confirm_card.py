@@ -183,7 +183,7 @@ def test_w5_emits_confirm_card_and_completes_turn(hybrid_on: None) -> None:
     factory = _FakeDbFactory()
     events = _run(
         LangGraphAgent(_StubGateway()),
-        _request("跑一次基准评测"),
+        _request("生成测试用例"),
         {
             "configurable": {
                 "thread_id": "t1",
@@ -208,11 +208,11 @@ def test_w5_emits_confirm_card_and_completes_turn(hybrid_on: None) -> None:
 
 def test_confirm_card_defaults_match_backend_source(hybrid_on: None) -> None:
     """卡载荷与 agent/defaults.py 唯一默认值精确一致（前端同源约束）。"""
-    from app.agent.defaults import DEFAULT_RAG_MODE, DEFAULT_RUN, DEFAULT_STRESS, default_task_spec
+    from app.agent.defaults import default_task_spec
 
     events = _run(
         LangGraphAgent(_StubGateway()),
-        _request("跑一次基准评测"),
+        _request("生成测试用例"),
         {
             "configurable": {
                 "thread_id": "t1",
@@ -223,11 +223,9 @@ def test_confirm_card_defaults_match_backend_source(hybrid_on: None) -> None:
         },
     )
     card = _payload(events, "confirm")
-    assert card == default_task_spec("benchmark")
-    assert card["run"] == DEFAULT_RUN
-    assert card["stress"] == DEFAULT_STRESS
-    assert card["rag_mode"] == DEFAULT_RAG_MODE
-    assert card["kind"] == "benchmark"
+    assert card == default_task_spec("testcase")
+    assert card["kind"] == "testcase"
+    assert card["case_source"] == {"text": ""}
 
 
 def test_w5_records_confirm_id_and_stops_chain(hybrid_on: None) -> None:
@@ -260,7 +258,7 @@ def test_confirm_replay_merges_spec_and_enqueues_via_w6(hybrid_on: None) -> None
     factory = _FakeDbFactory()
     events = _run(
         LangGraphAgent(_StubGateway()),
-        _request("对 profile-A 跑基准评测"),
+        _request("生成测试用例"),
         {
             "configurable": {
                 "thread_id": "t2",
@@ -268,15 +266,14 @@ def test_confirm_replay_merges_spec_and_enqueues_via_w6(hybrid_on: None) -> None
                 "session_id": "s-1",
                 "user_id": "u-1",
                 "workflow_confirm": {
-                    "task_spec": {"profile_ids": ["profile-A"], "dataset_id": "ds-math-qa"}
+                    "task_spec": {"case_source": {"text": "用户登录成功后进入首页"}}
                 },
             }
         },
     )
     w5 = _node_output(events, "w5_await_confirm")
     assert w5 is not None
-    assert w5["task_spec"]["profile_ids"] == ["profile-A"]
-    assert w5["task_spec"]["dataset_id"] == "ds-math-qa"
+    assert w5["task_spec"]["case_source"] == {"text": "用户登录成功后进入首页"}
     assert "workflow_failed" not in w5
     w6 = _node_output(events, "w6_enqueue")
     assert w6 is not None and w6["enqueued_task_id"]
@@ -288,25 +285,25 @@ def test_confirm_replay_merges_spec_and_enqueues_via_w6(hybrid_on: None) -> None
     assert "confirm" not in kinds  # 已确认，不再发卡
 
 
-def test_replay_missing_required_assets_stops_in_place(hybrid_on: None) -> None:
-    """回执缺必填资产：W5 就地收尾（error + completed(error)），绝不入队。"""
+def test_replay_missing_case_source_stops_in_place(hybrid_on: None) -> None:
+    """回执缺用例来源：W5 就地收尾（error + completed(error)），绝不入队。"""
     factory = _FakeDbFactory()
     events = _run(
         LangGraphAgent(_StubGateway()),
-        _request("跑一次基准评测"),
+        _request("生成测试用例"),
         {
             "configurable": {
                 "thread_id": "t3",
                 "db_factory": factory,
                 "session_id": "s-1",
                 "user_id": "u-1",
-                "workflow_confirm": {"task_spec": {"dataset_id": "ds-1"}},  # 缺 profile_ids
+                "workflow_confirm": {"task_spec": {"case_source": {"text": ""}}},
             }
         },
     )
     error = _payload(events, "error")
     assert error["code"] == "VALIDATION"
-    assert "必填项" in error["message"]
+    assert "需求文本" in error["message"]
     completed = _payload(events, "response.completed")
     assert completed["finish_reason"] == "error"
     assert _node_output(events, "w6_enqueue") is None
@@ -375,9 +372,9 @@ def test_ack_repeat_or_missing_card_rejected(monkeypatch: pytest.MonkeyPatch) ->
 
 
 def test_ack_validation_failure_keeps_card(monkeypatch: pytest.MonkeyPatch) -> None:
-    """回执缺必填：TaskCreate 同源校验失败 → 卡保留，用户补齐后可重试。"""
+    """回执缺需求来源：TaskCreate 同源校验失败 → 卡保留，用户补齐后可重试。"""
     ws, db, emitted, replayed = _ack_env(
-        monkeypatch, spec={"kind": "benchmark", "dataset_id": "d1"}, author_id="u-1"
+        monkeypatch, spec={"kind": "testcase", "case_source": {"text": ""}}, author_id="u-1"
     )
     with pytest.raises(AppError) as exc:
         asyncio.run(ws._handle_confirm_ack(db, None, None, "s-1", "u-1", {"ok": True, "patch": {}}))
@@ -388,21 +385,36 @@ def test_ack_validation_failure_keeps_card(monkeypatch: pytest.MonkeyPatch) -> N
     assert not any("UPDATE sessions SET pending_confirm = NULL" in sql for sql in db.executed)
 
 
+def test_ack_retired_benchmark_keeps_existing_card(monkeypatch: pytest.MonkeyPatch) -> None:
+    """升级前遗留的评测确认卡拒绝执行，失败时不清卡或发起重放。"""
+    ws, db, emitted, replayed = _ack_env(
+        monkeypatch,
+        spec={"kind": "benchmark", "profile_ids": ["p1"], "dataset_id": "d1"},
+        author_id="u-1",
+    )
+    with pytest.raises(AppError) as error:
+        asyncio.run(ws._handle_confirm_ack(db, None, None, "s-1", "u-1", {"ok": True}))
+    assert error.value.code == ErrorCode.VALIDATION
+    assert replayed == emitted == []
+    assert db.rolled_back == 1
+    assert not any("UPDATE sessions SET pending_confirm = NULL" in sql for sql in db.executed)
+
+
 def test_ack_ok_merges_patch_clears_card_and_replays(monkeypatch: pytest.MonkeyPatch) -> None:
     """批准：patch 深合并 → 清卡提交 → 以合并后的 spec 派生重放（入队经 W6）。"""
     ws, db, emitted, replayed = _ack_env(
         monkeypatch,
-        spec={"kind": "benchmark", "profile_ids": ["p1"], "dataset_id": "d1", "run": {"sample_size": 1000}},
+        spec={"kind": "testcase", "case_source": {"text": "旧需求"}, "run": {"sample_size": 1000}},
         author_id="u-1",
     )
     asyncio.run(
         ws._handle_confirm_ack(
-            db, None, None, "s-1", "u-1", {"ok": True, "patch": {"dataset_id": "d2", "run": {"concurrency": 8}}}
+            db, None, None, "s-1", "u-1", {"ok": True, "patch": {"case_source": {"text": "新需求"}, "run": {"concurrency": 8}}}
         )
     )
     assert len(replayed) == 1
     merged = replayed[0]
-    assert merged["dataset_id"] == "d2"  # patch 覆盖
+    assert merged["case_source"] == {"text": "新需求"}  # patch 覆盖
     assert merged["run"] == {"sample_size": 1000, "concurrency": 8}  # 深合并
     assert db.committed == 1
     assert any("UPDATE sessions SET pending_confirm = NULL" in sql for sql in db.executed)

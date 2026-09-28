@@ -2,11 +2,11 @@
 
 > ⚠️ **文档维护提示（2026-09-11）**：本文部分章节含历史实现引用（`agent/react.py`、`plan_solve.py`、`reflect.py`、`clarify.py` 等模块已删除，ReAct / Plan-Solve 图已由 AgentLoop v2 取代）；当前实现与契约以 `AGENTS.md` 状态地图及本文最新修订为准。
 
-> 版本：V1.7.13
+> 版本：V1.7.14
 > 状态：新建会话统一使用 AgentLoop v2；历史 legacy 行仅保留审计与显式回放路径。此前骨架化与混合引擎说明属于 legacy 路径及其历史阶段，不能据此认定新路径仍为纯对话。前端输入栏按每回合协议档选择模型和思考强度，完整真实供应商/Linux Runner 联调验收仍未结束。
-> 审查日期：2026-09-17
-> 对应需求：`AI测试与评估平台-PRD.md` V1.21
-> 对应接口：`AI测试与评估平台-API.md` V1.97
+> 审查日期：2026-09-28
+> 对应需求：`AI测试与评估平台-PRD.md` V1.51
+> 对应接口：`AI测试与评估平台-API.md` V2.34
 
 ## 1. legacy 骨架化运行链路（历史基线）
 
@@ -656,3 +656,16 @@ AgentLoop 的模型协议新增 `openai_responses`；接口以 API V2.10、PRD V
 - `backend/api/app/agent/loop_wiring.py`：真实请求输入投影与上下文预算。
 - `backend/api/app/responses_adapter.py`、`adapters.py`：同步兼容调用及流取消/失败归一。
 - `backend/api/tests/test_responses_protocol.py`：真实 SDK 的本地 HTTP 夹具、工具完整回合与下一轮重放。
+
+## V1.7.14 用例生成 Agent 定位（2026-09-28）
+
+新任务由 Agent 选择 `skill-testcase` 并调用 `task.create(kind=testcase)` 入队。Worker 从需求文本或来源文件生成 `/cases` 中的待确认用例集；Agent 可用 `task.status` 获取任务状态及生成后的 `case_set_id`，引导用户到用例页审核、确认。`/cases` 的 AI 生成对话框使用相同的用例生成规则，但候选内容仍由用户采纳保存。生成规则参考开源 [designing-functional-tests](https://github.com/jaktestowac/awesome-copilot-for-testers/blob/main/skills/designing-functional-tests/SKILL.md) 与 [requirements-test-coverage-mapper](https://github.com/jaktestowac/awesome-copilot-for-testers/blob/main/skills/requirements-test-coverage-mapper/SKILL.md)（MIT）：需求可追溯、风险优先、具体步骤、可观察结果及未确定规则的明确标注。
+
+benchmark、rag、stress 技能和工作流停止选择与执行；持久卷中旧技能文件即使标记启用也按运行时禁用。历史任务与报告仅供查询。本次不扩展为自动执行测试脚本。
+
+### 修改代码文件与作用清单
+
+- `backend/api/app/agent/experts.py`、`expert_prompts/testcase_agent.md`、`loop_wiring.py`、`router_node.py`、`workflow_nodes.py`：专家、主回合和 legacy 路由统一指向用例生成及草稿审核。
+- `backend/api/app/harness/skills/`、`execution/registry.py`、`execution/task_tools.py`、`prompts/system.py`：只暴露当前可用技能和任务参数，并返回用例集定位信息。
+- `backend/shared/casegen.py`：Worker 与用例页 AI 对话框共用功能用例生成约束。
+- 对应 Agent、技能与生成测试：覆盖停用技能、用例任务和草稿链路。

@@ -28,44 +28,8 @@
       </div>
     </div>
 
-    <!-- ═══ 0. 模式分段选择器（Dify 拖拽编排工作流 vs 实时调度星图监控） ═══ -->
-    <div class="dispatch-view-tabs mb16">
-      <div class="tab-pill-group">
-        <button
-          class="tab-pill-btn"
-          :class="{ active: activeTab === 'designer' }"
-          @click="activeTab = 'designer'"
-        >
-          <span class="tab-icon">🌐</span>
-          <span>Dify 拖拽编排工作流</span>
-          <span class="tab-badge">推荐</span>
-        </button>
-        <button
-          class="tab-pill-btn"
-          :class="{ active: activeTab === 'monitor' }"
-          @click="activeTab = 'monitor'"
-        >
-          <span class="tab-icon">🛰</span>
-          <span>实时调度星图与监控</span>
-        </button>
-      </div>
-
-      <div class="row" style="gap: 8px; align-items: center">
-        <span class="tag-soft" :style="modeTagStyle">{{ modeStore.mode === 'rag' ? 'RAG 模式' : '大模型模式' }}</span>
-        <button class="btn btn-secondary btn-sm" style="font-size: 11px" @click="handleManualEnqueue">+ 快速插入任务</button>
-      </div>
-    </div>
-
-    <!-- ═══ 1. 可视编排设计器（Dify 风格 DAG 拖拽工作流） ═══ -->
-    <WorkflowDesigner
-      v-show="activeTab === 'designer'"
-      class="mb16"
-      @task-dispatched="handleTaskDispatched"
-    />
-
     <!-- ═══ 2. 沉浸式大星图与悬浮控制坞 (Immersive Star Constellation & Floating Glass Docks) ═══ -->
     <div
-      v-show="activeTab === 'monitor'"
       class="panel glow immersive-monitor-panel mb16"
       data-od-id="dispatch-canvas"
       style="--glow-c: var(--c-agent)"
@@ -77,8 +41,7 @@
           <span class="small tertiary mono" style="font-weight: 400">内核 → 技能 Agent → Worker · 实时拓扑</span>
         </div>
         <div class="row" style="gap: 6px; align-items: center">
-          <span class="tag-soft" :style="modeTagStyle">{{ modeStore.mode === 'rag' ? 'RAG 模式' : '大模型模式' }}</span>
-          <button class="btn btn-secondary btn-sm" style="font-size: 11px" @click="handleManualEnqueue">+ 插入任务</button>
+          <span class="tag-soft">历史任务调度</span>
           <span class="zoom-ctrl">
             <button class="zoom-btn" title="缩小" @click="zoomBy(0.85)">−</button>
             <button class="zoom-btn mono" title="重置视图（双击画布同效）" @click="resetView">{{ Math.round(view.k * 100) }}%</button>
@@ -621,20 +584,14 @@ import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import KindTag from '../components/common/KindTag.vue'
-import WorkflowDesigner from '../components/workflow/WorkflowDesigner.vue'
 import { api } from '../api/http'
 import type { DispatchOverview, DispatchWorker, Task, TaskKind, TaskStatus } from '../api/types'
-import { useModeStore } from '../stores/mode'
 
 const message = useMessage()
 const router = useRouter()
 const route = useRoute()
-const modeStore = useModeStore()
 // live 模式接真实调度 API（§3.13）；mock 模式保留本地仿真演示
 const liveMode = !api.isMock()
-
-// 视图切换：'designer' (Dify 拖拽编排) vs 'monitor' (实时拓扑星图)
-const activeTab = ref<'designer' | 'monitor'>('designer')
 
 // 沉浸式大星图悬浮控制坞展开/收折状态；移动端默认收折左右浮坞，避免遮住星图
 const isMobileViewport = typeof window !== 'undefined' && window.innerWidth <= 700
@@ -655,12 +612,6 @@ const avgDispatchCost = computed(() => {
   if (!assignCosts.value.length) return 81
   return Math.round(assignCosts.value.reduce((a, b) => a + b, 0) / assignCosts.value.length)
 })
-
-// 顶栏模式标签配色（与全站双模式切换器联动展示）
-const modeTagStyle = computed(() => ({
-  color: modeStore.mode === 'rag' ? 'var(--c-kb)' : 'var(--c-datasets)',
-  borderColor: modeStore.mode === 'rag' ? 'var(--t-kb)' : 'var(--t-datasets)',
-}))
 
 /* ─── KPI 数字滚动（count-up）与迷你趋势线 ─── */
 function useCountUp(source: { value: number }) {
@@ -1196,16 +1147,6 @@ function addLog(kind: string, html: string, tid?: string) {
   if (logs.value.length > 50) logs.value.pop()
 }
 
-/** 接收 WorkflowDesigner 工作流执行派发的任务 */
-function handleTaskDispatched(taskId: string) {
-  assignedToday.value += 1
-  pushHist(histAssigned.value, assignedToday.value)
-  addLog('ENQUEUE', `<span class="la">${taskId.substring(0, 8)}</span> 工作流编排任务已推入执行队列`, taskId)
-  if (liveMode) {
-    loadLiveAll()
-  }
-}
-
 // 点击日志定位：闪烁星图中对应任务工单
 const flashTaskId = ref('')
 let flashTimer = 0
@@ -1243,7 +1184,6 @@ function goToReport(taskId?: string) {
 function handleRouteTaskFocus() {
   const tid = (route.query.task_id || route.query.highlight_task) as string | undefined
   if (tid) {
-    activeTab.value = 'monitor'
     const match = taskNodes.value.find(t => t.id === tid || t.shortId === tid || t.id.startsWith(tid))
     if (match) {
       pinTask(match)
@@ -1348,15 +1288,6 @@ async function handleSaveWorker() {
   addLog('CONFIG', `更新节点 <span class="la">${selectedWorker.value.id}</span> 配置 · 状态=${selectedWorker.value.state} · 权重=${selectedWorker.value.weight}`)
   message.success(`已保存 ${selectedWorker.value.id} 节点配置`)
   showWorkerModal.value = false
-}
-
-function handleManualEnqueue() {
-  if (liveMode) {
-    // 契约要求任务由智能体/表单真实创建，浏览器不得伪造入队
-    message.warning('演示插单仅 mock 模式可用；请通过智能体对话或任务页「新建任务」创建真实任务')
-    return
-  }
-  enqueueMockTask()
 }
 
 /* ─── 完成涟漪：任务终态时在 Worker 节点位置扩散一圈（SVG 坐标系直取布局坐标） ─── */

@@ -52,7 +52,7 @@ _REFLECT_RAW = """\
 def test_system_prompt_contains_five_sections() -> None:
     """P-A1：系统策略模板含角色/安全/确认/长短任务/密钥五段。"""
     prompt = build_system_prompt()
-    for section in ("安全边界", "确认卡约束", "长短任务分离", "密钥保护", "评测助手"):
+    for section in ("安全边界", "确认卡约束", "长短任务分离", "密钥保护", "用例生成助手"):
         assert section in prompt
     assert "（无）" in prompt  # 变量槽缺省不注入用户文本
 

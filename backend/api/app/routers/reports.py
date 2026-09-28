@@ -6,17 +6,17 @@ benchmark 样本明细来自 Worker 落库的 ``eval_items``；RAG/stress 段暂
 """
 
 import secrets
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query
 from fastapi.responses import PlainTextResponse
 from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..deps import get_current_user, get_current_user_optional
 from ..errors import AppError, ErrorCode
-from ..models import AuditLog, Dataset, EvalItem, ProtocolProfile, Report, Task, User
+from ..models import Dataset, EvalItem, ProtocolProfile, Report, Task, User
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
@@ -328,47 +328,16 @@ def share_report(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """生成免登只读分享链接：默认 7 天有效，token 仅本次响应返回、列表不回显。"""
-    report = db.query(Report).filter(Report.id == report_id).first()
-    if not report:
-        raise AppError(ErrorCode.NOT_FOUND, "报告不存在或已删除")
-    days = (body or {}).get("expire_days", 7)
-    if not isinstance(days, int) or isinstance(days, bool) or not 1 <= days <= 30:
-        raise AppError(ErrorCode.VALIDATION, "分享有效期须为 1–30 天的整数")
-    token = secrets.token_urlsafe(24)
-    report.share_token = token
-    report.share_expire_at = datetime.now(UTC) + timedelta(days=days)
-    db.commit()
-    return {
-        "token": token,
-        "url": f"/reports/{report.id}?share={token}",
-        "expires_at": report.share_expire_at.isoformat(),
-    }
+    """旧报告只读，不再生成新的分享凭证。"""
+    raise AppError(ErrorCode.VALIDATION, "历史报告仅支持只读查询")
 
 
 @router.post("/{report_id}/baseline")
 def freeze_baseline(
     report_id: str,
-    request: Request,
     body: dict[str, Any] | None = None,
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """冻结/解冻当前报告为对比基线；按契约写 baseline_freeze / baseline_unfreeze 审计。"""
-    report = db.query(Report).filter(Report.id == report_id).first()
-    if not report:
-        raise AppError(ErrorCode.NOT_FOUND, "报告不存在或已删除")
-    frozen = bool((body or {}).get("frozen", True))
-    report.is_baseline = frozen
-    db.add(
-        AuditLog(
-            user_id=user.id,
-            action="baseline_freeze" if frozen else "baseline_unfreeze",
-            target_type="report",
-            target_id=report.id,
-            detail={"task_id": report.task_id},
-            ip=request.client.host if request.client else None,
-        )
-    )
-    db.commit()
-    return {"frozen": report.is_baseline, "task_id": report.task_id}
+    """旧报告只读，不再修改对比基线。"""
+    raise AppError(ErrorCode.VALIDATION, "历史报告仅支持只读查询")

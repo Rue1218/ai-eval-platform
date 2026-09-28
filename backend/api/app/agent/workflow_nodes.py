@@ -27,6 +27,7 @@ from typing import Any
 from uuid import uuid4
 
 from langgraph.config import RunnableConfig, get_config
+from pydantic import ValidationError
 
 from app.errors import AppError
 from app.harness.contracts import make_event
@@ -42,6 +43,7 @@ from app.harness.skills import (
     load_skill_workflow,
     skill_to_kind,
 )
+from app.schemas import TaskCreate
 
 # ── 技能候选关键词（目录单一事实源 + 别名；命中即技能意图候选）──
 _SKILL_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
@@ -68,7 +70,7 @@ _GOLD_QA_REF_PATTERN = re.compile(r"\bgold(?:[-_]qa)?[-_][A-Za-z0-9][A-Za-z0-9_-
 # 技能 → 必填资产槽（确认卡兜底；profile 三技能都要）
 _REQUIRED_ASSETS: dict[str, tuple[str, ...]] = {
     "benchmark": ("profile_ids",),
-    "testcase": ("profile_ids",),
+    "testcase": (),
     "stress": ("profile_ids",),
     "rag": ("kb_id", "gold_qa_id"),
 }
@@ -76,7 +78,7 @@ _REQUIRED_ASSETS: dict[str, tuple[str, ...]] = {
 # 入队成功后的平台收尾文案模板（确定性、无模型调用）
 _ENQUEUE_SUMMARY = {
     "benchmark": "基准评测任务已入队，进度与报告将在对话中实时更新。",
-    "testcase": "用例生成任务已入队，进度与报告将在对话中实时更新。",
+    "testcase": "用例生成任务已入队，完成后请到用例页审核草稿。",
     "stress": "压测任务已入队，进度与报告将在对话中实时更新。",
 }
 
@@ -267,12 +269,12 @@ def select_skill_node(state: GraphState) -> dict:
     candidates = _skill_candidates(text)
     if len(candidates) == 1:
         skill_id = candidates[0]
-        if skill_id in SKILL_CATALOG and skill_id == "skill-rag":
+        if skill_id != "skill-testcase":
             return {
                 **_step("W0_select_skill"),
                 "workflow_failed": True,
                 "pending_events": _error_events(
-                    "VALIDATION", "知识库评测（RAG）未接入，暂无法执行"
+                    "VALIDATION", "平台已停止评测与压测，仅支持测试用例生成"
                 ),
             }
         return {
@@ -286,14 +288,14 @@ def select_skill_node(state: GraphState) -> dict:
             **_step("W0_select_skill"),
             "workflow_failed": True,
             "pending_events": _error_events(
-                "VALIDATION", f"检测到多个评测意图（{names}），请明确要执行哪一项"
+                "VALIDATION", f"检测到多个任务意图（{names}），当前仅支持测试用例生成"
             ),
         }
     return {
         **_step("W0_select_skill"),
         "workflow_failed": True,
         "pending_events": _error_events(
-            "VALIDATION", "无法识别评测类型（当前支持：基准评测 / 用例生成 / 压测）"
+            "VALIDATION", "无法识别任务类型（当前仅支持测试用例生成）"
         ),
     }
 
@@ -359,10 +361,8 @@ def validate_gates_node(state: GraphState, *, config: RunnableConfig | None = No
     message: str | None = None
     if kind not in CONFIRM_KINDS:
         failed_code, message = "VALIDATION", f"未知任务类型：{kind}"
-    elif kind == "stress":
-        failed_code, message = "VALIDATION", "压测任务须由质量评测成功派生（先评后压）"
-    elif kind == "rag":
-        failed_code, message = "VALIDATION", "知识库评测（RAG）未接入，暂无法执行"
+    elif kind != "testcase":
+        failed_code, message = "VALIDATION", "平台已停止评测与压测，仅支持测试用例生成"
     else:
         probe = (config if config is not None else _configurable()).get("session_probe")
         has_active = False
@@ -465,6 +465,18 @@ def await_confirm_node(state: GraphState, *, config: RunnableConfig | None = Non
                 make_event("response.completed", _completed_payload(state, "error")),
             ],
         }
+    if kind == "testcase":
+        try:
+            TaskCreate.model_validate({**spec, "kind": kind})
+        except ValidationError:
+            return {
+                **_step("W5_await_confirm"),
+                "workflow_failed": True,
+                "pending_events": [
+                    *_error_events("VALIDATION", "请提供文件或需求文本来源后再确认用例生成"),
+                    make_event("response.completed", _completed_payload(state, "error")),
+                ],
+            }
     return {**_step("W5_await_confirm"), "task_spec": spec}
 
 

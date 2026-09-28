@@ -90,16 +90,16 @@ _L1_TIMEOUT_S = 15.0
 
 # L1 CoT 系统指令：只允许输出 router.v1 JSON（ADR-1 裁决：JSON，不接受 XML 标签）
 _ROUTER_L1_SYSTEM = (
-    "你是评测平台对话引擎的路由器。只输出一个 JSON 对象，不要输出任何其他文字。\n"
+    "你是测试用例生成平台对话引擎的路由器。只输出一个 JSON 对象，不要输出任何其他文字。\n"
     '格式：{"engine":"direct|chat|workflow|agent","skill_id":null或技能ID,'
     '"confidence":0到1的小数,"reason":"不超过40字的理由","slots":{},'
     '"protocol":"router","version":"router.v1"}\n'
     "engine 判据：\n"
     "- direct：斜杠命令（零模型动作）。\n"
     "- chat：概念问答、闲聊，不需要读写文件或检索。\n"
-    "- workflow：要求执行基准评测、用例生成、压测等固定流程任务。\n"
+    "- workflow：要求执行测试用例生成固定流程任务。\n"
     "- agent：探索排查、多步分析、需要读取文件/报告或联网检索。\n"
-    "skill_id 仅在 engine=workflow 且明确对应 skill-benchmark/skill-testcase/skill-stress "
+    "skill_id 仅在 engine=workflow 且明确对应 skill-testcase "
     "时给出，否则为 null。"
 )
 

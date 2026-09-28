@@ -54,11 +54,17 @@ def _state(text: str, **extra) -> GraphState:
 # ─── 1. W0 select_skill：二段路由 ───
 
 
-def test_w0_selects_benchmark_testcase_stress() -> None:
-    """三技能正确选择（skill_id / candidates / workflow_step）。"""
-    assert select_skill_node(_state("对数据集 D 跑一次基准评测"))["skill_id"] == "skill-benchmark"
-    assert select_skill_node(_state("按 profile-A 生成一批测试用例"))["skill_id"] == "skill-testcase"
-    assert select_skill_node(_state("发起一次压测"))["skill_id"] == "skill-stress"
+def test_w0_selects_only_testcase_and_rejects_retired_skills() -> None:
+    """用例生成可选中；基准评测与压测意图明确拒绝。"""
+    selected = select_skill_node(_state("生成一批测试用例"))
+    assert selected["skill_id"] == "skill-testcase"
+    assert selected["skill_candidates"] == ("skill-testcase",)
+    for text in ("对数据集 D 跑一次基准评测", "发起一次压测"):
+        rejected = select_skill_node(_state(text))
+        assert rejected["workflow_failed"] is True
+        error = next(e for e in rejected["pending_events"] if e["kind"] == "error")
+        assert error["payload"]["code"] == "VALIDATION"
+        assert "仅支持测试用例生成" in error["payload"]["message"]
 
 
 def test_w0_rag_fail_closed() -> None:
@@ -73,7 +79,7 @@ def test_w0_ambiguous_and_empty_reject_without_guessing() -> None:
     """并列与零命中均就地收尾（不猜测技能）。"""
     both = select_skill_node(_state("帮我跑一次基准评测和压测任务"))
     assert both["workflow_failed"] is True
-    assert "多个评测意图" in next(
+    assert "当前仅支持测试用例生成" in next(
         e for e in both["pending_events"] if e["kind"] == "error"
     )["payload"]["message"]
     none = select_skill_node(_state("帮我看看这个"))
@@ -98,41 +104,47 @@ def test_w0_adopts_enabled_l1_skill_before_keyword_matching() -> None:
     assert update["skill_candidates"] == ("skill-testcase",)
 
 
-def test_w0_normalizes_quality_then_stress_to_benchmark() -> None:
-    """先评后压只选质量评测技能，不能与直接压测形成并列歧义。"""
+def test_w0_rejects_quality_then_stress() -> None:
+    """旧先评后压意图即使归一，也不能绕过用例生成边界。"""
     update = select_skill_node(_state("跑一次基准评测，成功后压测"))
-    assert update["skill_id"] == "skill-benchmark"
+    assert update["workflow_failed"] is True
+    assert "仅支持测试用例生成" in next(
+        e for e in update["pending_events"] if e["kind"] == "error"
+    )["payload"]["message"]
 
 
 # ─── 2. W1–W4：槽位 / 加载 / 门禁 / TaskSpec ───
 
 
-def test_w1_lists_missing_required_assets() -> None:
-    update = prepare_slots_node(_state("评测", skill_id="skill-benchmark"))
-    assert update["slots_missing"] == ("profile_ids",)
+def test_w1_testcase_needs_no_profile_asset() -> None:
+    update = prepare_slots_node(_state("生成用例", skill_id="skill-testcase"))
+    assert update["slots_missing"] == ()
     assert update["slots"] == {}
 
 
-def test_w2_load_skill_benchmark_ok_rag_fail() -> None:
-    update = load_skill_node(_state("评测", skill_id="skill-benchmark"))
+def test_w2_loads_testcase_and_rejects_retired_skills() -> None:
+    update = load_skill_node(_state("生成用例", skill_id="skill-testcase"))
     assert update["workflow_step"] == "W2_load_skill"
     assert not update.get("workflow_failed")
-    rag = load_skill_node(_state("评测", skill_id="skill-rag"))
-    assert rag["workflow_failed"] is True  # 双保险 fail-closed
+    for skill_id in ("skill-benchmark", "skill-rag", "skill-stress"):
+        rejected = load_skill_node(_state("旧任务", skill_id=skill_id))
+        assert rejected["workflow_failed"] is True  # 加载门禁双保险
 
 
-def test_w3_gates_kind_stress_and_probe() -> None:
-    """kind 白名单 / 直接 stress 先评后压 / 会话占槽 probe。"""
-    ok = validate_gates_node(_state("评测", skill_id="skill-benchmark"))
+def test_w3_only_testcase_passes_kind_gate() -> None:
+    """用例生成通过 W3；旧评测与压测类型明确拒绝。"""
+    ok = validate_gates_node(_state("生成用例", skill_id="skill-testcase"))
     assert ok["gate_report"]["passed"] is True
-    stress = validate_gates_node(_state("压测", skill_id="skill-stress"))
-    assert stress["workflow_failed"] is True
-    assert "先评后压" in stress["gate_report"]["message"]
+    for skill_id in ("skill-benchmark", "skill-rag", "skill-stress"):
+        rejected = validate_gates_node(_state("旧任务", skill_id=skill_id))
+        assert rejected["workflow_failed"] is True
+        assert rejected["gate_report"]["failed_code"] == "VALIDATION"
+        assert "仅支持测试用例生成" in rejected["gate_report"]["message"]
 
 
 def test_w3_probe_active_task_blocks() -> None:
     update = validate_gates_node(
-        _state("评测", skill_id="skill-benchmark"),
+        _state("生成用例", skill_id="skill-testcase"),
         config={"session_probe": lambda: True},
     )
     assert update["workflow_failed"] is True
@@ -140,28 +152,20 @@ def test_w3_probe_active_task_blocks() -> None:
 
 
 def test_w4_builds_task_spec_from_defaults() -> None:
-    update = build_task_spec_node(_state("评测", skill_id="skill-benchmark"))
+    update = build_task_spec_node(_state("生成用例", skill_id="skill-testcase"))
     spec = update["task_spec"]
-    assert spec["kind"] == "benchmark"
-    assert spec["profile_ids"] == []
+    assert spec["kind"] == "testcase"
+    assert spec["case_source"] == {"text": ""}
     assert spec["with_stress"] is False
 
 
-def test_w1_explicit_slots_are_merged_into_task_spec() -> None:
-    """W1 仅预填明确短 ID，W4 合并槽位且把先评后压写为 with_stress。"""
-    state = _state(
-        "对 ds-math-qa 用 profile-A 跑一次基准评测，成功后压测",
-        skill_id="skill-benchmark",
-    )
-    prepared = prepare_slots_node(state)
-    assert prepared["slots"] == {
-        "profile_ids": ["profile-A"],
-        "dataset_id": "ds-math-qa",
-    }
-    spec = build_task_spec_node({**state, **prepared})["task_spec"]
-    assert spec["profile_ids"] == ["profile-A"]
-    assert spec["dataset_id"] == "ds-math-qa"
-    assert spec["with_stress"] is True
+def test_w4_merges_explicit_case_source_without_changing_kind() -> None:
+    """W4 只合并明确来源，不把用例任务改成旧评测类型。"""
+    state = _state("生成用例", skill_id="skill-testcase", slots={"case_source": {"text": "登录需求"}})
+    spec = build_task_spec_node(state)["task_spec"]
+    assert spec["kind"] == "testcase"
+    assert spec["case_source"] == {"text": "登录需求"}
+    assert spec["with_stress"] is False
 
 
 # ─── 3. W5–W7：确认 / 入队 / 收尾 ───
@@ -169,34 +173,37 @@ def test_w1_explicit_slots_are_merged_into_task_spec() -> None:
 
 def test_w5_requires_confirm_context() -> None:
     """无确认上下文：就地收尾（批次 2 直连确认卡前不产事件）。"""
-    update = await_confirm_node(_state("评测", skill_id="skill-benchmark"))
+    update = await_confirm_node(_state("生成用例", skill_id="skill-testcase"))
     assert update["workflow_failed"] is True
 
 
-def test_w5_confirm_missing_profile_rejected() -> None:
-    spec = {"kind": "benchmark", "profile_ids": []}
+def test_w5_confirm_missing_case_source_rejected() -> None:
+    """确认卡缺少用例来源时不得进入入队节点。"""
+    spec = {"kind": "testcase", "case_source": {"text": ""}}
     update = await_confirm_node(
-        _state("评测", skill_id="skill-benchmark", task_spec=spec),
+        _state("生成用例", skill_id="skill-testcase", task_spec=spec),
         config={"workflow_confirm": {"task_spec": spec}},
     )
     assert update["workflow_failed"] is True
-    assert "profile_ids" in update["slots_missing"]
+    error = next(e for e in update["pending_events"] if e["kind"] == "error")
+    assert error["payload"]["code"] == "VALIDATION"
+    assert "需求文本" in error["payload"]["message"]
 
 
 def test_w5_confirm_passes_and_updates_spec() -> None:
-    base = {"kind": "benchmark", "profile_ids": [], "run": {"sample_size": 10}}
-    confirm = {"task_spec": {"profile_ids": ["p-1"]}}
+    base = {"kind": "testcase", "case_source": {"text": ""}}
+    confirm = {"task_spec": {"case_source": {"text": "登录成功后进入首页"}}}
     update = await_confirm_node(
-        _state("评测", skill_id="skill-benchmark", task_spec=base),
+        _state("生成用例", skill_id="skill-testcase", task_spec=base),
         config={"workflow_confirm": confirm},
     )
     assert not update.get("workflow_failed")
-    assert update["task_spec"]["profile_ids"] == ["p-1"]
-    assert update["task_spec"]["run"]["sample_size"] == 10  # 预填保留
+    assert update["task_spec"]["case_source"] == {"text": "登录成功后进入首页"}
+    assert update["task_spec"]["kind"] == "testcase"
 
 
 def test_w6_enqueue_requires_db_factory() -> None:
-    update = enqueue_node(_state("评测", skill_id="skill-benchmark"))
+    update = enqueue_node(_state("生成用例", skill_id="skill-testcase"))
     assert update["workflow_failed"] is True
     assert "上下文缺失" in next(
         e for e in update["pending_events"] if e["kind"] == "error"
@@ -215,20 +222,20 @@ def test_w6_enqueues_once(monkeypatch) -> None:
     )
     update = enqueue_node(
         _state(
-            "评测",
-            skill_id="skill-benchmark",
-            task_spec={"kind": "benchmark", "profile_ids": ["p-1"]},
+            "生成用例",
+            skill_id="skill-testcase",
+            task_spec={"kind": "testcase", "case_source": {"text": "登录需求"}},
         ),
         config={"db_factory": _FakeDb, "session_id": "s-1", "user_id": "u-1"},
     )
     assert update["enqueued_task_id"] == "task-1"
     assert len(calls) == 1
-    assert calls[0][0] == "s-1" and calls[0][1] == "benchmark"
+    assert calls[0][0] == "s-1" and calls[0][1] == "testcase"
 
 
 def test_w7_summarize_with_engine_audit() -> None:
     update = summarize_node(
-        _state("评测", skill_id="skill-benchmark", enqueued_task_id="task-1")
+        _state("生成用例", skill_id="skill-testcase", enqueued_task_id="task-1")
     )
     events = update["pending_events"]
     kinds = [event["kind"] for event in events]
@@ -306,8 +313,8 @@ def test_dag_full_path_five_runs_identical(engine_on, monkeypatch) -> None:
         "app.harness.execution.worker_bridge.enqueue_long_task",
         lambda db, session_id, user_id, kind, spec, **kw: calls.append(kind) or "task-1",
     )
-    text = "对数据集 D 用 profile-A 跑一次基准评测"
-    confirm = {"task_spec": {"profile_ids": ["p-1"]}}
+    text = "生成一批测试用例"
+    confirm = {"task_spec": {"case_source": {"text": "登录需求"}}}
     traces = [_workflow_trace(_run_workflow(text, confirm=confirm)) for _ in range(5)]
     expected = [
         "w0_select_skill",
@@ -320,15 +327,15 @@ def test_dag_full_path_five_runs_identical(engine_on, monkeypatch) -> None:
         "w7_summarize",
     ]
     assert all(trace == expected for trace in traces)
-    assert calls == ["benchmark"] * 5  # 每次恰好入队一次
+    assert calls == ["testcase"] * 5  # 每次恰好入队一次
     events = _pending(_run_workflow(text, confirm=confirm))
     assert "tool_call" not in [event["kind"] for event in events]
     completed = next(e for e in events if e["kind"] == "response.completed")
     assert completed["payload"]["engine"] == "workflow"
 
 
-def test_dag_rag_and_direct_stress_fail_closed(engine_on) -> None:
-    """rag 与直接压测：error 收尾、无入队、无 succeeded。"""
+def test_dag_retired_task_intents_fail_closed(engine_on) -> None:
+    """旧评测、RAG 与压测：error 收尾，不生成确认卡或成功消息。"""
     rag_events = _pending(_run_workflow("跑一次 rag 评测"))
     assert any(
         e["kind"] == "error" and e["payload"]["code"] == "VALIDATION"
@@ -338,11 +345,17 @@ def test_dag_rag_and_direct_stress_fail_closed(engine_on) -> None:
     rag_completed = [e for e in rag_events if e["kind"] == "response.completed"]
     assert len(rag_completed) == 1
     assert rag_completed[0]["payload"]["finish_reason"] == "error"
-    stress_events = _pending(_run_workflow("发起一次压测"))
-    assert any("先评后压" in e["payload"]["message"] for e in stress_events if e["kind"] == "error")
-    stress_completed = [e for e in stress_events if e["kind"] == "response.completed"]
-    assert len(stress_completed) == 1
-    assert stress_completed[0]["payload"]["finish_reason"] == "error"
+    for text in ("发起一次压测", "对数据集 D 跑一次基准评测"):
+        events = _pending(_run_workflow(text))
+        assert any(
+            e["kind"] == "error" and e["payload"]["code"] == "VALIDATION"
+            and "仅支持测试用例生成" in e["payload"]["message"]
+            for e in events
+        )
+        assert not any(e["kind"] in {"confirm", "assistant_message"} for e in events)
+        completed = [e for e in events if e["kind"] == "response.completed"]
+        assert len(completed) == 1
+        assert completed[0]["payload"]["finish_reason"] == "error"
 
 
 def test_workflow_state_serializable(engine_on, monkeypatch) -> None:
@@ -351,15 +364,15 @@ def test_workflow_state_serializable(engine_on, monkeypatch) -> None:
         "app.harness.execution.worker_bridge.enqueue_long_task",
         lambda db, session_id, user_id, kind, spec, **kw: "task-1",
     )
-    confirm = {"task_spec": {"profile_ids": ["p-1"]}}
-    events = _run_workflow("跑一次基准评测", confirm=confirm)
+    confirm = {"task_spec": {"case_source": {"text": "登录需求"}}}
+    events = _run_workflow("生成测试用例", confirm=confirm)
     # 通过 updates 增量验证全链字段写入后可序列化
     for mode, chunk in events:
         if mode == "updates":
             for update in chunk.values():
                 if isinstance(update, dict):
                     json.dumps(update)
-    assert_serializable({"engine": "workflow", "skill_id": "skill-benchmark"})
+    assert_serializable({"engine": "workflow", "skill_id": "skill-testcase"})
 
 
 def test_switch_off_chat_snapshot_without_engine(monkeypatch) -> None:

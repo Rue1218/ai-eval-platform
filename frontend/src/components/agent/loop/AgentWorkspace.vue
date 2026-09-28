@@ -30,7 +30,7 @@
               </div>
             </div>
             <h1 class="hero-tagline">从一个目标开始，让每一步都有依据。</h1>
-            <p class="hero-subline">在工作区处理文件、查找资料，或创建评测任务。</p>
+            <p class="hero-subline">在工作区处理文件、查找资料，或生成测试用例。</p>
           </div>
 
           <!-- 对话消息滚动区：有消息时正常滚动展示；空状态隐藏以保持居中 -->
@@ -616,7 +616,7 @@ function taskForTool(tool: ToolRun): LoopRecord | null {
 const quarantined = computed(() => Object.values(state.value?.executions || {}).filter(e => e.event === 'execution.quarantined'))
 /** finishLabels / phaseLabels / status 文案与 workspaceDerived 同源（模板与状态条共用）。 */
 const status = computed(() => phaseStatusText(state.value))
-const prompts = ['查看工作区文件，说明可以如何处理', '帮我准备一次模型基准评测', '查询资料并给出可核对的来源']
+const prompts = ['查看工作区文件，说明可以如何处理', '根据需求文档生成测试用例草稿', '查询资料并给出可核对的来源']
 const chatShellStyle = computed(() => chatWidth.value ? { width: `${chatWidth.value}px` } : undefined)
 const maximumChatWidth = computed(() => Math.max(minimumChatWidth, (chatShell.value?.parentElement?.clientWidth || minimumChatWidth + 48) - 48))
 const renderedChatWidth = computed(() => chatWidth.value || chatShell.value?.getBoundingClientRect().width || minimumChatWidth)

@@ -22,6 +22,41 @@ TASK_HEARTBEAT_SECONDS = 30
 _TERMINATED = {"cancelled", "failed"}
 
 
+def cancel_non_testcase_tasks(db: Session) -> int:
+    """停用评测后取消尚未结束的旧任务，提交后停止正在发压的引擎。"""
+    now = datetime.now(UTC)
+    rows = (
+        db.query(Task)
+        .filter(Task.kind != "testcase", Task.status.in_(("queued", "running")))
+        .with_for_update(skip_locked=True)
+        .populate_existing()
+        .all()
+    )
+    cancelled: list[tuple[str, str | None, str, bool]] = []
+    message = "评测与压测已停用，任务已取消"
+    for task in rows:
+        if task.status not in {"queued", "running"}:
+            continue
+        was_running = task.status == "running"
+        task.status = "cancelled"
+        task.cancel_requested_at = now
+        task.finished_at = now
+        task.claimed_by_worker_id = None
+        task.claim_expires_at = None
+        task.progress = {**(task.progress or {}), "message": message}
+        db.add(TaskEvent(task_id=task.id, event="cancelled", message=message,
+                         payload={"status": "cancelled"}))
+        cancelled.append((task.id, task.session_id, task.kind, was_running))
+    db.commit()
+    for task_id, session_id, kind, was_running in cancelled:
+        if kind == "stress" and was_running:
+            from .stress import _stop_engine
+
+            _stop_engine(task_id)
+        push_ws(session_id, "task_cancelled", {"status": "cancelled", "kind": kind}, task_id=task_id)
+    return len(cancelled)
+
+
 def lease_expired(expires_at: datetime | None, now: datetime | None = None) -> bool:
     """判断已有租约是否过期；兼容本地 SQLite 返回无时区的 UTC 时间。"""
     if expires_at is None:

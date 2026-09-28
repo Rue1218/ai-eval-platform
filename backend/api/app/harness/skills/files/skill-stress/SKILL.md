@@ -3,7 +3,7 @@ id: skill-stress
 name: 压测
 kind: stress
 version: 1.0
-enabled: true
+enabled: false
 summary: 执行共享压测
 ---
 ## 工作流

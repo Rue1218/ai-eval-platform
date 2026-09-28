@@ -102,7 +102,7 @@
           <span class="flow-arrow">➔</span>
           <div class="flow-step highlight">
             <span class="step-num">4</span>
-            <span class="step-text">入队并派生压测</span>
+            <span class="step-text">生成用例草稿，审核后确认入库</span>
           </div>
         </div>
       </div>

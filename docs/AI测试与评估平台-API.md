@@ -4,10 +4,10 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V2.33 |
-| 本轮审查日期 | 2026-09-26（合并功能复查：重复编号导入与工作区草稿保护） |
+| 文档版本 | V2.34 |
+| 本轮审查日期 | 2026-09-28（测试用例生成与评测停用） |
 | WS v2 修订日期 | 2026-09-26（§4A，摘要安全用量元数据与 v2.3 目录） |
-| 对应 PRD | V1.50（功能唯一权威） |
+| 对应 PRD | V1.51（功能唯一权威） |
 | 对应设计规范 | V1.12（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.7.8（AgentLoop 单入口；JSON 仍以本文为准） |
 | 对应前端计划 | AgentLoop 前端计划 V0.5 |
@@ -3864,3 +3864,18 @@ Excel 导入在本批缓存已写入但尚未 flush 的用例，重复编号按�
 
 - `backend/api/app/routers/cases.py`、`backend/api/tests/test_cases_audit.py`：追加/替换导入的批内编号复用，以及新编号、本集编号、跨集编号六种回归。
 - `frontend/src/views/UserWorkspaces.vue`、`frontend/tests/e2e/workspaceAudit.spec.ts`：刷新和创建后的草稿保护，验证保留内容并保存到原工作区。
+
+## V2.34 测试用例生成与评测停用（2026-09-28）
+
+- `POST /api/tasks` 仅接受 `kind=testcase`；旧评测与压测任务的重跑、会签请求返回统一 `VALIDATION` 错误。`GET /api/tasks`、任务详情、事件、历史报告和旧分享链接继续按原鉴权只读返回。新报告分享与基线修改停止。
+- Worker 仅领取 `queued` 的用例生成任务。部署后的轮询会取消现有 `queued/running` 的 benchmark、rag、stress 任务，并停止正在运行的压测引擎；不再派生压测子任务。旧任务状态保留为可查询的 `cancelled`。
+- Agent 工具 `task.create` 的模型可见参数仅允许 `kind=testcase` 并要求 `case_source`；`task.status` 在用例任务结果可用时增加 `case_set_id: string | null`，其余历史状态字段不变。旧技能文件即使持久化头部 `enabled:true`，评测与压测技能在运行时也不可调用；`skill-testcase` 是当前可用的生成技能。
+- `/cases?task_id=<任务ID>` 与 `/cases?set_id=<用例集ID>` 为前端定位入口。任务创建后可先按任务 ID 打开用例页；Worker 保存草稿后按任务结果中的用例集 ID 打开并审核，确认接口沿用 `POST /api/case-sets/{id}/confirm`。`POST /api/case-sets/ai-generate` 与 Worker 用例生成共用生成规则，候选用例仍需人工采纳保存。
+
+### 修改代码文件与作用清单
+
+- `backend/api/app/task_policy.py`、`routers/tasks.py`、`routers/reports.py`：新建/重跑及旧报告写操作门禁。
+- `backend/worker/app/main.py`、`task_state.py`、`stress_spawn.py`：领取过滤、旧活动任务取消、停止压测派生。
+- `backend/api/app/harness/execution/registry.py`、`task_tools.py`、`harness/skills/`、`agent/`：Agent 用例任务参数、结果定位与能力目录。
+- `backend/shared/casegen.py`、`frontend/src/views/Cases.vue`：统一用例生成规则和草稿定位。
+- 对应 API、Worker 与前端测试：验证停用与草稿审核链路。

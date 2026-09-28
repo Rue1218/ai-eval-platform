@@ -24,6 +24,7 @@ from app.errors import AppError, ErrorCode
 
 # 默认专家：保持平台既有行为（无额外提示词、全工具视野）。
 DEFAULT_EXPERT_ID = "general"
+ACTIVE_EXPERT_IDS = frozenset({DEFAULT_EXPERT_ID, "testcase-agent"})
 _PROMPT_DIR = Path(__file__).resolve().parent / "expert_prompts"
 
 
@@ -63,10 +64,10 @@ EXPERTS: tuple[ExpertDef, ...] = (
     ExpertDef(
         expert_id="testcase-agent",
         name="测试用例设计专家",
-        description="从需求文档生成测试用例：需求解析 → 功能点/测试点拆分 → 六类用例 → CSV 交付。",
+        description="根据需求发起测试用例生成任务，在「用例」页审核生成的草稿。",
         badge="用例设计",
         prompt_file="testcase_agent.md",
-        allowed_tools=("read", "write", "edit", "bash", "ask_user_question", "history.read"),
+        allowed_tools=("read", "write", "edit", "bash", "ask_user_question", "task.create", "task.status", "history.read"),
     ),
     ExpertDef(
         expert_id="benchmark-designer", name="基准设计专家", badge="基准设计",
@@ -137,7 +138,7 @@ def get_expert(expert_id: object) -> ExpertDef:
 
 
 def list_experts() -> list[dict]:
-    """投影给前端选择器：不暴露提示词正文与工具视野细节。"""
+    """只展示可新建的专家；历史专家定义仍可按 ID 读取。"""
     return [
         {
             "id": expert.expert_id,
@@ -147,7 +148,7 @@ def list_experts() -> list[dict]:
             "default": expert.default,
             **({"deliverable_kind": expert.deliverable_kind} if expert.deliverable_kind else {}),
         }
-        for expert in EXPERTS
+        for expert in EXPERTS if expert.expert_id in ACTIVE_EXPERT_IDS
     ]
 
 

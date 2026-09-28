@@ -14,7 +14,12 @@ from ..models import AuditLog, Dataset, DatasetVersion, Report, Task, TaskEvent,
 from ..models import Session as AgentSession
 from ..schemas import TaskCreate, TaskDetailOut, TaskEventOut, TaskOut
 from ..session_access import require_visible_session
-from ..task_policy import enforce_task_quota, prepare_new_task_config, require_owned_source_file
+from ..task_policy import (
+    assert_task_creation_allowed,
+    enforce_task_quota,
+    prepare_new_task_config,
+    require_owned_source_file,
+)
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 ACTIVE_STATUSES = {"queued", "running", "awaiting_case_confirm"}
@@ -89,7 +94,8 @@ def create_task(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """校验确认卡后原子入队；未确认的非法字段不会产生任务行。"""
+    """校验用例任务后原子入队；未确认的非法字段不会产生任务行。"""
+    assert_task_creation_allowed(body.kind)
     session = _validate_session(db, body.session_id, user.id, lock=bool(body.session_id))
     if session and session.pending_confirm:
         # 团队协作时不得绕过确认卡直接从 REST 抢占会话活动任务。
@@ -271,6 +277,7 @@ def rerun_task(
     task = _owned_task(db, task_id, user.id, lock=False)
     if task.status not in TERMINAL_STATUSES:
         raise AppError(ErrorCode.VALIDATION, "仅终态任务可重跑")
+    assert_task_creation_allowed(task.kind)
     if task.session_id:
         # 已私有化或软删除的会话不能承接新任务，避免从任务页绕过会话边界。
         session = _validate_session(db, task.session_id, user.id, lock=True)
@@ -334,46 +341,8 @@ def approve_stress(
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ):
-    """会签放行压测任务：入参可为压测子任务或其质量父任务；prod 发压须非创建者会签。"""
-    task = db.query(Task).filter(Task.id == task_id).first()
-    if not task:
-        raise AppError(ErrorCode.NOT_FOUND, "任务不存在")
-    # 解析到对应的 kind=stress 子任务（先评后压由 Worker 派生）
-    stress = task
-    if task.kind != "stress":
-        stress = (
-            db.query(Task)
-            .filter(Task.parent_task_id == task.id, Task.kind == "stress")
-            .order_by(Task.created_at.asc())
-            .first()
-        )
-    if not stress:
-        raise AppError(ErrorCode.NOT_FOUND, "未找到关联的压测任务")
-    if stress.status in TERMINAL_STATUSES:
-        raise AppError(ErrorCode.VALIDATION, "压测任务已结束")
-
-    config = dict(stress.config or {})
-    env = (config.get("stress") or {}).get("env")
-    if env == "prod" and stress.created_by == user.id:
-        # prod 会签人必须不是创建者本人
-        raise AppError(ErrorCode.NEED_APPROVAL, "prod 发压须由非创建者的成员会签")
-    config["need_approval"] = False
-    config["approved_by"] = user.id
-    stress.config = config
-    _append_event(db, stress, "approved", f"压测会签通过（{user.username}）")
-    db.add(
-        AuditLog(
-            user_id=user.id,
-            action="prod_approve",
-            target_type="task",
-            target_id=stress.id,
-            detail={"env": env, "parent_task_id": stress.parent_task_id},
-            ip=request.client.host if request.client else None,
-        )
-    )
-    db.commit()
-    db.refresh(stress)
-    return _task_out(stress)
+    """压测已停用，旧任务只供查询。"""
+    raise AppError(ErrorCode.VALIDATION, "压测已停用")
 
 
 @router.get("/{task_id}/stress-series")

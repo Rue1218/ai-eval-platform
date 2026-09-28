@@ -41,10 +41,6 @@
             <span>导出 Markdown</span>
           </button>
 
-          <!-- 压测报告不支持冻结为基线（基线仅面向质量评测语义） -->
-          <button v-if="report.kind !== 'stress'" class="btn btn-secondary btn-sm" @click="handleFreezeBaseline">
-            冻结为基线
-          </button>
         </div>
       </div>
 
@@ -419,7 +415,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { useMessage, useDialog } from 'naive-ui'
+import { useMessage } from 'naive-ui'
 import { api } from '../api/http'
 import type { Report, RagScores, StressSeriesPoint } from '../api/types'
 import KindTag from '../components/common/KindTag.vue'
@@ -432,7 +428,6 @@ import { formatDateTime } from '../utils/format'
 const route = useRoute()
 const router = useRouter()
 const message = useMessage()
-const dialog = useDialog()
 
 // /reports 列表路由与 /reports/:id 详情路由复用本组件；无 id 时不得发起 /api/reports/undefined 请求
 const reportId = computed(() => (route.params.id as string) || '')
@@ -630,23 +625,6 @@ async function handleExportMd() {
   } catch (err: any) {
     message.error(err.message || '导出失败')
   }
-}
-
-function handleFreezeBaseline() {
-  dialog.warning({
-    title: '冻结为基线报告？',
-    content: '冻结后，后续相同数据集与指标的评测任务将自动以本报告得分作为对比基线。',
-    positiveText: '确认冻结',
-    negativeText: '取消',
-    onPositiveClick: async () => {
-      try {
-        await api.reports.freezeBaseline(reportId.value)
-        message.success('已冻结为基线')
-      } catch (err: any) {
-        message.error(err.message || '冻结失败')
-      }
-    },
-  })
 }
 
 function handleInterpret() {

@@ -49,9 +49,9 @@ def test_expert_catalog_contract():
 
 
 def test_expert_projection_has_no_prompt_or_tools():
-    """选择器投影只暴露展示字段，不带提示词正文与工具视野。"""
+    """选择器只暴露可新建专家的展示字段，不带提示词正文与工具视野。"""
     items = experts.list_experts()
-    assert {item["id"] for item in items} == {expert.expert_id for expert in experts.EXPERTS}
+    assert {item["id"] for item in items} == {"general", "testcase-agent"}
     for item in items:
         expected = {"id", "name", "description", "badge", "default"}
         if experts.get_expert(item["id"]).deliverable_kind:
@@ -78,6 +78,8 @@ def test_resolve_expert_falls_back_to_default():
 def test_get_expert_rejects_unknown_id_instead_of_falling_back():
     """管理端读取目标必须严格，不能把未知 ID 静默写入默认专家。"""
     assert experts.get_expert("testcase-agent").name == "测试用例设计专家"
+    assert experts.get_expert("benchmark-designer").name == "基准设计专家"
+    assert experts.resolve_expert("benchmark-designer").expert_id == "benchmark-designer"
     with pytest.raises(AppError):
         experts.get_expert("not-exist")
 
@@ -90,7 +92,8 @@ def test_expert_tools_narrow_only():
     tools = loop_wiring._expert_tools(testcase)
     assert set(tools) <= set(loop_wiring.ALLOWED_TOOLS)
     assert "read" in tools and "bash" in tools
-    assert "task.create" not in tools and "web_search" not in tools
+    assert "task.create" in tools and "task.status" in tools
+    assert "web_search" not in tools
 
 
 def test_general_expert_receives_media_tools_only_after_media_gate_opens(monkeypatch):
@@ -127,6 +130,18 @@ def test_expert_prompt_segments_order_and_boundary():
     assert "【当前 Agent 专属补充提示词】" in both[2].text
 
     assert len(loop_wiring._loop_system_segments("", "")) == 1
+
+
+def test_testcase_expert_guides_worker_draft_instead_of_file_only_delivery():
+    """测试用例专家使用平台任务入队，生成结果由用户在用例页审核。"""
+    prompt = experts.get_expert("testcase-agent").system_prompt
+    assert "task.create" in prompt and 'kind="testcase"' in prompt
+    assert "case_source.text" in prompt and "case_source.file_id" in prompt
+    assert "queued" in prompt and "用例" in prompt and "确认入库" in prompt
+    assert "task.status" in prompt and "不能作为等待 Worker 完成的循环" in prompt
+    assert "/cases?task_id=<实际 task_id>" in prompt
+    assert "/cases?set_id=<实际 case_set_id>" in prompt
+    assert "不要把工作区 JSONL/CSV 当作已入库用例" in prompt
 
 
 def test_expert_prompt_avoids_takeover_phrases():

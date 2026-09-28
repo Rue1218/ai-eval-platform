@@ -155,7 +155,9 @@ def test_select_tool_defs_react_native_excludes_mcp() -> None:
 def test_skill_hint_lines_are_catalog_directory() -> None:
     """SK-1：常驻 Skill Hint 为名称 + 一句话，不含完整工作流。"""
     lines = skill_hint_lines()
-    assert any("基准评测" in line for line in lines)
+    assert len(lines) == 1
+    assert "用例生成" in lines[0]
+    assert all("基准评测" not in line and "压测" not in line for line in lines)
     assert all("：" in line for line in lines)
 
 

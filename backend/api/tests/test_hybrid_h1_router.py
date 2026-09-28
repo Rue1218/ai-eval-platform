@@ -26,8 +26,8 @@ from tests.hybrid.fixtures.scenarios import ALL_SCENARIOS
 
 # L1 成功样例：合法 router.v1 JSON（workflow + 已注册技能）
 _L1_OK_JSON = (
-    '{"engine":"workflow","skill_id":"skill-benchmark","confidence":0.9,'
-    '"reason":"要求执行基准评测","slots":{},"protocol":"router","version":"router.v1"}'
+    '{"engine":"workflow","skill_id":"skill-testcase","confidence":0.9,'
+    '"reason":"要求生成测试用例","slots":{},"protocol":"router","version":"router.v1"}'
 )
 
 
@@ -142,15 +142,15 @@ def test_l0_concept_questions_never_enter_workflow(text: str) -> None:
     "text",
     ["对 profile-A 跑基准评测，成功后压测", "跑一次基准评测，先评后压"],
 )
-def test_l0_quality_then_stress_enters_workflow(text: str) -> None:
-    """先评后压归一为质量任务 Workflow，禁止绕到无长任务桥的 Agent。"""
+def test_l0_retired_quality_then_stress_still_enters_rejection_workflow(text: str) -> None:
+    """旧复合意图仍进 Workflow，由 W0 明确拒绝而非转入 Agent。"""
     assert route_l0(text).engine == "workflow"
 
 
 def test_l0_router_node_workflow_no_model_no_downgrade_stamp() -> None:
     """router 节点 L0 路径零模型调用；workflow（H2 已实现）不再标注降级。"""
     gateway = _StubGateway()
-    update = router_node({"request": _request("对 profile-A 跑基准评测")}, gateway)
+    update = router_node({"request": _request("生成测试用例")}, gateway)
     assert update["engine"] == "workflow"
     assert "降级" not in update["router_reason"]  # H2：workflow 由 W0–W7 DAG 执行
     assert gateway.invoke_calls == []  # L0 零模型调用
@@ -176,11 +176,11 @@ def test_l1_success_adopts_result_and_consumes_budget(
     # 让该有效 Workflow 请求走 L1，以覆盖 L1 成功采信而非 L0 直判路径。
     monkeypatch.setattr(settings, "hybrid_router_confidence_threshold", 0.99)
     gateway = _StubGateway(invoke_text=_L1_OK_JSON)
-    events = _run(LangGraphAgent(gateway), _request("对 profile-A 跑基准评测"))
+    events = _run(LangGraphAgent(gateway), _request("生成测试用例"))
     router_out = _node_output(events, "router")
     assert router_out is not None
     assert router_out["engine"] == "workflow"
-    assert router_out["skill_id"] == "skill-benchmark"  # L1 已启用技能须传给 W0
+    assert router_out["skill_id"] == "skill-testcase"  # L1 已启用技能须传给 W0
     assert router_out["budget"] == {"model_calls": 11, "tool_turns": 12}
     assert len(gateway.invoke_calls) == 1
     l1_request = gateway.invoke_calls[0]

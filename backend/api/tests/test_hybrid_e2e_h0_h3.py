@@ -258,18 +258,19 @@ async def test_h1_direct_slash_engine_audit(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_h2_workflow_issues_confirm_card(monkeypatch) -> None:
-    """评测请求 → W0–W5 发卡：confirm 事件（spec 与 defaults 一致）+ 叙述 + completed。"""
+    """用例生成请求 → W0–W5 发卡：confirm 事件 + 叙述 + completed。"""
     gateway = _E2eGateway()  # 全程零模型调用（L0 高置信 + DAG 确定性）
     emitted, db, sink = await _drive(
-        monkeypatch, gateway, "对数据集 D 用 profile-A 跑一次基准评测", hybrid=True
+        monkeypatch, gateway, "生成测试用例", hybrid=True
     )
     events = [event for event, _payload, _ in emitted]
     assert "confirm" in events
     confirm_payload = next(payload for event, payload, _ in emitted if event == "confirm")
     # V1.68：confirm 事件 payload 即 TaskSpec 平铺（defaults.py 单一事实源）
     spec = confirm_payload
-    assert spec["kind"] == "benchmark"
-    assert spec["profile_ids"] == ["profile-A"]  # W1 安全预填明确的协议档短 ID
+    assert spec["kind"] == "testcase"
+    assert spec["case_source"] == {"text": ""}
+    assert spec["profile_ids"] == []
     assert spec["with_stress"] is False
     assert spec["dataset_id"] is None
     assert spec["run"]["sample_size"] == 1000
@@ -286,27 +287,22 @@ async def test_h2_workflow_issues_confirm_card(monkeypatch) -> None:
 async def test_h2_confirm_replay_enqueues_once_via_w6(monkeypatch) -> None:
     """确认回执重放：W5 合并 → W6 唯一入队 → W7 收尾（真实 worker_bridge 写桩库）。"""
     gateway = _E2eGateway()
-    confirm = {
-        "task_spec": {
-            "profile_ids": ["p-e2e-1"],
-            "dataset_id": "d-e2e-1",
-        }
-    }
+    confirm = {"task_spec": {"case_source": {"text": "正确账号密码登录后进入首页"}}}
     emitted, db, sink = await _drive(
         monkeypatch,
         gateway,
-        "对数据集 D 用 profile-A 跑一次基准评测",
+        "生成测试用例",
         hybrid=True,
         workflow_confirm=confirm,
     )
     assert sink.get("enqueued_task_id"), "回执重放后 W6 应产出任务 ID"
     assert len(db.tasks) == 1  # 恰入队一次（W6 唯一出口）
     task = db.tasks[0]
-    assert task.kind == "benchmark"
+    assert task.kind == "testcase"
     assert task.session_id == "s-e2e"
     assert task.created_by == "u-e2e"
     assert task.status == "queued"
-    assert task.config["profile_ids"] == ["p-e2e-1"]
+    assert task.config["case_source"] == {"text": "正确账号密码登录后进入首页"}
     completed = _completed(emitted)
     assert completed["engine"] == "workflow"
     texts = _assistant_texts(emitted)
@@ -315,14 +311,14 @@ async def test_h2_confirm_replay_enqueues_once_via_w6(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_h2_confirm_replay_missing_assets_not_enqueued(monkeypatch) -> None:
-    """回执缺必填（profile_ids 空）→ VALIDATION 收尾，不入队、不留任务行。"""
+async def test_h2_confirm_replay_missing_source_not_enqueued(monkeypatch) -> None:
+    """回执缺需求来源 → VALIDATION 收尾，不入队、不留任务行。"""
     gateway = _E2eGateway()
-    confirm = {"task_spec": {"profile_ids": []}}
+    confirm = {"task_spec": {"case_source": {"text": ""}}}
     emitted, db, sink = await _drive(
         monkeypatch,
         gateway,
-        "对数据集 D 跑一次基准评测",
+        "生成测试用例",
         hybrid=True,
         workflow_confirm=confirm,
     )
@@ -330,7 +326,7 @@ async def test_h2_confirm_replay_missing_assets_not_enqueued(monkeypatch) -> Non
     assert sink.get("enqueued_task_id") is None
     error = next((payload for event, payload, _ in emitted if event == "error"), None)
     assert error is not None
-    assert "缺少必填" in str(error.get("message") or "")
+    assert "需求文本" in str(error.get("message") or "")
 
 
 # ─── H3：agent TAOR 回合 ───
@@ -408,9 +404,9 @@ async def test_multi_turn_engine_switching_on_one_session(monkeypatch) -> None:
     g1 = _E2eGateway(chat_text="pass@1 是模型单次正确率。")
     _emitted, _db, _sink = await _drive(monkeypatch, g1, "什么是 pass@1？", hybrid=True)
     assert _completed(_emitted)["engine"] == "chat"
-    # 轮 2 workflow：评测发卡（确认卡事件 + engine=workflow）
+    # 轮 2 workflow：用例发卡（确认卡事件 + engine=workflow）
     g2 = _E2eGateway()
-    emitted2, db2, _sink2 = await _drive(monkeypatch, g2, "跑一次基准评测", hybrid=True)
+    emitted2, db2, _sink2 = await _drive(monkeypatch, g2, "生成测试用例", hybrid=True)
     assert _completed(emitted2)["engine"] == "workflow"
     assert any(event == "confirm" for event, _payload, _ in emitted2)
     assert not db2.tasks

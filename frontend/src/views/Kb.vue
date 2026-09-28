@@ -1,13 +1,6 @@
 <template>
   <div class="kb-workbench">
-    <div v-if="modeStore.mode === 'llm'" class="mode-context-panel panel">
-      <span class="eyebrow">大模型测试模式</span>
-      <h2>基准评测使用协议档与数据集</h2>
-      <p>知识库、切块与黄金 QA 仅属于 RAG 测试链路。请切换到 RAG 模式管理检索资产；当前可前往数据集工作台准备 Benchmark 输入。</p>
-      <router-link to="/datasets" class="btn btn-sign btn-sm">进入数据集工作台</router-link>
-    </div>
-
-    <template v-else>
+    <template>
     <!-- 顶部知识库选择与操作栏 -->
     <div class="kb-bar row-between mb16">
       <div class="row wrap" style="gap: 8px">
@@ -35,7 +28,6 @@
         <button v-if="currentKb?.kind === 'lightrag'" class="btn btn-secondary btn-sm" @click="showUploadDocModal = true">
           ↑ 上传文档
         </button>
-        <button class="btn btn-sign btn-sm" :disabled="!currentKb" @click="showLaunchDrawer = true">发起 RAG 评测</button>
       </div>
     </div>
 
@@ -405,30 +397,20 @@
       @success="loadGoldQas"
     />
 
-    <RagLaunchDrawer
-      v-model:show="showLaunchDrawer"
-      :default-kb-id="activeKbId"
-      @success="handleLaunchSuccess"
-    />
     </template>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue'
-import { useRouter } from 'vue-router'
 import { useDialog, useMessage } from 'naive-ui'
 import { api } from '../api/http'
 import type { KnowledgeBase, KbChunk, KbDoc, GoldQA, Profile } from '../api/types'
-import { useModeStore } from '../stores/mode'
 import UploadKbDocModal from '../components/modals/UploadKbDocModal.vue'
 import UploadGoldQaModal from '../components/modals/UploadGoldQaModal.vue'
-import RagLaunchDrawer from '../components/drawers/RagLaunchDrawer.vue'
 
 const message = useMessage()
 const dialog = useDialog()
-const router = useRouter()
-const modeStore = useModeStore()
 
 const kbs = ref<KnowledgeBase[]>([])
 const activeKbId = ref<string>('')
@@ -453,11 +435,6 @@ const isQuerying = ref(false)
 const showCreateKbModal = ref(false)
 const showUploadDocModal = ref(false)
 const showUploadGoldQaModal = ref(false)
-const showLaunchDrawer = ref(false)
-/** RAG 评测下单成功后跳转任务中心，与原型交互保持一致。 */
-function handleLaunchSuccess() {
-  router.push('/tasks')
-}
 const creatingKb = ref(false)
 const newKbName = ref('')
 const newKbKind = ref<KnowledgeBase['kind']>('lightrag')
@@ -738,12 +715,7 @@ async function loadKnowledgeBases() {
 }
 
 onMounted(() => {
-  if (modeStore.mode === 'rag') void loadKnowledgeBases()
-})
-
-// 从大模型模式切回 RAG 时补齐首次加载，避免空白工作台。
-watch(() => modeStore.mode, (mode) => {
-  if (mode === 'rag' && !kbs.value.length) void loadKnowledgeBases()
+  void loadKnowledgeBases()
 })
 </script>
 

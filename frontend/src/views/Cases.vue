@@ -200,14 +200,6 @@
                   </button>
                 </div>
 
-                <!-- 主操作 CTA：发起基准评测 -->
-                <button class="btn btn-primary btn-md primary-cta" @click="openLaunchDrawer">
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                    <polygon points="5 3 19 12 5 21 5 3" />
-                  </svg>
-                  发起基准评测
-                </button>
-
                 <!-- 更多操作下拉 -->
                 <n-dropdown :options="moreMenuOptions" trigger="click" @select="handleMoreMenuSelect">
                   <button class="btn btn-ghost-subtle btn-md btn-icon-only" title="更多用例操作" aria-label="更多操作">
@@ -553,9 +545,11 @@
               <polyline points="10 9 9 9 8 9" />
             </svg>
           </div>
-          <h3>尚未选择或创建用例集</h3>
-          <p class="empty-desc">您可以基于 PRD 或接口需求文档一键自动推导六大策略测试用例，或新建空集手动录入。</p>
+          <h3>{{ pendingTaskId ? '测试用例生成中' : '尚未选择或创建用例集' }}</h3>
+          <p v-if="pendingTaskId" class="empty-desc">任务 {{ pendingTaskId }} 尚未生成对应用例集，完成后刷新即可查看草稿。</p>
+          <p v-else class="empty-desc">您可以基于 PRD 或接口需求文档一键自动推导六大策略测试用例，或新建空集手动录入。</p>
           <div class="empty-buttons">
+            <button v-if="pendingTaskId" class="btn btn-secondary btn-md" @click="loadCaseSets">刷新用例集</button>
             <button class="btn btn-primary btn-md primary-cta" @click="openAiGenDrawer">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/></svg>
               PRD 用例推导向导
@@ -673,12 +667,6 @@
     </n-drawer>
 
     <!-- 弹窗与抽屉组件 (全居中显示) -->
-    <BenchmarkLaunchDrawer
-      v-model:show="showLaunchDrawer"
-      :default-dataset-id="(currentSet as any)?.target_dataset_id"
-      @success="handleLaunchSuccess"
-    />
-
     <n-dropdown
       trigger="manual"
       placement="bottom-start"
@@ -781,11 +769,10 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute } from 'vue-router'
 import { useMessage, useDialog, type DropdownOption } from 'naive-ui'
 import { api } from '../api/http'
 import type { CaseSet, Dataset, TestCase, TestCaseInput, ColumnSchemaItem } from '../api/types'
-import BenchmarkLaunchDrawer from '../components/drawers/BenchmarkLaunchDrawer.vue'
 import { escapeHtml, escapeRegex, renderIcon } from '../utils/render'
 
 type CaseStrategy = '正向' | '反向' | '边界' | '状态迁移' | '场景' | '等价类'
@@ -820,7 +807,7 @@ const PRIORITIES: CasePriority[] = ['HX', 'FHX', 'BJ', 'YC', 'ZD', 'BL']
 // ─── 右键菜单 SVG 图标辅助渲染 ───
 const message = useMessage()
 const dialog = useDialog()
-const router = useRouter()
+const route = useRoute()
 
 const treeSearch = ref('')
 const gridSearch = ref('')
@@ -835,7 +822,6 @@ let saveRequest: Promise<boolean> | null = null
 const justSaved = ref(false)
 const hasUnsavedChanges = ref(false)
 const confirmingSet = ref(false)
-const showLaunchDrawer = ref(false)
 const filterStrategy = ref('')
 const selectedCaseIds = ref<string[]>([])
 const editingCell = ref<{ row: ExtendedTestCase; field: string; original: string } | null>(null)
@@ -914,6 +900,10 @@ interface TreeFolder {
 const folders = ref<TreeFolder[]>([{ id: 'cases', name: '用例集目录', open: true, items: [] }])
 
 const currentSet = computed<CaseSet | undefined>(() => caseSets.value.find((s: CaseSet) => s.id === activeSetId.value))
+const pendingTaskId = computed(() => {
+  const taskId = route.query.task_id
+  return typeof taskId === 'string' && !caseSets.value.some(s => s.task_id === taskId) ? taskId : ''
+})
 const canEditCases = computed(() => currentSet.value?.status === 'generated'
   && loadedSetId.value === activeSetId.value && !loadingCases.value && !confirmingSet.value)
 
@@ -1262,6 +1252,14 @@ async function selectCaseSet(id: string) {
   gridSearch.value = ''
   filterStrategy.value = ''
   focusedCell.value = null
+  if (!id) {
+    loadVersion += 1
+    loadedSetId.value = ''
+    loadingCases.value = false
+    cases.value = []
+    hasUnsavedChanges.value = false
+    return
+  }
   await loadCases(id)
 }
 
@@ -1426,13 +1424,6 @@ async function confirmCaseSet() {
   }
 }
 
-function openLaunchDrawer() {
-  showLaunchDrawer.value = true
-}
-function handleLaunchSuccess() {
-  router.push('/tasks')
-}
-
 /** 下载成功前不展示成功消息；当前草稿先保存，避免导出旧内容。 */
 async function exportCaseSet(fmt: 'xlsx' | 'xmind', set = currentSet.value) {
   if (!set) return
@@ -1508,9 +1499,12 @@ async function loadCases(setId: string) {
   }
 }
 
+let caseSetListRequest = 0
 async function loadCaseSets() {
+  const request = ++caseSetListRequest
   try {
     const list = await api.cases.listSets()
+    if (request !== caseSetListRequest) return
     caseSets.value = list
     let root = folders.value.find(f => f.id === 'cases')
     if (!root) {
@@ -1518,15 +1512,44 @@ async function loadCaseSets() {
       folders.value = [root]
     }
     root.items = list
-    const selected = list.find((s: any) => s.id === activeSetId.value) || list[0]
+    const requested = hasCaseSetQuery() ? requestedCaseSet(list) : undefined
+    if (hasCaseSetQuery() && !requested) {
+      requestSelectCaseSet('')
+      message.info('尚未找到对应用例集；若生成任务仍在运行，请稍后刷新')
+      return
+    }
+    const selected = requested || list.find((s: CaseSet) => s.id === activeSetId.value) || list[0]
     if (selected) {
-      if (selected.id !== activeSetId.value || !hasUnsavedChanges.value) await selectCaseSet(selected.id)
-    } else cases.value = []
+      if (selected.id !== activeSetId.value) requestSelectCaseSet(selected.id)
+      else if (!hasUnsavedChanges.value) await selectCaseSet(selected.id)
+    } else requestSelectCaseSet('')
   } catch (err: any) {
+    if (request !== caseSetListRequest) return
     caseSets.value = []
     message.error(err.message || '加载用例集失败')
   }
 }
+
+/** 深链可按用例集 ID，或按生成任务 ID 定位到同一份草稿。 */
+function requestedCaseSet(list: CaseSet[]): CaseSet | undefined {
+  const setId = route.query.set_id
+  if (typeof setId === 'string' && setId) return list.find(s => s.id === setId)
+  const taskId = route.query.task_id
+  if (typeof taskId === 'string' && taskId) return list.find(s => s.task_id === taskId)
+  return undefined
+}
+
+function hasCaseSetQuery(): boolean {
+  return Boolean(route.query.set_id || route.query.task_id)
+}
+
+watch(() => [route.query.set_id, route.query.task_id], () => {
+  void loadCaseSets()
+})
+
+watch(() => route.query.generate, value => {
+  if (value === '1') openAiGenDrawer()
+})
 
 // 右键上下文菜单
 const ctxMenu = ref<{ show: boolean; x: number; y: number; type: CtxMenuType; targetId: string; rowIdx: number }>({
@@ -1550,7 +1573,6 @@ const ctxMenuOptions = computed<DropdownOption[]>(() => {
   if (ctxMenu.value.type === 'file') {
     const s = caseSets.value.find((item: any) => item.id === ctxMenu.value.targetId)
     return [
-      { label: '发起基准评测', key: 'eval', icon: renderIcon('M5 3l14 9-14 9V3z', '#0F766E') },
       { label: '确认入库', key: 'confirm-set', disabled: s?.status === 'confirmed', icon: renderIcon('M20 6L9 17l-5-5', '#15803D') },
       { type: 'divider', key: 'd1' },
       { label: '导出 Excel', key: 'export-excel', icon: renderIcon(['M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4', 'M7 10l5 5 5-5', 'M12 15V3']) },
@@ -1594,9 +1616,6 @@ async function handleFileCtxAction(key: string, targetId: string) {
   const s = caseSets.value.find((item: any) => item.id === targetId)
   if (!s) return
   switch (key) {
-    case 'eval':
-      requestSelectCaseSet(targetId, () => openLaunchDrawer())
-      break
     case 'confirm-set':
       requestSelectCaseSet(targetId, () => { void confirmCaseSet() })
       break
@@ -2041,6 +2060,7 @@ function onGlobalKeydown(e: KeyboardEvent) {
 
 onMounted(() => {
   void loadCaseSets()
+  if (route.query.generate === '1') openAiGenDrawer()
   window.addEventListener('keydown', onGlobalKeydown)
 })
 

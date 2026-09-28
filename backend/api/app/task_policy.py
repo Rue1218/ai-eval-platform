@@ -17,12 +17,15 @@ def require_owned_source_file(db: Session, file_id: str, user_id: str) -> Stored
 
 
 def prepare_new_task_config(kind: str, config: dict[str, Any]) -> dict[str, Any]:
-    """复制新任务配置；生产压测必须重新会签，不继承历史任务的批准身份。"""
-    snapshot = dict(config)
-    if kind == "stress":
-        snapshot.pop("approved_by", None)
-        snapshot["need_approval"] = (snapshot.get("stress") or {}).get("env") == "prod"
-    return snapshot
+    """只允许新建用例生成任务；历史评测配置仅供只读回放。"""
+    assert_task_creation_allowed(kind)
+    return dict(config)
+
+
+def assert_task_creation_allowed(kind: str) -> None:
+    """统一阻止新建或重跑已停用的评测与压测任务。"""
+    if kind != "testcase":
+        raise AppError(ErrorCode.VALIDATION, "平台仅支持新建测试用例生成任务")
 
 
 def enforce_task_quota(db: Session, user_id: str, kind: str) -> None:

@@ -33,7 +33,9 @@ SKILL_KINDS: Final[dict[str, str]] = {
     "skill-rag": "rag",
     "skill-stress": "stress",
 }
-RUNTIME_DISABLED_SKILLS: Final[frozenset[str]] = frozenset({"skill-rag"})
+RUNTIME_DISABLED_SKILLS: Final[frozenset[str]] = frozenset(
+    {"skill-benchmark", "skill-rag", "skill-stress"}
+)
 _SKILL_ID_RE: Final[re.Pattern[str]] = re.compile(r"^skill-[a-z0-9-]{1,56}$")
 _REQUIRED_HEADER_KEYS: Final[frozenset[str]] = frozenset(
     {"id", "name", "kind", "version", "enabled", "summary"}
@@ -134,9 +136,11 @@ def _parse_header(header: str, *, expected_skill_id: str) -> SkillMetadata:
         raise AppError(ErrorCode.VALIDATION, "技能文件 kind 与平台任务类型不一致")
     if values["enabled"] not in {"true", "false"}:
         raise AppError(ErrorCode.VALIDATION, "技能文件 enabled 必须为 true 或 false")
-    enabled = values["enabled"] == "true"
-    if enabled == (expected_skill_id in RUNTIME_DISABLED_SKILLS):
+    file_enabled = values["enabled"] == "true"
+    # 持久卷中的旧技能文件不会随镜像更新；下线技能即使旧头部仍写 true，运行时也必须关闭。
+    if expected_skill_id not in RUNTIME_DISABLED_SKILLS and not file_enabled:
         raise AppError(ErrorCode.VALIDATION, "技能文件启用状态与平台能力状态不一致")
+    enabled = file_enabled and expected_skill_id not in RUNTIME_DISABLED_SKILLS
     if len(values["name"]) > 64 or len(values["summary"]) > 240 or len(values["version"]) > 32:
         raise AppError(ErrorCode.VALIDATION, "技能文件头部字段长度超限")
     return SkillMetadata(
@@ -227,6 +231,9 @@ def update_skill_document(skill_id: str, content: str, expected_revision: str) -
     if expected_revision != current.revision:
         raise AppError(ErrorCode.CONCURRENCY, "技能文件已被其他修改覆盖，请重新预览后再保存")
     normalized = _normalize_skill_document(skill_id, content)
+    header = normalized.split("\n---\n", 1)[0]
+    if skill_id in RUNTIME_DISABLED_SKILLS and re.search(r"(?m)^enabled\s*:\s*true\s*$", header):
+        raise AppError(ErrorCode.VALIDATION, "评测与压测技能已停用，不能重新启用")
     _write_skill_document(skill_path(skill_id), normalized)
     return read_skill_document(skill_id)
 

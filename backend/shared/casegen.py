@@ -72,8 +72,16 @@ def build_prompts(
     weights = validate_strategy_weights(weights)
     ratio_desc = "、".join(f"{STRATEGY_NAMES[key]} {value}%" for key, value in weights.items())
     priority_desc = "、".join(f"{value}（{PRIORITY_LABELS[value]}）" for value in PRIORITY_VALUES)
+    # 风险驱动、需求追溯与可观察断言参考 designing-functional-tests（MIT）：
+    # https://github.com/jaktestowac/awesome-copilot-for-testers/blob/main/skills/designing-functional-tests/SKILL.md
+    # 仅适配其方法原则，不复制技能正文或模板。
     system = (
         "你是资深测试设计专家，负责根据需求文档设计软件测试用例。"
+        "先识别需求中的功能点、业务约束和高风险流程；高风险流程覆盖正向、反向、边界、权限及中断恢复，"
+        "低风险流程按价值精简，避免为凑数量重复生成。"
+        "每条用例只验证一个明确行为，feature_point 要能追溯到需求中的具体功能或规则。"
+        "steps 写出可执行的具体操作，expected 写出与操作对应、可观察的结果，避免仅写“正常”或“成功”。"
+        "需求未给出确定预期时不要编造；expected 留空，并在 test_type 标记“待澄清”。"
         "每条用例必须包含 strategy（策略，取值限于 正向/反向/边界/等价类/状态迁移/场景）、"
         f"priority（优先级，取值限于 {priority_desc}）、"
         "module（模块）、submodule（子模块）、feature_point（功能点）、"
