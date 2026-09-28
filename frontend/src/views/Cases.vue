@@ -2024,7 +2024,6 @@ const aiGen = ref({
 
 const presetOptions = computed(() => PRD_PRESETS.map(p => ({ label: `${p.name} · ${p.desc.slice(0, 30)}...`, value: p.desc })))
 const aiSelectedCount = computed(() => aiGen.value.candidates.filter(c => c.selected).length)
-const aiAllSelected = computed(() => aiGen.value.candidates.length > 0 && aiSelectedCount.value === aiGen.value.candidates.length)
 const strategyWeightTotal = computed(() => Object.values(aiGen.value.strategyWeights).reduce((sum, weight) => sum + Number(weight || 0), 0))
 const strategyWeightsValid = computed(() => Object.values(aiGen.value.strategyWeights).every(weight => Number.isInteger(weight) && weight >= 0 && weight <= 100)
   && strategyWeightTotal.value === 100)
