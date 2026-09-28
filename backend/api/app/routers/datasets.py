@@ -345,6 +345,18 @@ async def upload_dataset_file(
         raise AppError(ErrorCode.VALIDATION, "文件大小超过 50MB 上限")
     raw_rows = _parse_upload_rows(file.filename or "", content)
 
+    # 与手工保存共用数据集行锁，避免两种全量写入交错。
+    dataset = (
+        db.query(Dataset)
+        .filter(Dataset.id == dataset_id)
+        .populate_existing()
+        .with_for_update()
+        .first()
+    )
+    if not dataset:
+        raise AppError(ErrorCode.NOT_FOUND, "数据集不存在")
+    if dataset.active_version_id:
+        raise AppError(ErrorCode.VALIDATION, "已发布数据集只能通过受控导入产生新版本")
     # 全量覆盖：清空旧行后按新文件顺序重建 row_no
     db.query(DatasetRow).filter(DatasetRow.dataset_id == dataset.id).delete(synchronize_session=False)
     for idx, raw in enumerate(raw_rows, start=1):
@@ -430,6 +442,8 @@ def list_dataset_rows(
         }
     if view != "active":
         raise AppError(ErrorCode.VALIDATION, "view 仅支持 active 或 staging")
+    # 版本与行查询使用同一份已读取的数据集快照，前端据此防止旧行覆盖新上传版本。
+    rows_version = dataset.version
     if dataset.active_version_id:
         v_query = (
             db.query(DatasetVersionRow)
@@ -449,6 +463,7 @@ def list_dataset_rows(
         return {
             "items": [_version_row_to_item(row) for row in v_rows],
             "total": total_v,
+            "version": rows_version,
         }
     query = db.query(DatasetRow).filter(DatasetRow.dataset_id == dataset.id)
     if pending_complete:
@@ -466,7 +481,7 @@ def list_dataset_rows(
         rows = query.offset((page - 1) * page_size).limit(page_size).all()
     else:
         rows = query.all()
-    return {"items": [_row_to_item(row) for row in rows], "total": total_rows}
+    return {"items": [_row_to_item(row) for row in rows], "total": total_rows, "version": rows_version}
 
 
 @router.put("/{dataset_id}/rows")
@@ -477,6 +492,7 @@ def save_dataset_rows(
     user: User = Depends(get_current_user),
     view: str = "active",
     import_id: str | None = None,
+    expected_version: int | None = Query(default=None, ge=1),
 ):
     """保存手工正式行或审核 staging；两者使用不同的并发与删除语义。"""
     dataset = _get_dataset_or_404(db, dataset_id)
@@ -566,6 +582,19 @@ def save_dataset_rows(
     if view != "active" or not isinstance(body, RowsPayload):
         raise AppError(ErrorCode.VALIDATION, "view 仅支持 active 或 staging")
     _ = user
+    if expected_version is None:
+        raise AppError(ErrorCode.VALIDATION, "保存数据集行必须提供 expected_version")
+    dataset = (
+        db.query(Dataset)
+        .filter(Dataset.id == dataset_id)
+        .populate_existing()
+        .with_for_update()
+        .first()
+    )
+    if not dataset:
+        raise AppError(ErrorCode.NOT_FOUND, "数据集不存在")
+    if dataset.version != expected_version:
+        raise AppError(ErrorCode.CONCURRENCY, "数据集已更新，请刷新后核对草稿")
     if dataset.active_version_id:
         raise AppError(ErrorCode.VALIDATION, "已发布数据集只能通过受控导入产生新版本")
     existing = {
@@ -581,6 +610,7 @@ def save_dataset_rows(
         _upsert_row(db, dataset, row_in, existing.get(row_in.row_no))
     db.flush()
     _refresh_dataset_counters(db, dataset)
+    dataset.version += 1
     db.commit()
     rows = (
         db.query(DatasetRow)
@@ -588,7 +618,7 @@ def save_dataset_rows(
         .order_by(DatasetRow.row_no.asc())
         .all()
     )
-    return {"items": [_row_to_item(row) for row in rows], "total": len(rows)}
+    return {"items": [_row_to_item(row) for row in rows], "total": len(rows), "version": dataset.version}
 
 
 @router.post("/ai-generate")

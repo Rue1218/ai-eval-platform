@@ -6,9 +6,12 @@
 
 from types import SimpleNamespace
 
+import pytest
+
+from app.errors import AppError, ErrorCode
 from app.models import CaseItem, CaseSet, Dataset, DatasetRow
 from app.routers.cases import save_cases
-from app.routers.datasets import save_dataset_rows
+from app.routers.datasets import list_dataset_rows, save_dataset_rows
 from app.schemas import CasesPayload, RowsPayload
 
 
@@ -113,6 +116,35 @@ def test_save_dataset_rows_deletes_omitted_rows():
     row2 = DatasetRow(id="r-2", dataset_id="d-1", row_no=2, question="q2", reference="r2")
     db = _FakeDb({Dataset: [dataset], DatasetRow: [row1, row2]})
     payload = RowsPayload(rows=[{"row_no": 1, "q": "q1", "r": "r1"}])
-    result = save_dataset_rows("d-1", payload, db, SimpleNamespace(id="u-1"))
+    result = save_dataset_rows("d-1", payload, db, SimpleNamespace(id="u-1"), expected_version=1)
     assert [d.row_no for d in db.deleted] == [2]
     assert result["total"] == 1
+    assert result["version"] == 2
+
+
+def test_save_dataset_rows_rejects_stale_version_before_replacing_rows():
+    """覆盖上传推进版本后，旧页面的全量保存不能删除新上传的行。"""
+    dataset = Dataset(id="d-1", name="集", version=2, row_count=1, pending_complete_count=0, column_schema=[])
+    uploaded_row = DatasetRow(id="r-new", dataset_id="d-1", row_no=1, question="新上传", reference="新答案")
+    db = _FakeDb({Dataset: [dataset], DatasetRow: [uploaded_row]})
+    payload = RowsPayload(rows=[{"row_no": 1, "q": "旧草稿", "r": "旧答案"}])
+
+    with pytest.raises(AppError) as error:
+        save_dataset_rows("d-1", payload, db, SimpleNamespace(id="u-1"), expected_version=1)
+
+    assert error.value.code == ErrorCode.CONCURRENCY
+    assert uploaded_row.question == "新上传"
+    assert db.deleted == []
+    assert db.commit_calls == 0
+
+
+def test_list_dataset_rows_returns_version_for_save_baseline():
+    """读取正式行时返回与这些行对应的版本，而非依赖可变的列表元信息。"""
+    dataset = Dataset(id="d-1", name="集", version=3, row_count=1, pending_complete_count=0, column_schema=[])
+    row = DatasetRow(id="r-1", dataset_id="d-1", row_no=1, question="问", reference="答")
+    db = _FakeDb({Dataset: [dataset], DatasetRow: [row]})
+
+    result = list_dataset_rows("d-1", None, "active", None, None, None, None, db, SimpleNamespace(id="u-1"))
+
+    assert result["version"] == 3
+    assert result["items"][0]["question"] == "问"

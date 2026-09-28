@@ -13,17 +13,31 @@ async function setup(page: Page) {
   const confirms: string[] = []
   const generations: Record<string, unknown>[] = []
   const imports: { id: string; mode: string | null; expectedRevision: string | null }[] = []
+  const newImports: string[] = []
   const held: Record<string, Route> = {}
   const holds = new Set<string>()
   let failSave = false
+  let failNewImport = false
+  let createCalls = 0
   const sets = ['a', 'b', 'c'].map(id => ({ id, task_id: id === 'b' ? 'task-b' : null, name: `用例集${id.toUpperCase()}`, status: 'generated',
     revision: 0, generated_count: 1, confirmed_count: 0, checks: [], column_schema: [{ key: 'custom_field', name: '扩展属性', type: 'text' }] }))
   const rows: Record<string, Record<string, unknown>[]> = { a: [row()], b: [row('row-b', 'B用例')], c: [row('row-c', 'C用例')] }
   await page.route(/^http:\/\/127\.0\.0\.1:5273\/api\//, async route => {
     const url = new URL(route.request().url())
     const id = url.pathname.split('/')[3]
+    if (url.pathname === '/api/case-sets/import') {
+      newImports.push(route.request().postData() || '')
+      if (failNewImport) return route.fulfill({ status: 400, json: { code: 'VALIDATION', message: '无法解析 Excel' } })
+      const created = { id: 'imported', task_id: null, name: 'cases', status: 'generated',
+        revision: 1, generated_count: 1, confirmed_count: 0, checks: [], column_schema: [] }
+      sets.push(created)
+      rows.imported = [row('import-row', 'Excel 导入用例')]
+      return route.fulfill({ status: 201, json: { case_set_id: created.id, ok: true, revision: 1,
+        imported_count: 1, skipped_count: 0, generated_count: 1, checks: [], format: 'simple', mode: 'replace' } })
+    }
     if (url.pathname === '/api/case-sets') {
       if (route.request().method() === 'POST') {
+        createCalls++
         const created = { id: 'imported', task_id: null, name: route.request().postDataJSON().name, status: 'generated',
           revision: 0, generated_count: 0, confirmed_count: 0, checks: [], column_schema: [] }
         sets.push(created)
@@ -85,7 +99,8 @@ async function setup(page: Page) {
   })
   await page.goto('/tests/cases-audit-fixture.html')
   await expect(page.locator('.data-row')).toHaveCount(1)
-  return { saves, confirms, generations, imports, held, holds, rows, sets, failSave: () => { failSave = true } }
+  return { saves, confirms, generations, imports, newImports, held, holds, rows, sets,
+    get createCalls() { return createCalls }, failSave: () => { failSave = true }, failNewImport: () => { failNewImport = true } }
 }
 
 /** 双击单元格进入现有编辑交互，再显式失焦完成编辑。 */
@@ -295,11 +310,29 @@ test('当前集有未保存草稿时只能导入新集，导入完成仍保护�
   await page.locator('.n-modal input[type=file]').setInputFiles({ name: 'cases.xlsx',
     mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: Buffer.from('fixture') })
   await page.getByRole('button', { name: '开始导入' }).click()
-  await expect.poll(() => ctx.imports).toEqual([{ id: 'imported', mode: 'replace', expectedRevision: '0' }])
+  await expect.poll(() => ctx.newImports.length).toBe(1)
+  expect(ctx.imports).toEqual([])
+  expect(ctx.createCalls).toBe(0)
   await expect(page.getByText('存在未保存的用例修改')).toBeVisible()
   await expect(page.locator('.main-dataset-title')).toHaveText('用例集A')
   await expect(page.locator('.data-row')).toContainText('A 未保存草稿')
   await expect(page.getByRole('button', { name: '保存用例修改' })).toBeEnabled()
+})
+
+test('新集 Excel 导入失败时不先创建空用例集，且保留文件以便重试', async ({ page }) => {
+  const ctx = await setup(page)
+  ctx.failNewImport()
+  await rename(page, 'A 未保存草稿')
+  await page.getByRole('button', { name: '导入 Excel 用例' }).click()
+  await page.locator('.n-modal input[type=file]').setInputFiles({ name: 'bad.xlsx',
+    mimeType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', buffer: Buffer.from('invalid') })
+  await page.getByRole('button', { name: '开始导入' }).click()
+  await expect.poll(() => ctx.newImports.length).toBe(1)
+  expect(ctx.createCalls).toBe(0)
+  expect(ctx.sets).toHaveLength(3)
+  await expect(page.getByText('导入 Excel 用例', { exact: true })).toBeVisible()
+  await expect(page.locator('.n-modal .n-upload-file')).toContainText('bad.xlsx')
+  await expect(page.locator('.data-row')).toContainText('A 未保存草稿')
 })
 
 test('确认操作等待正在保存的同一个请求，保存完成后只确认一次', async ({ page }) => {

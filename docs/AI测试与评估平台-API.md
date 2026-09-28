@@ -1,15 +1,15 @@
 # AI 测试与评估平台 — API 契约
 
-> ⚠️ **当前接口边界（2026-09-28）**：仅测试用例生成任务可新建和重跑；Benchmark、RAG 评测与压测写入口停用，历史任务和报告只读保留。本文旧评测字段与示例仅用于解释历史数据；冲突时以 §3.8、§3.10、§5 当前契约及 V2.34–V2.35 修订为准。
+> ⚠️ **当前接口边界（2026-09-28）**：仅测试用例生成任务可新建和重跑；Benchmark、RAG 评测与压测写入口停用，历史任务和报告只读保留。本文旧评测字段与示例仅用于解释历史数据；冲突时以 §3.8、§3.10、§5 当前契约及 V2.34–V2.36 修订为准。
 >
 > **文档维护提示（2026-09-11）**：部分章节含已删除模块的历史引用（如 `agent/react.py`、`plan_solve.py`）；当前实现与接口以 `AGENTS.md` 状态地图及本文最新修订为准。
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V2.35 |
-| 本轮审查日期 | 2026-09-28（用例审核与停用链路缺陷修复） |
+| 文档版本 | V2.36 |
+| 本轮审查日期 | 2026-09-28（用例导入与数据集并发保存修复） |
 | WS v2 修订日期 | 2026-09-26（§4A，摘要安全用量元数据与 v2.3 目录） |
-| 对应 PRD | V1.52（功能唯一权威） |
+| 对应 PRD | V1.54（功能唯一权威） |
 | 对应设计规范 | V1.12（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.7.8（AgentLoop 单入口；JSON 仍以本文为准） |
 | 对应前端计划 | AgentLoop 前端计划 V0.5 |
@@ -992,7 +992,7 @@ H1 阶段该目录仅用于诊断与联调观测；`discover` 收窄工具视野
 
 #### `POST /api/datasets/{id}/upload`  multipart `file`
 
-JSONL 或 CSV UTF-8；列 `question,reference,context?`；≤50MB、≤2 万行。覆盖后 `version += 1`。非法行可拒整文件 `VALIDATION`。已有 `active_version_id` 的数据集返回 `VALIDATION`，必须创建新的受控导入版本。
+JSONL 或 CSV UTF-8；列 `question,reference,context?`；≤50MB、≤2 万行。覆盖后 `version += 1`。上传与手工行保存共用数据集行锁；非法行可拒整文件 `VALIDATION`。已有 `active_version_id` 的数据集返回 `VALIDATION`，必须创建新的受控导入版本。
 
 #### 公开基准目录、独立导入与发布（V1.55）
 
@@ -1050,15 +1050,17 @@ Worker 按 `FOR UPDATE SKIP LOCKED` 领取导入，写入独立 15 分钟 lease 
   "items": [
     { "row_no": 3, "question": "", "reference": "x", "context": null, "pending_complete": true, "source_case_id": "uuid" }
   ],
-  "total": 2
+  "total": 2,
+  "version": 3
 }
 ```
 
 `pending_complete=true` 的行 **不进评分分母**。
+正式行读取（含 `pending_complete` 过滤）的响应均返回 `version`；前端只用与当前表格行一同读取的版本作为保存基线，数据集列表或元信息更新的版本不能替代该基线。
 
-#### `PUT /api/datasets/{id}/rows`
+#### `PUT /api/datasets/{id}/rows?expected_version=<整数>`
 
-批量保存表格行与自定义扩展列（如 `tags`、`difficulty`、`precondition` 等）。
+批量保存正式表格行与自定义扩展列（如 `tags`、`difficulty`、`precondition` 等）。`expected_version` 必须为读取正式行时响应的 `version`；服务端持行锁比较，版本不一致返回 `CONCURRENCY` (409) 且不改动行。成功保存后版本递增，响应包含 `items,total,version`。`view=staging` 仍使用独立的 `expected_staging_revision`，不传此参数。
 
 ```json
 {
@@ -1226,6 +1228,10 @@ JSON body 必须传读取时的整数 `expected_revision`，可附 `reason`。�
 #### `GET /api/case-sets/import-template`
 
 下载平台标准列 Excel 模板（`用例集` + `填写说明` 两个工作表）。响应文件流。登录后可用。
+
+#### `POST /api/case-sets/import`
+
+新建用例集并导入 Excel 的原子入口。`multipart/form-data` 字段为 `file`、`name`、可选 `folder_id`；文件格式、大小和用例数量限制与现有集导入相同。服务端先解析，再在同一事务中创建用例集、写入用例与审计；任一步失败均不留下空草稿。成功返回 HTTP 201，响应包含 `case_set_id` 以及现有导入结果字段 `ok,format,mode,imported_count,skipped_count,generated_count,checks,revision`。
 
 #### `POST /api/case-sets/{id}/import?mode=append|replace&expected_revision=<整数>`
 
@@ -3849,3 +3855,14 @@ Excel 导入在本批缓存已写入但尚未 flush 的用例，重复编号按�
 - `backend/worker/app/{task_state,stress}.py`、`backend/stress/main.go`、`backend/stress/main_test.go`：外部压测停止重试与停用发压入口回归。
 - `frontend/src/views/{Cases,Tasks,Report}.vue`、`frontend/src/api/`：修订字段与只读/终态展示。
 - 对应 API、Worker 和前端测试：覆盖冲突、取消、失败停止与页面回归。
+
+## V2.36 用例导入与数据集并发保存修复（2026-09-28）
+
+- `POST /api/case-sets/import` 在单事务中新建并导入 Excel；解析或写入失败均不保留空用例集。已有集的 `POST /api/case-sets/{id}/import` 契约不变。
+- 正式行读取返回 `version` 作为所见行的保存基线；行保存要求该 `expected_version`，持锁比较上传或上次保存推进的版本。过期草稿返回 `CONCURRENCY` (409)，成功返回新 `version`。上传与保存共用行锁；staging 保存契约不变。
+
+### 修改代码文件与作用清单
+
+- `backend/api/app/routers/{cases,datasets}.py`：原子创建导入、数据集行保存版本校验与上传互斥。
+- `frontend/src/api/http.ts`、`frontend/src/components/modals/{ImportCasesExcelModal,UploadDatasetModal}.vue`、`frontend/src/views/Datasets.vue`：一次请求导入新集，按已加载行的版本保存，并保护上传期间及外部删除后的草稿。
+- `backend/api/tests/`、`frontend/tests/e2e/`：覆盖失败导入无副作用、过期版本拒绝与上传/保存交错。

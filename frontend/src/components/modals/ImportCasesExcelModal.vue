@@ -154,17 +154,12 @@ async function handleImport() {
   }
   importing.value = true
   try {
-    let setId = props.currentSet?.id
+    const setId = props.currentSet?.id
     if (target.value === 'new' || !setId) {
       const name = setName.value.trim() || file.value.name.replace(/\.(xlsx|xlsm)$/i, '')
-      const created = await api.cases.createSet({
-        name,
-        folder_id: props.folderId || undefined,
-      })
-      setId = created.id
-      const result = await api.cases.importExcel(setId, file.value, 'replace', created.revision)
+      const result = await api.cases.importExcelAsNew(name, file.value, props.folderId)
       message.success(`已导入 ${result.imported_count} 条用例${result.skipped_count ? `，跳过 ${result.skipped_count} 行` : ''}`)
-      emit('imported', setId, result.revision)
+      emit('imported', result.case_set_id, result.revision)
       emit('update:show', false)
       return
     }

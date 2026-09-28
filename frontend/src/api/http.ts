@@ -714,23 +714,28 @@ export const api = {
       })
       return data
     },
-    async getRows(id: string, params: { pending_complete?: boolean } = {}): Promise<DatasetRow[]> {
+    async getRows(id: string, params: { pending_complete?: boolean } = {}): Promise<{ items: DatasetRow[]; version: number }> {
       if (getDataMode() === 'mock') {
-        if (params.pending_complete) return mockStore.pendingRows
-        return [
+        const version = mockStore.datasets.find((dataset) => dataset.id === id)?.version ?? 1
+        if (params.pending_complete) return { items: mockStore.pendingRows, version }
+        return { items: [
           { row_no: 1, question: '如何修改密码？', reference: '在右上角点击个人头像并选择修改密码', context: null },
           { row_no: 2, question: '平台支持哪些协议？', reference: '支持 OpenAI Chat 和 Anthropic Messages', context: null },
           ...mockStore.pendingRows,
-        ]
+        ], version }
       }
       const { data } = await http.get(`/api/datasets/${id}/rows`, { params })
-      return Array.isArray(data) ? data : data.items || []
+      return { items: data.items || [], version: data.version }
     },
     // 批量保存表格编辑结果，确保行内编辑不会只停留在浏览器内存。
-    async saveRows(id: string, rows: Array<DatasetRow & Record<string, unknown>>): Promise<DatasetRow[]> {
-      if (getDataMode() === 'mock') return rows
-      const { data } = await http.put(`/api/datasets/${id}/rows`, { rows })
-      return Array.isArray(data) ? data : data.items || rows
+    async saveRows(id: string, rows: Array<DatasetRow & Record<string, unknown>>, expectedVersion: number): Promise<{ items: DatasetRow[]; version: number }> {
+      if (getDataMode() === 'mock') {
+        const dataset = mockStore.datasets.find((item) => item.id === id)
+        if (dataset) dataset.version = expectedVersion + 1
+        return { items: rows, version: expectedVersion + 1 }
+      }
+      const { data } = await http.put(`/api/datasets/${id}/rows`, { rows }, { params: { expected_version: expectedVersion } })
+      return { items: data.items, version: data.version }
     },
     // 请求 AI 候选行；候选必须由页面确认后再经 saveRows 落库。
     async generateRows(payload: Record<string, unknown>): Promise<Array<DatasetRow & Record<string, unknown>>> {
@@ -931,6 +936,19 @@ export const api = {
       const formData = new FormData()
       formData.append('file', file)
       const { data } = await http.post(`/api/case-sets/${id}/import`, formData, { params: { mode, expected_revision: expectedRevision } })
+      return data
+    },
+    async importExcelAsNew(name: string, file: File, folderId?: string): Promise<CaseImportResult & { case_set_id: string }> {
+      if (getDataMode() === 'mock') {
+        const created = await this.createSet({ name, folder_id: folderId })
+        const result = await this.importExcel(created.id, file, 'replace', created.revision)
+        return { case_set_id: created.id, ...result }
+      }
+      const formData = new FormData()
+      formData.append('file', file)
+      formData.append('name', name)
+      if (folderId) formData.append('folder_id', folderId)
+      const { data } = await http.post('/api/case-sets/import', formData)
       return data
     },
     async listFolders(): Promise<CaseFolder[]> {

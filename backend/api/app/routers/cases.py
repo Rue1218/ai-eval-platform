@@ -20,7 +20,7 @@ from typing import Any
 from urllib.parse import quote
 from xml.sax.saxutils import escape
 
-from fastapi import APIRouter, Depends, File, Query, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Query, Response, UploadFile
 from fastapi import Request as FastApiRequest
 from openpyxl import Workbook
 from pydantic import ValidationError
@@ -497,6 +497,42 @@ def download_import_template(
     )
 
 
+# 固定路径 /import 必须在 /{set_id} 路由前声明，避免被当作用例集 ID。
+@router.post("/import", status_code=201)
+async def create_case_set_from_excel(
+    request: FastApiRequest,
+    file: UploadFile = File(...),
+    name: str = Form(...),
+    folder_id: str | None = Form(default=None),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """单事务创建用例集并导入 Excel；失败时不留下空草稿。"""
+    name = name.strip()
+    if not name or len(name) > 100:
+        raise AppError(ErrorCode.VALIDATION, "用例集名称长度须为 1 至 100 字")
+    parsed, fmt, skipped = await _read_import_file(file)
+    try:
+        if folder_id:
+            assert_folder_exists(db, CaseFolder, folder_id)
+        case_set = CaseSet(name=name, folder_id=folder_id, created_by=user.id)
+        db.add(case_set)
+        db.flush()
+        imported = _write_imported_cases(
+            db, case_set, parsed, fmt, skipped, "replace", file.filename, request, user,
+        )
+        db.add(AuditLog(
+            user_id=user.id, action="case_set_create", target_type="case_set",
+            target_id=case_set.id, detail={"name": case_set.name}, ip=client_ip(request),
+        ))
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    db.refresh(case_set)
+    return {"case_set_id": case_set.id, **_import_result(case_set, fmt, "replace", imported, skipped)}
+
+
 @router.get("/{set_id}", response_model=CaseSetDetailOut)
 def get_case_set(
     set_id: str,
@@ -754,21 +790,8 @@ def ai_fill_cases(
     return {"items": filled}
 
 
-@router.post("/{set_id}/import")
-async def import_case_set(
-    set_id: str,
-    request: FastApiRequest,
-    file: UploadFile = File(...),
-    mode: str = Query("append"),
-    db: Session = Depends(get_db),
-    user: User = Depends(get_current_user),
-    expected_revision: int = Query(..., ge=0),
-):
-    """从 Excel 导入用例行。mode=append 追加（同 id 则更新），replace 先清空再写入。"""
-    case_set = _get_case_set_or_404(db, set_id)
-    _assert_editable(case_set)
-    if mode not in {"append", "replace"}:
-        raise AppError(ErrorCode.VALIDATION, "mode 仅支持 append 或 replace")
+async def _read_import_file(file: UploadFile) -> tuple[list[dict[str, Any]], str, int]:
+    """读取并解析 Excel，写库前完成格式与规模校验。"""
     filename = (file.filename or "").lower()
     if not filename.endswith((".xlsx", ".xlsm")):
         raise AppError(ErrorCode.VALIDATION, "仅支持 .xlsx，请将 .xls 另存为 .xlsx 后再导入")
@@ -778,11 +801,15 @@ async def import_case_set(
     if len(content) > IMPORT_MAX_BYTES:
         raise AppError(ErrorCode.VALIDATION, "文件大小超过 10MB 上限")
 
-    parsed, fmt, skipped = parse_cases_xlsx(content)
-    # 上传和解析期间不占业务行锁；写入前再获取最新状态并校验确认期限。
-    case_set, _task = _lock_editable_case_set(db, set_id)
-    if case_set.revision != expected_revision:
-        raise AppError(ErrorCode.CONCURRENCY, "用例已由其他操作更新，请刷新后再导入")
+    return parse_cases_xlsx(content)
+
+
+def _write_imported_cases(
+    db: Session, case_set: CaseSet, parsed: list[dict[str, Any]],
+    fmt: str, skipped: int, mode: str, filename: str | None,
+    request: FastApiRequest, user: User,
+) -> int:
+    """在调用方事务中写入导入行与审计；创建新集时由调用方一并提交。"""
     extra_keys: list[str] = []
     for item in parsed:
         extra_keys.extend((item.get("extras") or {}).keys())
@@ -828,7 +855,7 @@ async def import_case_set(
             target_id=case_set.id,
             detail={
                 "name": case_set.name,
-                "filename": file.filename,
+                "filename": filename,
                 "mode": mode,
                 "format": fmt,
                 "imported_count": imported,
@@ -837,8 +864,11 @@ async def import_case_set(
             ip=client_ip(request),
         )
     )
-    db.commit()
-    db.refresh(case_set)
+    return imported
+
+
+def _import_result(case_set: CaseSet, fmt: str, mode: str, imported: int, skipped: int) -> dict[str, Any]:
+    """返回新建导入和原有集导入共用的响应字段。"""
     return {
         "ok": True,
         "format": fmt,
@@ -849,6 +879,34 @@ async def import_case_set(
         "checks": case_set.checks,
         "revision": case_set.revision,
     }
+
+
+@router.post("/{set_id}/import")
+async def import_case_set(
+    set_id: str,
+    request: FastApiRequest,
+    file: UploadFile = File(...),
+    mode: str = Query("append"),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+    expected_revision: int = Query(..., ge=0),
+):
+    """从 Excel 导入用例行。mode=append 追加（同 id 则更新），replace 先清空再写入。"""
+    case_set = _get_case_set_or_404(db, set_id)
+    _assert_editable(case_set)
+    if mode not in {"append", "replace"}:
+        raise AppError(ErrorCode.VALIDATION, "mode 仅支持 append 或 replace")
+    parsed, fmt, skipped = await _read_import_file(file)
+    # 上传和解析期间不占业务行锁；写入前再获取最新状态并校验确认期限。
+    case_set, _task = _lock_editable_case_set(db, set_id)
+    if case_set.revision != expected_revision:
+        raise AppError(ErrorCode.CONCURRENCY, "用例已由其他操作更新，请刷新后再导入")
+    imported = _write_imported_cases(
+        db, case_set, parsed, fmt, skipped, mode, file.filename, request, user,
+    )
+    db.commit()
+    db.refresh(case_set)
+    return _import_result(case_set, fmt, mode, imported, skipped)
 
 
 @router.get("/{set_id}/export")
