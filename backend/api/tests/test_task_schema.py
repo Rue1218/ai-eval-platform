@@ -3,6 +3,8 @@
 import pytest
 from pydantic import ValidationError
 
+from app.errors import AppError, ErrorCode
+from app.harness.orchestration.confirm import _validate_confirmed
 from app.schemas import TaskCreate
 
 
@@ -26,6 +28,37 @@ def test_task_create_accepts_frontend_config_wrapper():
     assert task.profile_ids == ["profile-1"]
     assert task.snapshot()["dataset_id"] == "dataset-1"
     assert "session_id" not in task.snapshot()
+
+
+def test_testcase_generation_options_are_snapshotted_and_validated():
+    """对话任务能冻结与用例页相同的数量和六策略配比。"""
+    task = TaskCreate.model_validate({
+        "kind": "testcase", "case_source": {"text": "登录需求"},
+        "max_count": 12, "strategy_weights": {"positive": 75, "negative": 25},
+    })
+    assert task.snapshot()["max_count"] == 12
+    assert task.snapshot()["strategy_weights"] == {"positive": 75, "negative": 25}
+    for invalid in (
+        {"max_count": 0}, {"max_count": 81}, {"max_count": True},
+        {"strategy_weights": {"positive": 99}},
+        {"strategy_weights": {"positive": True, "negative": 99}},
+        {"strategy_weights": {"other": 100}},
+    ):
+        with pytest.raises(ValidationError):
+            TaskCreate.model_validate({
+                "kind": "testcase", "case_source": {"text": "需求"}, **invalid,
+            })
+
+
+def test_confirm_card_validates_generation_options_without_dropping_them():
+    """确认卡白名单保留数量与配比，非法值不会被静默丢弃。"""
+    base = {"kind": "testcase", "case_source": {"text": "需求"}}
+    assert _validate_confirmed({
+        **base, "max_count": 12, "strategy_weights": {"positive": 100},
+    }) == "testcase"
+    with pytest.raises(AppError) as error:
+        _validate_confirmed({**base, "max_count": 81})
+    assert error.value.code == ErrorCode.VALIDATION
 
 
 def test_benchmark_rejects_missing_profile_or_dataset():

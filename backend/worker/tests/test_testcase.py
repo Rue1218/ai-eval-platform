@@ -137,6 +137,46 @@ def test_generation_persists_only_while_task_still_owns_execution(
             assert item.id != "model-id" and item.pending_complete is False
 
 
+def test_generation_honors_snapshot_count_and_weights(worker_db_factory, monkeypatch):
+    """对话任务的数量与策略快照同时进入提示词和落库后处理。"""
+    with worker_db_factory() as db:
+        db.add(ProtocolProfile(
+            id="profile", name="local", protocol="openai_chat",
+            base_url="https://example.test", model="local",
+        ))
+        db.add(Setting(key="agent_profile_id", value="profile"))
+        db.add(Task(
+            id="task", kind="testcase", status="running", created_by="owner",
+            claimed_by_worker_id="worker", claim_expires_at=utcnow() + timedelta(minutes=1),
+            config={"case_source": {"text": "登录需求"}, "max_count": 2,
+                    "strategy_weights": {"positive": 100}},
+        ))
+        db.commit()
+    monkeypatch.setattr(testcase, "profile_connection", lambda *_args, **_kwargs: (
+        "https://example.test", "local", "local-test-placeholder",
+    ))
+    monkeypatch.setattr(testcase, "read_profile_env", lambda _id: SimpleNamespace(full_url=False))
+    calls = []
+
+    def complete_model(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(text=(
+            '[{"name":"正向1","strategy":"正向","priority":"HX","expected":"成功"},'
+            '{"name":"正向2","strategy":"正向","priority":"HX","expected":"成功"},'
+            '{"name":"反向","strategy":"反向","priority":"YC","expected":"拒绝"},'
+            '{"name":"未知","strategy":"其他","priority":"FHX","expected":"结果"}]'
+        ))
+
+    monkeypatch.setattr(testcase, "call_protocol", complete_model)
+    testcase.run_testcase("task")
+    assert len(calls) == 1
+    assert "不超过 2 条" in calls[0]["messages"][0]["content"]
+    assert "正向 100%" in calls[0]["messages"][0]["content"]
+    with worker_db_factory() as db:
+        assert db.get(Task, "task").status == "awaiting_case_confirm"
+        assert [row.name for row in db.query(CaseItem).order_by(CaseItem.sort_order)] == ["正向1", "正向2"]
+
+
 def test_confirmation_expiry_only_cancels_eligible_locked_rows(worker_db_factory, monkeypatch):
     """只取消截止且未确认的行；既有成功任务不误报超时，锁顺序为用例集后任务。"""
     now = utcnow()

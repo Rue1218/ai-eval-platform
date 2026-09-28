@@ -2,11 +2,11 @@
 
 > ⚠️ **文档维护提示（2026-09-11）**：本文部分章节含历史实现引用（`agent/react.py`、`plan_solve.py`、`reflect.py`、`clarify.py` 等模块已删除，ReAct / Plan-Solve 图已由 AgentLoop v2 取代）；当前实现与契约以 `AGENTS.md` 状态地图及本文最新修订为准。
 
-> 版本：V1.7.14
+> 版本：V1.7.15
 > 状态：新建会话统一使用 AgentLoop v2；历史 legacy 行仅保留审计与显式回放路径。此前骨架化与混合引擎说明属于 legacy 路径及其历史阶段，不能据此认定新路径仍为纯对话。前端输入栏按每回合协议档选择模型和思考强度，完整真实供应商/Linux Runner 联调验收仍未结束。
 > 审查日期：2026-09-28
-> 对应需求：`AI测试与评估平台-PRD.md` V1.51
-> 对应接口：`AI测试与评估平台-API.md` V2.34
+> 对应需求：`AI测试与评估平台-PRD.md` V1.55
+> 对应接口：`AI测试与评估平台-API.md` V2.37
 
 ## 1. legacy 骨架化运行链路（历史基线）
 
@@ -669,3 +669,14 @@ benchmark、rag、stress 技能和工作流停止选择与执行；持久卷中�
 - `backend/api/app/harness/skills/`、`execution/registry.py`、`execution/task_tools.py`、`prompts/system.py`：只暴露当前可用技能和任务参数，并返回用例集定位信息。
 - `backend/shared/casegen.py`：Worker 与用例页 AI 对话框共用功能用例生成约束。
 - 对应 Agent、技能与生成测试：覆盖停用技能、用例任务和草稿链路。
+
+## V1.7.15 用例数量与策略配置透传（2026-09-28）
+
+`task.create(kind=testcase)` 可在用户明确指定时携带 `max_count`（整数 1–80）和 `strategy_weights`（六策略整数百分比合计 100），省略时保持 45 条及默认配比。Agent 确认卡、Workflow 已形成的槽位、任务快照和 Worker 保留同一组参数；无效数量或配比分别提示具体校验原因。Worker 与 `/cases` AI 候选生成共用生成与策略过滤规则，未知或零权重策略不进入结果，过滤后无有效用例按上游失败处理。旧 Hybrid Workflow 的 W1 不从自由文本自动抽取数量或百分比，未形成槽位时仍用默认值。
+
+### 修改代码文件与作用清单
+
+- `backend/api/app/harness/execution/registry.py`、`harness/orchestration/{confirm,confirm_spec}.py`、`agent/workflow_nodes.py`：工具参数及确认卡传递和验证。
+- `backend/api/app/agent/expert_prompts/testcase_agent.md`、`harness/skills/files/skill-testcase/SKILL.md`：用例专家与技能按明确参数下单。
+- `backend/api/app/schemas.py`、`backend/worker/app/testcase.py`、`backend/shared/casegen.py`：任务快照、Worker 执行和共同生成规则。
+- 对应 Agent、API 与 Worker 测试：参数边界、确认卡和执行配比回归。

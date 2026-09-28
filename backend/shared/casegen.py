@@ -86,7 +86,7 @@ def build_prompts(
         f"priority（优先级，取值限于 {priority_desc}）、"
         "module（模块）、submodule（子模块）、feature_point（功能点）、"
         "name（测试点/用例名称）、expected（预期结果）、precondition（前置条件）、"
-        "test_type（测试类型，如 核心业务/异常处理/兼容性），可选 steps（操作步骤）。"
+        "steps（可执行操作步骤）、test_type（测试类型，如 核心业务/异常处理/兼容性）。"
         "只输出一个 JSON 数组，不要输出任何解释文字或 markdown 代码围栏。"
     )
     user = (
@@ -128,11 +128,12 @@ def rebalance_by_strategy(
     }
     grouped: dict[str, list[dict]] = {}
     for item in items:
-        grouped.setdefault(str(item.get("strategy") or ""), []).append(item)
+        strategy = str(item.get("strategy") or "")
+        if quotas.get(strategy, 0) > 0:
+            grouped.setdefault(strategy, []).append(item)
     result: list[dict] = []
     for strategy, group in grouped.items():
-        quota = quotas.get(strategy)
-        result.extend(group if quota is None else group[:quota])
+        result.extend(group[:quotas[strategy]])
     return result[:max_count]
 
 

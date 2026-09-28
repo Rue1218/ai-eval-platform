@@ -33,6 +33,7 @@ def test_build_prompts_guides_risk_traceability_and_observable_cases():
     assert "每条用例只验证一个明确行为" in system
     assert "feature_point 要能追溯到需求" in system
     assert "steps 写出可执行的具体操作" in system
+    assert "steps（可执行操作步骤）" in system
     assert "expected 写出与操作对应、可观察的结果" in system
     assert "需求未给出确定预期时不要编造" in system
 
@@ -75,6 +76,16 @@ def test_rebalance_uses_requested_weights_and_excludes_zero_weight():
     result = casegen.rebalance_by_strategy(cases, 20, {"positive": 100})
     assert len(result) == 20
     assert all(case["strategy"] == "正向" for case in result)
+
+
+def test_rebalance_excludes_unknown_strategy():
+    """模型给出未定义策略时不能绕过用户选择进入候选。"""
+    cases = [
+        {"name": "未知策略", "strategy": "任意新策略"},
+        {"name": "未选策略", "strategy": "反向"},
+        {"name": "已选策略", "strategy": "正向"},
+    ]
+    assert casegen.rebalance_by_strategy(cases, 3, {"positive": 100}) == [cases[2]]
 
 
 def test_parse_cases_removes_model_controlled_metadata():

@@ -181,6 +181,11 @@ def test_task_create_schema_only_accepts_testcase_with_source() -> None:
     """模型可见 schema 仅提供用例生成，来源段必须显式传入。"""
     schema = build_default_registry().get("task.create").parameters_schema
     assert validate_tool_arguments(schema, _testcase_args()) is None
+    assert validate_tool_arguments(schema, _testcase_args(
+        max_count=12, strategy_weights={"positive": 75, "negative": 25},
+    )) is None
+    assert validate_tool_arguments(schema, _testcase_args(max_count=81)) is not None
+    assert validate_tool_arguments(schema, _testcase_args(strategy_weights={"other": 100})) is not None
     assert validate_tool_arguments(schema, {"kind": "testcase"}) is not None
     for kind in ("benchmark", "rag", "stress"):
         assert validate_tool_arguments(schema, {"kind": kind, "case_source": {"text": "需求"}}) is not None

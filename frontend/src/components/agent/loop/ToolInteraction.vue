@@ -8,6 +8,10 @@
         <span v-if="interaction.risk_level"> · 风险等级：{{ interaction.risk_level }}</span>
         <span v-if="interaction.risk_level === 'code'">（破坏性命令在所有档位都需批准）</span>
       </p>
+      <p v-if="testcaseSpec" class="interaction-meta">
+        生成数量：{{ testcaseSpec.max_count ?? 45 }} 条
+        <span> · 策略配比：{{ strategySummary || '默认配比' }}</span>
+      </p>
       <pre v-if="interaction.display">{{ JSON.stringify(interaction.display, null, 2) }}</pre>
       <form v-if="interaction.kind === 'question' && !interaction.resolved" @submit.prevent="answer">
         <fieldset v-for="q in interaction.questions || []" :key="q.id" :disabled="disabled">
@@ -31,15 +35,28 @@
 <script setup lang="ts">
 import { computed, reactive, ref, onBeforeUnmount } from 'vue'
 import type { Data, InteractionRecord } from '../../../api/agentLoopTypes'
+import type { TaskSpec } from '../../../api/types'
 const props = defineProps<{ interaction: InteractionRecord; canControl: boolean; online: boolean }>()
 const emit = defineEmits<{ respond: [InteractionRecord, Data] }>()
 const now = ref(Date.now()), timer = setInterval(() => { now.value = Date.now() }, 1000)
 onBeforeUnmount(() => clearInterval(timer))
 const values = reactive<Record<string, string>>({}), selected = reactive<Record<string, string[]>>({})
-const titles: Record<string, string> = { approval: '工具权限确认', question: '补充信息', task_confirmation: '确认冻结的评测规格' }
+const titles: Record<string, string> = { approval: '工具权限确认', question: '补充信息', task_confirmation: '确认任务规格' }
 const tierLabels: Record<string, string> = { tier1: '档1 请求批准', tier2: '档2 帮我批准', tier3: '档3 完全访问' }
 const expired = computed(() => props.interaction.expires_at && props.interaction.expires_at * 1000 <= now.value)
 const disabled = computed(() => !props.canControl || !props.online || expired.value || props.interaction.submitting || props.interaction.resolved || !props.interaction.nonce)
+const testcaseSpec = computed<TaskSpec | null>(() => {
+  if (props.interaction.kind !== 'task_confirmation') return null
+  const display = props.interaction.display as { kind?: string; spec?: TaskSpec } | undefined
+  return display?.kind === 'testcase' && display.spec ? display.spec : null
+})
+const strategyLabels: Record<string, string> = {
+  positive: '正向', negative: '反向', boundary: '边界',
+  equivalence: '等价类', state: '状态迁移', scenario: '场景',
+}
+const strategySummary = computed(() => Object.entries(testcaseSpec.value?.strategy_weights || {})
+  .filter(([, weight]) => weight > 0)
+  .map(([key, weight]) => `${strategyLabels[key] || key} ${weight}%`).join('、'))
 /** 多选用标签数组往返，含逗号的标签不能拆分。 */
 function choose(id: string, label: string, multiple: boolean, checked: boolean) { selected[id] = multiple ? [...(selected[id] || []).filter(v => v !== label), ...(checked ? [label] : [])] : [label] }
 function answer() { respond({ answers: (props.interaction.questions || []).map((q: Data) => ({ question_id: q.id, answer: q.type === 'checkbox' ? selected[q.id] || [] : selected[q.id]?.[0] || values[q.id] || '' })) }) }

@@ -63,6 +63,7 @@ from ..schemas import (
     CaseMapIn,
     CaseSetCreate,
     CaseSetDetailOut,
+    CaseSetFromCandidatesIn,
     CaseSetOut,
     CaseSetUpdate,
     CasesPayload,
@@ -430,7 +431,7 @@ def ai_generate_cases(
     source_text = source_text[:SOURCE_MAX_CHARS]
 
     weights = body.strategy_weights or STRATEGY_WEIGHTS
-    max_count = min(body.max_count, 80)
+    max_count = body.max_count
     system, user_prompt = build_prompts(source_text, max_count, weights=weights)
     result = call_agent_model(db, system, user_prompt, temperature=0.3, max_tokens=8192)
     try:
@@ -438,7 +439,49 @@ def ai_generate_cases(
     except (ValueError, json.JSONDecodeError) as exc:
         raise AppError(ErrorCode.UPSTREAM, "模型输出无法解析为用例") from exc
     cases = rebalance_by_strategy(cases, max_count, weights=weights)
+    if not cases:
+        raise AppError(ErrorCode.UPSTREAM, "模型未返回符合所选策略的有效用例")
     return {"items": cases}
+
+
+@router.post("/from-candidates", response_model=CaseSetDetailOut, status_code=201)
+def create_case_set_from_candidates(
+    body: CaseSetFromCandidatesIn,
+    request: FastApiRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """一次事务保存人工采纳的候选、用例集和自检结果，失败不留空草稿。"""
+    name = body.name.strip()
+    if not name:
+        raise AppError(ErrorCode.VALIDATION, "用例集名称不能为空")
+    try:
+        if body.folder_id:
+            assert_folder_exists(db, CaseFolder, body.folder_id)
+        case_set = CaseSet(name=name, folder_id=body.folder_id, created_by=user.id, revision=1)
+        db.add(case_set)
+        db.flush()
+        for index, case_in in enumerate(body.cases):
+            # 候选不能指定持久身份；只采纳正文和业务扩展列。
+            _upsert_case(db, case_set, case_in.model_copy(update={"id": None}), None, index)
+        db.flush()
+        items = [_case_to_item(case) for case in _list_cases(db, case_set)]
+        case_set.generated_count = len(items)
+        case_set.checks = _selfcheck_items(items)
+        db.add(AuditLog(
+            user_id=user.id, action="case_set_create", target_type="case_set",
+            target_id=case_set.id,
+            detail={"name": case_set.name, "source": "ai_candidates", "case_count": len(items)},
+            ip=client_ip(request),
+        ))
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    db.refresh(case_set)
+    detail = CaseSetDetailOut.model_validate(case_set)
+    detail.cases = items
+    return detail
 
 
 def _read_stored_file_text(db: Session, file_id: str, user_id: str) -> str:
@@ -645,6 +688,8 @@ def confirm_case_set(
     if case_set.revision != body.expected_revision:
         raise AppError(ErrorCode.CONCURRENCY, "用例已由其他操作更新，请刷新后再审核")
     if body.ok:
+        if case_set.generated_count < 1:
+            raise AppError(ErrorCode.VALIDATION, "用例集至少需要一条用例才能确认入库")
         case_set.status = "confirmed"
         case_set.confirmed_count = case_set.generated_count
         task_status = "succeeded"

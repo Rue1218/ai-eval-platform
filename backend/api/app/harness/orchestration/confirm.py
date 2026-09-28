@@ -65,6 +65,8 @@ _TASK_SPEC_KEYS = frozenset(
         "with_stress",
         "stress",
         "case_source",
+        "max_count",
+        "strategy_weights",
     }
 )
 

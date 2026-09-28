@@ -12,12 +12,16 @@ async function setup(page: Page) {
   const saves: { id: string; cases: Record<string, unknown>[]; expected_revision: number; column_schema: Record<string, unknown>[] }[] = []
   const confirms: string[] = []
   const generations: Record<string, unknown>[] = []
+  const candidateCreates: { name: string; cases: Record<string, unknown>[] }[] = []
   const imports: { id: string; mode: string | null; expectedRevision: string | null }[] = []
   const newImports: string[] = []
   const held: Record<string, Route> = {}
   const holds = new Set<string>()
   let failSave = false
   let failNewImport = false
+  let failCandidateCreate = false
+  let failGenerate = false
+  let failUpload = false
   let createCalls = 0
   const sets = ['a', 'b', 'c'].map(id => ({ id, task_id: id === 'b' ? 'task-b' : null, name: `用例集${id.toUpperCase()}`, status: 'generated',
     revision: 0, generated_count: 1, confirmed_count: 0, checks: [], column_schema: [{ key: 'custom_field', name: '扩展属性', type: 'text' }] }))
@@ -25,6 +29,21 @@ async function setup(page: Page) {
   await page.route(/^http:\/\/127\.0\.0\.1:5273\/api\//, async route => {
     const url = new URL(route.request().url())
     const id = url.pathname.split('/')[3]
+    if (url.pathname === '/api/files') {
+      if (holds.has('fileUpload')) { held.fileUpload = route; return }
+      if (failUpload) return route.fulfill({ status: 400, json: { code: 'VALIDATION', message: '上传失败' } })
+      return route.fulfill({ json: { id: 'source-doc-1', filename: '需求.md', size: 12 } })
+    }
+    if (url.pathname === '/api/case-sets/from-candidates') {
+      const payload = route.request().postDataJSON()
+      candidateCreates.push(payload)
+      if (failCandidateCreate) return route.fulfill({ status: 400, json: { code: 'VALIDATION', message: '候选保存失败' } })
+      const created = { id: `generated-${candidateCreates.length}`, task_id: null, name: payload.name, status: 'generated',
+        revision: 1, generated_count: payload.cases.length, confirmed_count: 0, checks: [], column_schema: [] }
+      sets.push(created)
+      rows[created.id] = payload.cases.map((item: Record<string, unknown>, i: number) => ({ ...item, id: `generated-row-${i}` }))
+      return route.fulfill({ status: 201, json: { ...created, cases: rows[created.id] } })
+    }
     if (url.pathname === '/api/case-sets/import') {
       newImports.push(route.request().postData() || '')
       if (failNewImport) return route.fulfill({ status: 400, json: { code: 'VALIDATION', message: '无法解析 Excel' } })
@@ -48,6 +67,7 @@ async function setup(page: Page) {
     }
     if (url.pathname === '/api/case-sets/ai-generate') {
       generations.push(route.request().postDataJSON())
+      if (failGenerate) return route.fulfill({ status: 502, json: { code: 'UPSTREAM', message: '生成失败' } })
       return route.fulfill({ json: { items: [row('candidate', '生成候选')] } })
     }
     if (url.pathname.startsWith('/api/tasks/')) {
@@ -64,7 +84,7 @@ async function setup(page: Page) {
       set.revision++
       if (holds.has('save')) { held.save = route; return }
       rows[id] = saves.at(-1)!.cases.map((item, i) => ({ ...item, id: item.id || `saved-${i}` }))
-      return route.fulfill({ json: { items: rows[id], revision: set.revision } })
+      return route.fulfill({ json: { items: rows[id], revision: set.revision, checks: set.checks } })
     }
     if (url.pathname.endsWith('/confirm')) {
       const set = sets.find(s => s.id === id)!
@@ -99,8 +119,10 @@ async function setup(page: Page) {
   })
   await page.goto('/tests/cases-audit-fixture.html')
   await expect(page.locator('.data-row')).toHaveCount(1)
-  return { saves, confirms, generations, imports, newImports, held, holds, rows, sets,
-    get createCalls() { return createCalls }, failSave: () => { failSave = true }, failNewImport: () => { failNewImport = true } }
+  return { saves, confirms, generations, candidateCreates, imports, newImports, held, holds, rows, sets,
+    get createCalls() { return createCalls }, failSave: () => { failSave = true }, recoverSave: () => { failSave = false },
+    failNewImport: () => { failNewImport = true },
+    failCandidateCreate: () => { failCandidateCreate = true }, failGenerate: () => { failGenerate = true }, failUpload: () => { failUpload = true } }
 }
 
 /** 双击单元格进入现有编辑交互，再显式失焦完成编辑。 */
@@ -112,15 +134,23 @@ async function rename(page: Page, text: string, index = 0) {
   await cell.locator('input').press('Tab')
 }
 
+async function generateCandidate(page: Page) {
+  await page.getByRole('button', { name: 'PRD 用例推导向导', exact: true }).click()
+  await page.getByPlaceholder('粘贴需求文档段落、状态转移逻辑或 OpenAPI 规范...').fill('登录功能需求')
+  await page.getByRole('button', { name: '推导候选用例 →' }).click()
+  await expect(page.getByRole('textbox', { name: '候选 1 名称' })).toBeVisible()
+}
+
 test('PRD 生成请求遵循真实后端字段契约', async ({ page }) => {
   const ctx = await setup(page)
   await page.getByRole('button', { name: 'PRD 用例推导向导', exact: true }).click()
+  await page.getByPlaceholder('粘贴需求文档段落、状态转移逻辑或 OpenAPI 规范...').fill('测试登录需求')
   await page.getByRole('button', { name: '推导候选用例 →' }).click()
   await expect.poll(() => ctx.generations.length).toBe(1)
   expect(Object.keys(ctx.generations[0]).sort()).toEqual(['max_count', 'source_text', 'strategy_weights'])
   expect(ctx.generations[0].source_text).toBeTruthy()
-  await page.getByRole('button', { name: '采纳导入用例集 (1 条)' }).click()
-  await page.getByRole('button', { name: '保存用例修改' }).click()
+  await page.getByLabel('追加到当前草稿「用例集A」').check()
+  await page.getByRole('button', { name: '采纳并保存候选 (1 条)' }).click()
   await expect.poll(() => ctx.saves.length).toBe(1)
   expect(ctx.saves[0].cases[1]).toMatchObject({ name: '生成候选', submodule: '登录', feature_point: '身份验证', custom_field: '保留扩展数据' })
   expect(ctx.saves[0].cases[1]).not.toHaveProperty('id')
@@ -335,7 +365,7 @@ test('新集 Excel 导入失败时不先创建空用例集，且保留文件以�
   await expect(page.locator('.data-row')).toContainText('A 未保存草稿')
 })
 
-test('确认操作等待正在保存的同一个请求，保存完成后只确认一次', async ({ page }) => {
+test('确认操作等待正在保存的请求，保存后展示最新自检并等待再次确认', async ({ page }) => {
   const ctx = await setup(page)
   await rename(page, '待确认版本')
   ctx.holds.add('save')
@@ -344,11 +374,27 @@ test('确认操作等待正在保存的同一个请求，保存完成后只确�
   await page.getByRole('button', { name: '确认入库用例集' }).click()
   expect(ctx.confirms).toEqual([])
   expect(ctx.saves).toHaveLength(1)
-  await ctx.held.save.fulfill({ json: { items: ctx.saves[0].cases, revision: ctx.sets[0].revision } })
+  await ctx.held.save.fulfill({ json: { items: ctx.saves[0].cases, revision: ctx.sets[0].revision,
+    checks: [{ level: 'error', code: 'missing_step', message: '请核对新增用例步骤' }] } })
+  await expect(page.locator('.review-check')).toContainText('请核对新增用例步骤')
+  expect(ctx.confirms).toEqual([])
+  await expect(page.locator('.main-toolbar .status-badge')).toContainText('草稿')
+  await page.getByRole('button', { name: '确认入库用例集' }).click()
   await expect.poll(() => ctx.confirms).toEqual(['a'])
   await expect(page.locator('.main-toolbar .status-badge')).toContainText('已确认入库')
   await page.locator('.data-row .td-chk').first().click()
   await expect(page.getByRole('button', { name: /批量删除/ })).toHaveCount(0)
+})
+
+test('直接确认未保存编辑时仅保存草稿，第二次点击才入库', async ({ page }) => {
+  const ctx = await setup(page)
+  await rename(page, '先审核后入库')
+  await page.getByRole('button', { name: '确认入库用例集' }).click()
+  await expect.poll(() => ctx.saves.length).toBe(1)
+  await expect(page.locator('.main-toolbar .status-badge')).toContainText('草稿')
+  expect(ctx.confirms).toEqual([])
+  await page.getByRole('button', { name: '确认入库用例集' }).click()
+  await expect.poll(() => ctx.confirms).toEqual(['a'])
 })
 
 test('放弃旧草稿切换后，旧保存响应不清除新用例集草稿', async ({ page }) => {
@@ -389,23 +435,25 @@ test('真实六策略候选可筛选且保存规范名称，旧策略别名兼�
   await page.route('**/api/case-sets/ai-generate', route => route.fulfill({ json: { items:
     ['正向', '反向', '边界', '等价类', '状态迁移', '场景'].map((strategy, i) => ({ ...row(`candidate-${i}`, `${strategy}候选`), strategy })) } }))
   await page.getByRole('button', { name: 'PRD 用例推导向导', exact: true }).click()
+  await page.getByPlaceholder('粘贴需求文档段落、状态转移逻辑或 OpenAPI 规范...').fill('测试六策略需求')
   await page.getByRole('button', { name: '推导候选用例 →' }).click()
-  await page.getByRole('button', { name: '采纳导入用例集 (6 条)' }).click()
+  await page.getByLabel('追加到当前草稿「用例集A」').check()
+  await page.getByRole('button', { name: '采纳并保存候选 (6 条)' }).click()
   await expect(page.getByText('✓ 6 大策略完备覆盖')).toBeVisible()
   await page.locator('.strategy-pill').filter({ hasText: '等价类' }).click()
   await expect(page.locator('.data-row')).toHaveCount(1)
   await rename(page, '修改等价类候选')
   await page.getByRole('button', { name: '保存用例修改' }).click()
-  await expect.poll(() => ctx.saves.length).toBe(1)
-  expect(ctx.saves[0].cases[4]).toMatchObject({ name: '修改等价类候选', strategy: '等价类' })
-  expect(ctx.saves[0].cases[5].strategy).toBe('状态迁移')
+  await expect.poll(() => ctx.saves.length).toBe(2)
+  expect(ctx.saves[1].cases[4]).toMatchObject({ name: '修改等价类候选', strategy: '等价类' })
+  expect(ctx.saves[1].cases[5].strategy).toBe('状态迁移')
   ctx.rows.b[0].strategy = '等价'
   await page.locator('.file-node').filter({ hasText: '用例集B' }).click()
   await expect(page.locator('.data-row')).toContainText('等价类')
   await rename(page, '旧别名用例')
   await page.getByRole('button', { name: '保存用例修改' }).click()
-  await expect.poll(() => ctx.saves.length).toBe(2)
-  expect(ctx.saves[1].cases[0].strategy).toBe('等价类')
+  await expect.poll(() => ctx.saves.length).toBe(3)
+  expect(ctx.saves[2].cases[0].strategy).toBe('等价类')
 })
 
 test('用例生成与 AI 补全允许等待服务端模型的 120 秒预算', async ({ page }) => {
@@ -425,4 +473,196 @@ test('用例生成与 AI 补全允许等待服务端模型的 120 秒预算', as
     } finally { http.interceptors.request.eject(interceptor) }
   })
   expect(timeouts).toEqual([130000, 130000])
+})
+
+test('候选完整审核后原子保存为新草稿，步骤与功能点可在详细编辑中修改', async ({ page }) => {
+  const ctx = await setup(page)
+  await generateCandidate(page)
+  await expect(page.getByLabel('新建草稿并保存候选')).toBeChecked()
+  await page.getByRole('textbox', { name: '候选 1 名称' }).fill('审核后登录用例')
+  await page.getByRole('textbox', { name: '候选 1 功能点' }).fill('登录令牌刷新')
+  await page.getByRole('textbox', { name: '候选 1 执行步骤' }).fill('1. 输入账号\n2. 提交登录')
+  await page.getByRole('textbox', { name: '新草稿名称' }).fill('登录功能草稿')
+  if (process.env.CASE_REVIEW_SHOTS) await page.screenshot({ path: 'test-results/cases-candidate-desktop.png', fullPage: true })
+  await page.getByRole('button', { name: '采纳并保存候选 (1 条)' }).click()
+  await expect.poll(() => ctx.candidateCreates.length).toBe(1)
+  expect(ctx.createCalls).toBe(0)
+  expect(ctx.candidateCreates[0]).toMatchObject({ name: '登录功能草稿', cases: [{
+    name: '审核后登录用例', feature_point: '登录令牌刷新', steps: '1. 输入账号\n2. 提交登录',
+  }] })
+  expect(ctx.candidateCreates[0].cases[0]).not.toHaveProperty('id')
+  await expect(page.locator('.main-dataset-title')).toHaveText('登录功能草稿')
+  await page.getByRole('button', { name: '详细编辑用例 TC-001' }).click()
+  await page.getByRole('textbox', { name: '编辑功能点' }).fill('登录验证码')
+  await page.getByRole('textbox', { name: '编辑执行步骤' }).fill('1. 输入验证码\n2. 验证成功')
+  await page.getByRole('button', { name: '保存修改', exact: true }).last().click()
+  await page.getByRole('button', { name: '保存用例修改' }).click()
+  await expect.poll(() => ctx.saves.length).toBe(1)
+  expect(ctx.saves[0].cases[0]).toMatchObject({ feature_point: '登录验证码', steps: '1. 输入验证码\n2. 验证成功' })
+})
+
+test('原子采纳失败保留候选且不创建空集', async ({ page }) => {
+  const ctx = await setup(page)
+  ctx.failCandidateCreate()
+  await generateCandidate(page)
+  await page.getByRole('button', { name: '采纳并保存候选 (1 条)' }).click()
+  await expect.poll(() => ctx.candidateCreates.length).toBe(1)
+  await expect(page.getByRole('textbox', { name: '候选 1 名称' })).toBeVisible()
+  expect(ctx.sets).toHaveLength(3)
+  expect(ctx.createCalls).toBe(0)
+})
+
+test('当前草稿保存失败后可重试，候选不重复追加', async ({ page }) => {
+  const ctx = await setup(page)
+  ctx.failSave()
+  await generateCandidate(page)
+  await page.getByLabel('追加到当前草稿「用例集A」').check()
+  await page.getByRole('button', { name: '采纳并保存候选 (1 条)' }).click()
+  await expect.poll(() => ctx.saves.length).toBe(1)
+  await expect(page.getByRole('button', { name: '重试保存候选' })).toBeVisible()
+  await expect(page.getByRole('textbox', { name: '候选 1 名称' })).toBeDisabled()
+  await page.locator('.n-drawer').getByRole('button', { name: '取消', exact: true }).click()
+  await page.getByRole('button', { name: 'PRD 用例推导向导', exact: true }).click()
+  await expect(page.getByLabel('追加到当前草稿「用例集A」')).toBeChecked()
+  await expect(page.getByRole('button', { name: '重试保存候选' })).toBeVisible()
+  ctx.recoverSave()
+  await page.getByRole('button', { name: '重试保存候选' }).click()
+  await expect.poll(() => ctx.saves.length).toBe(2)
+  expect(ctx.saves[1].cases).toHaveLength(2)
+  await expect(page.locator('.data-row')).toHaveCount(2)
+})
+
+test('当前草稿修订冲突时保留候选并提示核对，不诱导重复重试', async ({ page }) => {
+  const ctx = await setup(page)
+  await generateCandidate(page)
+  await page.getByLabel('追加到当前草稿「用例集A」').check()
+  ctx.sets[0].revision++
+  await page.getByRole('button', { name: '采纳并保存候选 (1 条)' }).click()
+  await expect.poll(() => ctx.saves.length).toBe(1)
+  await expect(page.getByRole('button', { name: '版本冲突，请先核对' })).toBeDisabled()
+  await expect(page.locator('.data-row')).toHaveCount(2)
+  expect(ctx.rows.a).toHaveLength(1)
+})
+
+test('已编辑候选关闭后重开仍保留，重新生成需确认覆盖', async ({ page }) => {
+  await setup(page)
+  await generateCandidate(page)
+  await page.getByRole('textbox', { name: '候选 1 名称' }).fill('人工修订的候选')
+  await page.locator('.n-drawer').getByRole('button', { name: '取消', exact: true }).click()
+  await page.getByRole('button', { name: 'PRD 用例推导向导', exact: true }).click()
+  await expect(page.getByRole('textbox', { name: '候选 1 名称' })).toHaveValue('人工修订的候选')
+  await page.getByRole('button', { name: '← 返回调整 PRD' }).click()
+  await page.getByRole('button', { name: '推导候选用例 →' }).click()
+  await expect(page.getByText('重新生成候选？')).toBeVisible()
+  await page.getByRole('button', { name: '保留候选' }).click()
+  await page.locator('.n-drawer').getByRole('button', { name: '取消', exact: true }).click()
+  await page.getByRole('button', { name: 'PRD 用例推导向导', exact: true }).click()
+  await expect(page.getByRole('textbox', { name: '候选 1 名称' })).toHaveValue('人工修订的候选')
+})
+
+test('覆盖重新生成失败时仍保留已编辑候选', async ({ page }) => {
+  const ctx = await setup(page)
+  await generateCandidate(page)
+  await page.getByRole('textbox', { name: '候选 1 名称' }).fill('保留的人工修订')
+  await page.getByRole('button', { name: '← 返回调整 PRD' }).click()
+  ctx.failGenerate()
+  await page.getByRole('button', { name: '推导候选用例 →' }).click()
+  await page.getByRole('button', { name: '覆盖并重新生成' }).click()
+  await expect.poll(() => ctx.generations.length).toBe(2)
+  await page.locator('.n-drawer').getByRole('button', { name: '取消', exact: true }).click()
+  await page.getByRole('button', { name: 'PRD 用例推导向导', exact: true }).click()
+  await expect(page.getByRole('textbox', { name: '候选 1 名称' })).toHaveValue('保留的人工修订')
+})
+
+test('原草稿未保存时新生成草稿仍可从侧栏找回', async ({ page }) => {
+  const ctx = await setup(page)
+  await rename(page, 'A 未保存编辑')
+  await generateCandidate(page)
+  await page.getByRole('button', { name: '采纳并保存候选 (1 条)' }).click()
+  await expect.poll(() => ctx.candidateCreates.length).toBe(1)
+  await expect(page.getByText('存在未保存的用例修改')).toBeVisible()
+  await expect(page.locator('.file-node').filter({ hasText: '需求用例-' })).toBeVisible()
+  await expect(page.locator('.data-row')).toContainText('A 未保存编辑')
+})
+
+test('已入库集仍可把生成候选保存到新草稿', async ({ page }) => {
+  const ctx = await setup(page)
+  ctx.sets[0].status = 'confirmed'
+  await page.reload()
+  await generateCandidate(page)
+  await expect(page.getByLabel('新建草稿并保存候选')).toBeChecked()
+  await expect(page.getByLabel('追加到当前草稿「用例集A」')).toHaveCount(0)
+  await page.getByRole('button', { name: '采纳并保存候选 (1 条)' }).click()
+  await expect.poll(() => ctx.candidateCreates.length).toBe(1)
+})
+
+test('上传需求文件通过 source_doc_id 生成，数量可调至 1–80', async ({ page }) => {
+  const ctx = await setup(page)
+  await page.getByRole('button', { name: 'PRD 用例推导向导', exact: true }).click()
+  await expect(page.getByPlaceholder('粘贴需求文档段落、状态转移逻辑或 OpenAPI 规范...')).toHaveValue('')
+  await page.getByLabel('上传需求文件').check()
+  await page.getByLabel('选择需求文件').setInputFiles({ name: '需求.md', mimeType: 'text/markdown', buffer: Buffer.from('登录需求') })
+  await expect(page.getByText('需求.md', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '推导候选用例 →' }).click()
+  await expect.poll(() => ctx.generations.length).toBe(1)
+  expect(ctx.generations[0]).toMatchObject({ source_doc_id: 'source-doc-1', source_text: '' })
+  await page.getByRole('button', { name: '← 返回调整 PRD' }).click()
+  const slider = page.getByRole('slider')
+  await expect(slider).toHaveAttribute('aria-valuemin', '1')
+  await expect(slider).toHaveAttribute('aria-valuemax', '80')
+})
+
+test('需求文件慢上传显示进度，且请求使用 180 秒超时', async ({ page }) => {
+  const ctx = await setup(page)
+  await page.evaluate(async () => {
+    const { default: http } = await import('/src/api/http.ts')
+    ;(window as any).__fileUploadTimeouts = []
+    http.interceptors.request.use(config => {
+      if (config.url === '/api/files') (window as any).__fileUploadTimeouts.push(config.timeout)
+      return config
+    })
+  })
+  ctx.holds.add('fileUpload')
+  await page.getByRole('button', { name: 'PRD 用例推导向导', exact: true }).click()
+  await page.getByLabel('上传需求文件').check()
+  await page.getByLabel('选择需求文件').setInputFiles({ name: '需求.md', mimeType: 'text/markdown', buffer: Buffer.from('登录需求') })
+  await expect.poll(() => !!ctx.held.fileUpload).toBe(true)
+  await expect.poll(() => page.evaluate(() => (window as any).__fileUploadTimeouts)).toEqual([180_000])
+  await expect(page.getByRole('status')).toContainText(/已上传 \d+%/)
+  await expect(page.getByRole('button', { name: /上传中/ })).toBeDisabled()
+  await ctx.held.fileUpload.fulfill({ json: { id: 'source-doc-1', filename: '需求.md', size: 12 } })
+  await expect(page.getByText('需求.md', { exact: true })).toBeVisible()
+})
+
+test('替换需求文件上传失败时保留之前可用的来源', async ({ page }) => {
+  const ctx = await setup(page)
+  await page.getByRole('button', { name: 'PRD 用例推导向导', exact: true }).click()
+  await page.getByLabel('上传需求文件').check()
+  await page.getByLabel('选择需求文件').setInputFiles({ name: '需求.md', mimeType: 'text/markdown', buffer: Buffer.from('原始需求') })
+  await expect(page.getByText('需求.md', { exact: true })).toBeVisible()
+  ctx.failUpload()
+  await page.getByLabel('选择需求文件').setInputFiles({ name: '新需求.md', mimeType: 'text/markdown', buffer: Buffer.from('新需求') })
+  await expect(page.getByText('需求.md', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: '推导候选用例 →' }).click()
+  await expect.poll(() => ctx.generations.length).toBe(1)
+  expect(ctx.generations[0].source_doc_id).toBe('source-doc-1')
+})
+
+test('窄屏仍可操作保存、确认及候选审核抽屉', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 })
+  await setup(page)
+  for (const name of ['保存用例修改', '确认入库用例集']) {
+    const button = page.getByRole('button', { name })
+    await button.scrollIntoViewIfNeeded()
+    const box = await button.boundingBox()
+    expect(box).not.toBeNull()
+    expect(box!.x + box!.width).toBeLessThanOrEqual(390)
+  }
+  await generateCandidate(page)
+  const apply = page.getByRole('button', { name: '采纳并保存候选 (1 条)' })
+  await apply.scrollIntoViewIfNeeded()
+  const box = await apply.boundingBox()
+  expect(box).not.toBeNull()
+  expect(box!.x + box!.width).toBeLessThanOrEqual(390)
+  if (process.env.CASE_REVIEW_SHOTS) await page.screenshot({ path: 'test-results/cases-candidate-mobile.png', fullPage: true })
 })

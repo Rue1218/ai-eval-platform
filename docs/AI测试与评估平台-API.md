@@ -1,15 +1,15 @@
 # AI 测试与评估平台 — API 契约
 
-> ⚠️ **当前接口边界（2026-09-28）**：仅测试用例生成任务可新建和重跑；Benchmark、RAG 评测与压测写入口停用，历史任务和报告只读保留。本文旧评测字段与示例仅用于解释历史数据；冲突时以 §3.8、§3.10、§5 当前契约及 V2.34–V2.36 修订为准。
+> ⚠️ **当前接口边界（2026-09-28）**：仅测试用例生成任务可新建和重跑；Benchmark、RAG 评测与压测写入口停用，历史任务和报告只读保留。本文旧评测字段与示例仅用于解释历史数据；冲突时以 §3.8、§3.10、§5 当前契约及 V2.34–V2.37 修订为准。
 >
 > **文档维护提示（2026-09-11）**：部分章节含已删除模块的历史引用（如 `agent/react.py`、`plan_solve.py`）；当前实现与接口以 `AGENTS.md` 状态地图及本文最新修订为准。
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V2.36 |
-| 本轮审查日期 | 2026-09-28（用例导入与数据集并发保存修复） |
+| 文档版本 | V2.37 |
+| 本轮审查日期 | 2026-09-28（用例生成与审核工作台重构） |
 | WS v2 修订日期 | 2026-09-26（§4A，摘要安全用量元数据与 v2.3 目录） |
-| 对应 PRD | V1.54（功能唯一权威） |
+| 对应 PRD | V1.55（功能唯一权威） |
 | 对应设计规范 | V1.12（错误码文案、确认卡字段名、调度中心规范） |
 | 对应 Agent 说明书 | `AI测试与评估平台-Agent开发文档.md` V1.7.8（AgentLoop 单入口；JSON 仍以本文为准） |
 | 对应前端计划 | AgentLoop 前端计划 V0.5 |
@@ -1191,6 +1191,7 @@ JSON body 必须传读取时的整数 `expected_revision`，可附 `reason`。�
 - `source_doc_id` 仅接受当前成员上传的文件；越权或不存在统一 `UNAUTHORIZED`。任务创建、重跑与 Worker 消费执行相同来源授权检查。
 - Excel 按上传时的 `filename / kind` 识别并抽取表格正文；存储文件的 UUID 路径不用于判断格式。
 - `strategy_weights` 只接受六类已知策略的整数百分比（0–100，合计 100，未提供的键视为 0）；未传时使用默认配比。提示词与结果裁剪使用同一份配比。
+- `max_count` 为 1–80 的整数；超出上限返回 `VALIDATION`，不静默截成 80。未传时默认 45。
 - 模型不能指定用例 `id / case_set_id / mapped / pending_complete` 等服务端身份或状态；这些字段不会作为模型扩展列透传。
 
 ```json
@@ -1201,7 +1202,11 @@ JSON body 必须传读取时的整数 `expected_revision`，可附 `reason`。�
 }
 ```
 
-前端采纳后按 `POST /api/case-sets` → `PUT /api/case-sets/{id}/cases` 两步落库；任何一步失败都不得显示“创建成功”。
+前端审核候选后，可调用下述单次事务接口保存到新草稿；也可将候选追加到当前可编辑草稿并按原有修订号保存。保存失败保留待审核候选，不得显示“创建成功”。
+
+#### `POST /api/case-sets/from-candidates`
+
+将人工选中并可编辑过的候选一次性保存为待确认用例集，登录后可用。请求为 `{ "name": "登录功能用例", "folder_id": null, "cases": [CaseIn] }`；`name` 长度 1–100，`cases` 须有 1–80 条，每行沿用 `PUT /api/case-sets/{id}/cases` 的 `CaseIn` 字段。客户端传入的用例 `id` 不作为新行身份。成功返回 `201 CaseSetDetailOut`，含真实用例 `id`、`status=generated`、`revision=1`、`generated_count` 与服务端 `checks`。创建用例集、用例行、自检与审计在同一事务中完成；校验或写入失败不会留下空草稿。仍须人工审核并调用 `POST /api/case-sets/{id}/confirm` 才能入库；空用例集不能确认。
 
 #### `POST /api/case-sets/{id}/ai-fill`
 
@@ -1368,6 +1373,7 @@ JSON body 必须传读取时的整数 `expected_revision`，可附 `reason`。�
 - 会话已有非终态任务 → 400 `VALIDATION`（占槽），前端应已禁用按钮。
 - 平台 `max_running_tasks` 满 → **仍** `queued`（3.4），可附 `warning: "CONCURRENCY"` 字段（可选）。  
 - `kind=testcase` 必须提供 `case_source.file_id` 或 `case_source.text`，二者恰有其一；来源文件须属于当前成员。
+- 可选 `max_count` 为 1–80 的整数；可选 `strategy_weights` 使用 `positive/negative/boundary/equivalence/state/scenario` 六个键，各为 0–100 的整数且合计 100。确认卡和任务快照须保留所选参数，Worker 按快照生成；未传时使用 45 条及默认配比。
 - 历史 benchmark、rag、stress 配置仍可在旧任务详情中只读查看，不再用于新建或重跑。
 
 #### `GET /api/tasks?status=&kind=&offset=&limit=`
@@ -2132,6 +2138,8 @@ WS 类型定义在 `routers/ws_v2.py`：`WsAccess(write,trace,reasoning,interact
 | --- | --- | --- |
 | `kind` | 是 | 当前固定为 `testcase`；其他值返回 `VALIDATION` |
 | `case_source` | 是 | `{file_id}` 或 `{text}`，二选一；文件须属于当前成员 |
+| `max_count` | 否 | 用例生成数量，整数 1–80；缺省 45 |
+| `strategy_weights` | 否 | 六类策略整数百分比，各 0–100，合计 100；缺省 40/25/15/10/5/5 |
 | `session_id` | 否 | 可见的有效会话；同一会话内任务串行 |
 
 REST `POST /api/tasks` 与 Agent 的内部 `task.create` 均受同一用例生成门禁约束。旧压测会签、手动发压及质量任务成功后派生压测均已停用。
@@ -3866,3 +3874,18 @@ Excel 导入在本批缓存已写入但尚未 flush 的用例，重复编号按�
 - `backend/api/app/routers/{cases,datasets}.py`：原子创建导入、数据集行保存版本校验与上传互斥。
 - `frontend/src/api/http.ts`、`frontend/src/components/modals/{ImportCasesExcelModal,UploadDatasetModal}.vue`、`frontend/src/views/Datasets.vue`：一次请求导入新集，按已加载行的版本保存，并保护上传期间及外部删除后的草稿。
 - `backend/api/tests/`、`frontend/tests/e2e/`：覆盖失败导入无副作用、过期版本拒绝与上传/保存交错。
+
+## V2.37 用例生成与审核工作台闭环（2026-09-28）
+
+- `POST /api/case-sets/ai-generate` 只返回候选，`max_count` 限 1–80；按所选策略配额过滤后若没有有效用例，返回 `UPSTREAM`，不以空列表表示生成成功。未知策略和零权重策略不会进入候选结果。
+- `POST /api/case-sets/from-candidates` 以一次事务保存新草稿、已审核候选和服务端自检，返回修订号与真实行 ID；失败不保留空集。对现有可编辑草稿的采纳仍通过带 `expected_revision` 的 `PUT /api/case-sets/{id}/cases` 完成。确认空集返回 `VALIDATION`；需求缺少确定结果时允许草稿用例标注待澄清，由人工审核后决定是否确认。
+- `POST /api/tasks` 和 Agent `task.create` 的 `kind=testcase` 可选 `max_count`（整数 1–80）及 `strategy_weights`（六类策略整数百分比，各 0–100、合计 100，省略键视为 0）。参数随任务快照交给 Worker；省略时沿用 45 条和默认 40/25/15/10/5/5 配比。其他任务类型不能携带这两个参数。
+- Hybrid Workflow 确认卡保留已形成的数量与配比槽位，并对无效值分别提示；旧 W1 不从自由文本自动提取数量或百分比，未形成槽位时仍使用默认值。该灰度路径不承诺自然语言参数抽取。
+- `/cases` 展示服务端自检、缺项摘要和完整用例字段；AI 候选审核后可选择新草稿或当前可编辑草稿，保存成功后才提示采纳完成。来源文档上传使用现有文件接口并传 `source_doc_id`，与粘贴文本共用生成规则；已确认用例集保持只读。
+
+### 修改代码文件与作用清单
+
+- `backend/shared/casegen.py`、`backend/api/app/routers/cases.py`、`schemas.py`：策略裁剪、空候选错误、原子采纳及任务参数校验。
+- `backend/api/app/harness/execution/registry.py`、`harness/orchestration/{confirm,confirm_spec}.py`、`agent/workflow_nodes.py`、`agent/expert_prompts/testcase_agent.md`、`harness/skills/files/skill-testcase/SKILL.md`、`backend/worker/app/testcase.py`：Agent 可见参数、确认卡与 Workflow 透传及 Worker 按任务快照生成。
+- `frontend/src/views/Cases.vue`、`frontend/src/api/http.ts`：候选审核、来源文档、草稿采纳、完整编辑及自检展示。
+- 对应 API、Worker 与前端测试：验证失败无副作用、策略与数量传递、保存冲突和人工审核流程。

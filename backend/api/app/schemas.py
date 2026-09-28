@@ -508,6 +508,17 @@ class TaskCreate(ApiModel):
     with_stress: bool = False
     stress: StressConfig | None = None
     case_source: CaseSource | None = None
+    max_count: int | None = Field(default=None, strict=True, ge=1, le=80)
+    strategy_weights: dict[str, int] | None = None
+
+    @field_validator("strategy_weights", mode="before")
+    @classmethod
+    def validate_case_strategy_weights(cls, value: Any) -> Any:
+        """用例任务与页面候选生成共用六策略整数百分比校验。"""
+        from shared.casegen import validate_strategy_weights
+
+        validate_strategy_weights(value)
+        return value
 
     @model_validator(mode="before")
     @classmethod
@@ -546,6 +557,9 @@ class TaskCreate(ApiModel):
                 raise ValueError("testcase 需要 case_source")
         elif not self.parent_task_id:
             raise ValueError("手动创建 stress 任务需要 parent_task_id")
+
+        if self.kind != "testcase" and (self.max_count is not None or self.strategy_weights is not None):
+            raise ValueError("用例生成参数仅支持 testcase 任务")
 
         if self.with_stress:
             if self.kind not in {"benchmark", "rag"}:
@@ -877,6 +891,14 @@ class CaseIn(ApiModel):
     test_type: str | None = Field(default=None, max_length=64)
 
 
+class CaseSetFromCandidatesIn(ApiModel):
+    """把已审核的 AI 候选一次性保存为待确认草稿。"""
+
+    name: str = Field(min_length=1, max_length=100)
+    folder_id: str | None = None
+    cases: list[CaseIn] = Field(min_length=1, max_length=80)
+
+
 class CasesPayload(ApiModel):
     """按修订号原子保存用例行与扩展列；单次请求内用例 id 不允许重复。"""
 
@@ -932,7 +954,7 @@ class CaseAiGenerateIn(ApiModel):
     # 6 大策略配比（百分比），键取值 positive/negative/boundary/equivalence/state/scenario
     strategy_weights: dict[str, int] | None = None
     complexity: str | None = Field(default=None, max_length=32)
-    max_count: int = Field(default=45, ge=1, le=100)
+    max_count: int = Field(default=45, strict=True, ge=1, le=80)
 
     @field_validator("strategy_weights", mode="before")
     @classmethod

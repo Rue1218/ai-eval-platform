@@ -255,6 +255,9 @@ export interface TaskSpec {
     file_id?: string
     text?: string
   }
+  /** 用例生成数量与六策略配比，确认卡展示服务端冻结值。 */
+  max_count?: number
+  strategy_weights?: Record<string, number>
   run?: RunConfig
   with_stress?: boolean
   stress?: StressConfig

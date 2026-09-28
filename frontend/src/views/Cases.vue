@@ -260,6 +260,12 @@
           </div>
         </div>
 
+        <div class="review-summary" aria-label="用例草稿审核信息">
+          <span class="review-count">待补全 {{ pendingCompleteCount }} 条 · 缺步骤 {{ missingStepsCount }} 条（可暂存草稿，入库前请核对）</span>
+          <span v-if="!currentSet.checks?.length" class="review-clear">服务端自检：无提示</span>
+          <span v-for="check in currentSet.checks" :key="check.code" class="review-check" :class="`check-${check.level}`">{{ check.message }}</span>
+        </div>
+
         <!-- 3. 用例表格：分页网格 + 居中自定义多选框 -->
         <div ref="tableContainerRef" class="table-container custom-scroll" tabindex="0">
           <table class="nordic-table">
@@ -274,19 +280,20 @@
                 </th>
                 <th style="width: 64px">#</th>
                 <th style="width: 100px">用例编码</th>
-                <th style="min-width: 220px">用例名称 / 测试问句 <span class="req-star">*</span></th>
+                <th style="min-width: 220px">用例名称 <span class="req-star">*</span></th>
                 <th style="width: 120px">所属模块</th>
+                <th style="min-width: 140px">功能点</th>
                 <th style="width: 90px">测试策略</th>
                 <th style="width: 80px">优先级</th>
-                <th style="min-width: 220px">前置条件 / 输入数据</th>
-                <th style="min-width: 240px">预期断言 (Reference) <span class="req-star">*</span></th>
+                <th style="min-width: 220px">前置条件</th>
+                <th style="min-width: 220px">执行步骤</th>
+                <th style="min-width: 240px">预期结果 <span class="req-star">*</span></th>
                 <th v-for="col in customCols" :key="col.key" class="custom-th" style="min-width: 120px">
                   <div class="th-flex">
                     <span>{{ col.name }}</span>
                     <button class="th-del-btn" :disabled="!canEditCases" title="删除该列" :aria-label="`删除扩展列 ${col.name}`" @click.stop="removeCustomCol(col.key)">✕</button>
                   </div>
                 </th>
-                <th style="width: 92px">映射状态</th>
                 <th style="width: 80px; text-align: right">操作</th>
               </tr>
             </thead>
@@ -356,6 +363,21 @@
                   <div v-else class="cell-content" v-html="highlightMatch(c.module || '通用')"></div>
                 </td>
 
+                <!-- 功能点 -->
+                <td class="cell-edit" :class="{ 'cell-cursor': isCellCursor(c, 'feature_point') }" @click="handleCellClick(c, 'feature_point')">
+                  <input
+                    v-if="editingCell?.row === c && editingCell?.field === 'feature_point'"
+                    v-model="c.feature_point"
+                    class="inline-input"
+                    :aria-label="`编辑用例 ${c.code} 功能点`"
+                    autofocus
+                    @blur="finishEditing"
+                    @keyup.enter="finishEditing"
+                    @keyup.esc="cancelEditing"
+                  />
+                  <div v-else class="cell-content" :class="{ placeholder: !c.feature_point }" v-html="highlightMatch(c.feature_point || '—')"></div>
+                </td>
+
                 <!-- 测试策略徽标 -->
                 <td class="cell-edit" :class="{ 'cell-cursor': isCellCursor(c, 'strategy') }" @click="handleCellClick(c, 'strategy')">
                   <select
@@ -410,20 +432,25 @@
                   <div v-else class="cell-content mono-sm" :class="{ placeholder: !c.preconditions }" v-html="highlightMatch(c.preconditions || '—')"></div>
                 </td>
 
-                <!-- 预期断言 (14px 舒适字阶) -->
+                <!-- 步骤使用详细编辑弹窗，避免在表格内压缩多行内容。 -->
+                <td class="cell-edit" @click="openCaseEditModal(getOriginalCaseIndex(c))">
+                  <div class="cell-content" :class="{ placeholder: !c.steps?.length }">{{ c.steps?.join('；') || '—' }}</div>
+                </td>
+
+                <!-- 预期结果 -->
                 <td class="cell-edit" :class="{ 'cell-invalid': !c.expected_result.trim(), 'cell-cursor': isCellCursor(c, 'expected_result') }" @click="handleCellClick(c, 'expected_result')">
                   <input
                     v-if="editingCell?.row === c && editingCell?.field === 'expected_result'"
                     v-model="c.expected_result"
                     class="inline-input"
-                    placeholder="输入预期断言..."
-                    :aria-label="`编辑用例 ${c.code} 预期断言`"
+                    placeholder="输入预期结果..."
+                    :aria-label="`编辑用例 ${c.code} 预期结果`"
                     autofocus
                     @blur="finishEditing"
                     @keyup.enter="finishEditing"
                     @keyup.esc="cancelEditing"
                   />
-                  <div v-else class="cell-content" :class="{ empty: !c.expected_result.trim() }" v-html="highlightMatch(c.expected_result || '（空预期断言 · 点击录入）')"></div>
+                  <div v-else class="cell-content" :class="{ empty: !c.expected_result.trim() }" v-html="highlightMatch(c.expected_result || '（空预期结果 · 点击录入）')"></div>
                 </td>
 
                 <!-- 自定义扩展列 -->
@@ -444,12 +471,6 @@
                   </div>
                 </td>
 
-                <!-- 映射状态 -->
-                <td>
-                  <span v-if="c.source?.mapped || c.target_dataset_id" class="status-tag-green" title="已映射至数据集">已映射</span>
-                  <span v-else class="status-tag-clean" title="未映射">未映射</span>
-                </td>
-
                 <!-- 操作区 -->
                 <td class="td-actions">
                   <div class="action-links">
@@ -465,7 +486,7 @@
 
               <!-- 空列表提示 -->
               <tr v-if="!displayedCases.length">
-                <td :colspan="11 + customCols.length" class="empty-cell">
+                <td :colspan="12 + customCols.length" class="empty-cell">
                   <div class="empty-message">
                     <template v-if="gridSearch.trim() || filterStrategy">
                       <p style="margin-bottom: 8px;">未找到符合条件的测试用例（当前检索：{{ gridSearch.trim() ? `「${gridSearch.trim()}」` : '' }}{{ filterStrategy ? ` [${filterStrategy}策略]` : '' }}）。</p>
@@ -582,13 +603,29 @@
 
         <div v-show="aiGen.step === 1" class="drawer-body">
           <div class="field">
+            <label class="field-label">需求来源</label>
+            <div class="candidate-targets">
+              <label class="candidate-target"><input v-model="aiGen.sourceMode" type="radio" value="text" />粘贴需求文本</label>
+              <label class="candidate-target"><input v-model="aiGen.sourceMode" type="radio" value="file" />上传需求文件</label>
+            </div>
+          </div>
+          <template v-if="aiGen.sourceMode === 'text'">
+          <div class="field">
             <label class="field-label">PRD 需求预设模板</label>
-            <n-select v-model:value="aiGen.preset" :options="presetOptions" @update:value="onPresetChange" />
+            <n-select v-model:value="aiGen.preset" :options="presetOptions" placeholder="可选示例，非真实需求来源" @update:value="onPresetChange" />
           </div>
 
           <div class="field">
             <label class="field-label">PRD 需求描述 / 业务规则 / 接口规范 <span class="req">*</span></label>
             <n-input v-model:value="aiGen.prdText" class="mono" type="textarea" :autosize="{ minRows: 4, maxRows: 8 }" placeholder="粘贴需求文档段落、状态转移逻辑或 OpenAPI 规范..." />
+          </div>
+          </template>
+          <div v-else class="field">
+            <label class="field-label">需求文件（UTF-8 文本或 Excel）</label>
+            <input ref="sourceFileInput" type="file" accept=".txt,.md,.csv,.json,.yaml,.yml,.xlsx" class="source-file-input" aria-label="选择需求文件" @change="uploadSourceFile" />
+            <button class="btn btn-secondary btn-md" :disabled="aiGen.sourceUploading" @click="sourceFileInput?.click()">{{ aiGen.sourceUploading ? `上传中 ${aiGen.sourceUploadPercent}%…` : '选择需求文件' }}</button>
+            <p v-if="aiGen.sourceUploading" class="field-hint" role="status">已上传 {{ aiGen.sourceUploadPercent }}%，等待服务端保存…</p>
+            <p class="field-hint">{{ aiGen.sourceFileName || '尚未选择文件；支持 UTF-8 文本、Markdown、CSV 和 Excel。' }}</p>
           </div>
 
           <div class="divider-title">推导策略覆盖</div>
@@ -604,64 +641,57 @@
           <div class="form-row-3">
             <div class="field">
               <label class="field-label">用例规模 (<b class="mono">{{ aiGen.count }}</b> 条)</label>
-              <n-slider v-model:value="aiGen.count" :min="4" :max="30" :step="1" />
+              <n-slider v-model:value="aiGen.count" :min="1" :max="80" :step="1" />
             </div>
-            <p class="field-hint">使用平台配置的 Agent 协议档生成候选用例。</p>
+            <p class="field-hint">生成结果仅为候选；审核并保存草稿后才能确认入库。</p>
           </div>
         </div>
 
         <div v-show="aiGen.step === 2" class="drawer-body">
+          <div class="field">
+            <label class="field-label">采纳目标</label>
+            <div class="candidate-targets">
+              <label v-if="canEditCases" class="candidate-target"><input v-model="aiGen.target" type="radio" value="current" :disabled="aiGen.applying || !!aiGen.appliedToSetId" />追加到当前草稿「{{ currentSet?.name }}」</label>
+              <label class="candidate-target"><input v-model="aiGen.target" type="radio" value="new" :disabled="aiGen.applying || !!aiGen.appliedToSetId" />新建草稿并保存候选</label>
+            </div>
+            <n-input v-if="aiGen.target === 'new'" v-model:value="aiGen.newSetName" :input-props="{ 'aria-label': '新草稿名称' }" placeholder="输入新草稿名称" />
+          </div>
           <div class="row-between mb8">
             <span class="bold" style="font-size: 13.5px">候选用例列表 (共 {{ aiGen.candidates.length }} 条)</span>
-            <button class="link-btn" @click="toggleAllCandidates">全选 / 全不选</button>
+            <button class="link-btn" :disabled="aiGen.applying || !!aiGen.appliedToSetId" @click="toggleAllCandidates">全选 / 全不选</button>
           </div>
-          <div class="preview-box custom-scroll">
-            <table class="nordic-table preview-table">
-              <thead>
-                <tr>
-                  <th class="th-chk" style="width: 40px" title="全选 / 全不选" @click.stop="toggleAllCandidates">
-                    <div class="clean-chk-box" :class="{ checked: aiAllSelected }">
-                      <svg v-if="aiAllSelected" class="chk-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round">
-                        <polyline points="20 6 9 17 4 12" />
-                      </svg>
-                    </div>
-                  </th>
-                  <th style="width: 90px">策略</th>
-                  <th style="min-width: 160px">用例名称</th>
-                  <th style="min-width: 180px">预期断言</th>
-                  <th style="width: 50px">操作</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="(cand, ci) in aiGen.candidates" :key="ci">
-                  <td class="td-chk" @click.stop="cand.selected = !cand.selected">
-                    <div class="clean-chk-box" :class="{ checked: cand.selected }">
-                      <svg v-if="cand.selected" class="chk-icon" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="3.2" stroke-linecap="round" stroke-linejoin="round">
-                        <polyline points="20 6 9 17 4 12" />
-                      </svg>
-                    </div>
-                  </td>
-                  <td><span class="strategy-badge" :class="`badge-${cand.strategy}`">{{ cand.strategy }}</span></td>
-                  <td><input v-model="cand.name" class="inline-input-clean" /></td>
-                  <td><input v-model="cand.expected_result" class="inline-input-clean" /></td>
-                  <td><button class="link-btn danger" @click="aiGen.candidates.splice(ci, 1)">移除</button></td>
-                </tr>
-              </tbody>
-            </table>
+          <div class="candidate-list custom-scroll">
+            <article v-for="(cand, ci) in aiGen.candidates" :key="ci" class="candidate-card">
+              <div class="candidate-card-head">
+                <label><input v-model="cand.selected" type="checkbox" :disabled="aiGen.applying || !!aiGen.appliedToSetId" :aria-label="`采纳候选 ${ci + 1}`" />候选 {{ ci + 1 }}</label>
+                <span v-if="candidateNeedsClarification(cand)" class="status-badge-amber">待澄清</span>
+                <button class="link-btn danger" :disabled="aiGen.applying || !!aiGen.appliedToSetId" @click="aiGen.candidates.splice(ci, 1)">移除</button>
+              </div>
+              <fieldset class="candidate-fields" :disabled="aiGen.applying || !!aiGen.appliedToSetId">
+                <div class="field"><label class="field-label">用例名称</label><n-input v-model:value="cand.name" :input-props="{ 'aria-label': `候选 ${ci + 1} 名称` }" /></div>
+                <div class="field"><label class="field-label">所属模块</label><n-input v-model:value="cand.module" :input-props="{ 'aria-label': `候选 ${ci + 1} 模块` }" /></div>
+                <div class="field"><label class="field-label">功能点</label><n-input v-model:value="cand.feature_point" :input-props="{ 'aria-label': `候选 ${ci + 1} 功能点` }" /></div>
+                <div class="field"><label class="field-label">测试策略</label><n-select v-model:value="cand.strategy" :disabled="aiGen.applying || !!aiGen.appliedToSetId" :options="STRATEGIES.map(s => ({ label: s, value: s }))" :aria-label="`候选 ${ci + 1} 策略`" /></div>
+                <div class="field"><label class="field-label">优先级</label><n-select v-model:value="cand.priority" :disabled="aiGen.applying || !!aiGen.appliedToSetId" :options="PRIORITIES.map(p => ({ label: p, value: p }))" :aria-label="`候选 ${ci + 1} 优先级`" /></div>
+                <div class="field candidate-wide"><label class="field-label">前置条件</label><n-input v-model:value="cand.preconditions" type="textarea" :autosize="{ minRows: 2, maxRows: 4 }" :input-props="{ 'aria-label': `候选 ${ci + 1} 前置条件` }" /></div>
+                <div class="field candidate-wide"><label class="field-label">执行步骤（每行一步）</label><n-input v-model:value="cand.stepsText" type="textarea" :autosize="{ minRows: 3, maxRows: 8 }" :input-props="{ 'aria-label': `候选 ${ci + 1} 执行步骤` }" /></div>
+                <div class="field candidate-wide"><label class="field-label">预期结果</label><n-input v-model:value="cand.expected_result" type="textarea" :autosize="{ minRows: 2, maxRows: 5 }" :input-props="{ 'aria-label': `候选 ${ci + 1} 预期结果` }" /></div>
+              </fieldset>
+            </article>
           </div>
         </div>
 
         <template #footer>
           <div class="drawer-footer-row">
-            <n-button v-if="aiGen.step === 2" @click="aiGen.step = 1">← 返回调整 PRD</n-button>
+            <n-button v-if="aiGen.step === 2" :disabled="!!aiGen.appliedToSetId" @click="aiGen.step = 1">← 返回调整 PRD</n-button>
             <span v-else></span>
             <div class="row" style="gap: 8px">
               <n-button @click="aiGen.show = false">取消</n-button>
-              <n-button v-if="aiGen.step === 1" type="primary" :loading="aiGen.generating" @click="runAiGenerateCases">
+              <n-button v-if="aiGen.step === 1" type="primary" :loading="aiGen.generating" :disabled="aiGen.sourceUploading" @click="runAiGenerateCases()">
                 {{ aiGen.generating ? '正在推导用例中…' : '推导候选用例 →' }}
               </n-button>
-              <n-button v-else type="primary" :disabled="aiSelectedCount === 0" @click="commitAiCandidates">
-                采纳导入用例集 ({{ aiSelectedCount }} 条)
+              <n-button v-else type="primary" :loading="aiGen.applying" :disabled="aiSelectedCount === 0 || aiGen.applying || (!!aiGen.appliedToSetId && saveConflict)" @click="commitAiCandidates">
+                {{ aiGen.appliedToSetId ? (saveConflict ? '版本冲突，请先核对' : '重试保存候选') : `采纳并保存候选 (${aiSelectedCount} 条)` }}
               </n-button>
             </div>
           </div>
@@ -693,8 +723,12 @@
         </div>
       </div>
       <div class="field">
-        <label class="field-label">用例名称 / 问句 <span class="req">*</span></label>
-        <n-input v-model:value="caseEdit.name" type="textarea" :autosize="{ minRows: 2, maxRows: 4 }" placeholder="输入用例标题或测试问句..." />
+        <label class="field-label">用例名称 <span class="req">*</span></label>
+        <n-input v-model:value="caseEdit.name" type="textarea" :autosize="{ minRows: 2, maxRows: 4 }" placeholder="输入用例名称..." />
+      </div>
+      <div class="field">
+        <label class="field-label">功能点</label>
+        <n-input v-model:value="caseEdit.feature_point" :input-props="{ 'aria-label': '编辑功能点' }" placeholder="输入对应功能点" />
       </div>
       <div class="form-row">
         <div class="field">
@@ -711,8 +745,12 @@
         <n-input v-model:value="caseEdit.preconditions" class="mono" type="textarea" :autosize="{ minRows: 2, maxRows: 4 }" placeholder="可选输入测试前置条件或变量注入..." />
       </div>
       <div class="field">
-        <label class="field-label">预期断言 (Expected Result) <span class="req">*</span></label>
-        <n-input v-model:value="caseEdit.expected_result" type="textarea" :autosize="{ minRows: 2, maxRows: 4 }" placeholder="输入预期返回、校验规则或标准答案..." />
+        <label class="field-label">执行步骤（每行一步）</label>
+        <n-input v-model:value="caseEdit.stepsText" type="textarea" :autosize="{ minRows: 3, maxRows: 8 }" :input-props="{ 'aria-label': '编辑执行步骤' }" placeholder="每行输入一个执行步骤" />
+      </div>
+      <div class="field">
+        <label class="field-label">预期结果 <span class="req">*</span></label>
+        <n-input v-model:value="caseEdit.expected_result" type="textarea" :autosize="{ minRows: 2, maxRows: 4 }" placeholder="输入预期结果..." />
       </div>
       <template #footer>
         <div style="display: flex; justify-content: flex-end; gap: 8px">
@@ -773,6 +811,7 @@ interface ExtendedTestCase {
   code: string
   name: string
   module: string
+  feature_point: string
   strategy: CaseStrategy
   priority: CasePriority
   preconditions: string
@@ -806,6 +845,7 @@ const savingCases = ref(false)
 const loadingCases = ref(false)
 const loadedSetId = ref('')
 const loadedRevision = ref<number | null>(null)
+const saveConflict = ref(false)
 let loadVersion = 0
 let saveRequest: Promise<boolean> | null = null
 const justSaved = ref(false)
@@ -937,6 +977,8 @@ const strategyDistribution = computed(() => {
   return map
 })
 const isSixStrategyCovered = computed(() => STRATEGIES.every(s => (strategyDistribution.value[s] || 0) > 0))
+const pendingCompleteCount = computed(() => cases.value.filter(c => !c.name.trim() || !c.expected_result.trim()).length)
+const missingStepsCount = computed(() => cases.value.filter(c => !c.steps?.length).length)
 
 // ─── 分页与即时搜索过滤 (Pagination & Instant Filter) ───
 const page = ref(1)
@@ -1002,7 +1044,7 @@ function highlightMatch(text: string): string {
 
 // ─── 键盘流网格导航 (Keyboard Flow) ───
 const NAV_FIELDS = computed(() => {
-  const base = ['chk', 'row_no', 'code', 'name', 'module', 'strategy', 'priority', 'preconditions', 'expected_result']
+  const base = ['chk', 'row_no', 'code', 'name', 'module', 'feature_point', 'strategy', 'priority', 'preconditions', 'expected_result']
   const extras = customCols.value.map(c => c.key)
   return [...base, ...extras]
 })
@@ -1294,6 +1336,7 @@ function requestSelectCaseSet(id: string, after?: () => void) {
       after?.()
     },
     onNegativeClick: () => {
+      if (aiGen.value.appliedToSetId === activeSetId.value) aiGen.value.appliedToSetId = ''
       void selectCaseSet(id).then(() => after?.())
     },
   })
@@ -1301,14 +1344,10 @@ function requestSelectCaseSet(id: string, after?: () => void) {
 
 function createEmptyCaseSet() {
   openNameDialog('新建空用例集', '用例集名称', '新用例集', async (val) => {
-    try {
-      const created = await api.cases.createSet({ name: val })
-      await loadCaseSets()
-      requestSelectCaseSet(created.id)
-      message.success(`已创建「${created.name}」`)
-    } catch (err: any) {
-      message.error(err.message || '创建用例集失败')
-    }
+    const created = await api.cases.createSet({ name: val })
+    await loadCaseSets()
+    requestSelectCaseSet(created.id)
+    message.success(`已创建「${created.name}」`)
   })
 }
 
@@ -1321,6 +1360,7 @@ function buildEmptyCase(): ExtendedTestCase {
     code,
     name: '',
     module: '通用',
+    feature_point: '',
     strategy: '正向',
     priority: 'HX',
     preconditions: '',
@@ -1364,6 +1404,7 @@ function casePayload(c: ExtendedTestCase): TestCaseInput {
     code: c.code,
     name: c.name,
     module: c.module,
+    feature_point: c.feature_point,
     strategy: c.strategy,
     priority: c.priority,
     precondition: c.preconditions,
@@ -1383,12 +1424,14 @@ async function persistCases(): Promise<boolean> {
   const rows = cases.value.slice()
   const snapshot = JSON.stringify(rows.map(casePayload))
   const columns = JSON.stringify(customCols.value)
+  saveConflict.value = false
   savingCases.value = true
   saveRequest = (async () => {
     try {
       const saved = await api.cases.saveCases(set.id, JSON.parse(snapshot), expectedRevision, JSON.parse(columns))
       set.revision = saved.revision
       set.column_schema = JSON.parse(columns)
+      if (saved.checks) set.checks = saved.checks
       if (version !== loadVersion || activeSetId.value !== set.id) return false
       loadedRevision.value = saved.revision
       const unchanged = snapshot === JSON.stringify(cases.value.map(casePayload))
@@ -1402,13 +1445,20 @@ async function persistCases(): Promise<boolean> {
         row.source = item
       })
       hasUnsavedChanges.value = !unchanged
+      if (unchanged && aiGen.value.appliedToSetId === set.id) {
+        aiGen.value.appliedToSetId = ''
+        aiGen.value.candidates = []
+      }
       justSaved.value = unchanged
       setTimeout(() => { justSaved.value = false }, 1800)
       message.success(unchanged ? '已保存用例集修改' : '已保存提交版本，后续修改仍待保存')
       return unchanged
     } catch (err: any) {
       if (err.status === 409) {
-        if (version === loadVersion && activeSetId.value === set.id) hasUnsavedChanges.value = true
+        if (version === loadVersion && activeSetId.value === set.id) {
+          saveConflict.value = true
+          hasUnsavedChanges.value = true
+        }
         message.warning('用例已在其他窗口更新；本地修改已保留，请备份后刷新核对')
       } else message.error(err.message || '保存用例集失败')
       return false
@@ -1425,7 +1475,13 @@ async function confirmCaseSet() {
   const set = currentSet.value
   confirmingSet.value = true
   try {
-    if ((hasUnsavedChanges.value || savingCases.value) && !await persistCases()) return
+    // 本次点击先保存的草稿需让用户核对服务端自检，再由第二次点击确认入库。
+    if (hasUnsavedChanges.value || savingCases.value) {
+      if (!await persistCases()) return
+      if (activeSetId.value !== set.id || hasUnsavedChanges.value) return
+      message.info('修改已保存，请核对最新自检提示后再次点击“确认入库”')
+      return
+    }
     if (activeSetId.value !== set.id || hasUnsavedChanges.value) return
     if (loadedRevision.value === null) return
     await api.cases.confirmSet(set.id, { ok: true, expected_revision: loadedRevision.value })
@@ -1481,6 +1537,7 @@ function editableCase(c: TestCase, setId: string, index: number): ExtendedTestCa
     code: c.code || `TC-${String(index + 1).padStart(3, '0')}`,
     name: c.name || '',
     module: c.module || '通用',
+    feature_point: c.feature_point || '',
     strategy: normalizeCaseStrategy(c.strategy),
     priority: c.priority || 'HX',
     preconditions: c.precondition || '',
@@ -1509,6 +1566,7 @@ async function loadCases(setId: string) {
     if (set) Object.assign(set, setObj)
     loadedSetId.value = setId
     loadedRevision.value = setObj.revision
+    saveConflict.value = false
     hasUnsavedChanges.value = false
   } catch (err: any) {
     if (version === loadVersion) message.error(err.message || '加载用例列表失败')
@@ -1524,6 +1582,11 @@ async function loadCaseSets() {
   try {
     const list = await api.cases.listSets()
     if (request !== caseSetListRequest) return
+    const activeDraft = hasUnsavedChanges.value ? caseSets.value.find(s => s.id === activeSetId.value) : undefined
+    if (activeDraft && !list.some(s => s.id === activeDraft.id)) {
+      list.unshift(activeDraft)
+      message.warning('当前草稿不在最新列表中；本地修改已保留，请核对后处理')
+    }
     caseSets.value = list
     let root = folders.value.find(f => f.id === 'cases')
     if (!root) {
@@ -1552,7 +1615,7 @@ async function loadCaseSets() {
     } else requestSelectCaseSet('')
   } catch (err: any) {
     if (request !== caseSetListRequest) return
-    caseSets.value = []
+    if (!hasUnsavedChanges.value) caseSets.value = []
     missingTaskStatus.value = 'unavailable'
     message.error(err.message || '加载用例集失败')
   }
@@ -1614,7 +1677,6 @@ const ctxMenuOptions = computed<DropdownOption[]>(() => {
   if (ctxMenu.value.type === 'folder') {
     return [
       { label: '新建空用例集', key: 'new-set', icon: renderIcon(['M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z', 'M12 11v6', 'M9 14h6']) },
-      { label: '新建子目录', key: 'new-folder', icon: renderIcon('M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z') },
     ]
   }
   const c = cases.value[ctxMenu.value.rowIdx]
@@ -1780,9 +1842,11 @@ const caseEdit = ref<{
   code: string
   name: string
   module: string
+  feature_point: string
   strategy: CaseStrategy
   priority: CasePriority
   preconditions: string
+  stepsText: string
   expected_result: string
 }>({
   show: false,
@@ -1790,9 +1854,11 @@ const caseEdit = ref<{
   code: '',
   name: '',
   module: '',
+  feature_point: '',
   strategy: '正向',
   priority: 'HX',
   preconditions: '',
+  stepsText: '',
   expected_result: '',
 })
 
@@ -1806,9 +1872,11 @@ function openCaseEditModal(idx: number) {
     code: c.code,
     name: c.name,
     module: c.module || '通用',
+    feature_point: c.feature_point || '',
     strategy: c.strategy || '正向',
     priority: c.priority || 'HX',
     preconditions: c.preconditions || '',
+    stepsText: c.steps?.join('\n') || '',
     expected_result: c.expected_result || '',
   }
 }
@@ -1819,9 +1887,11 @@ function saveCaseEdit() {
   if (!c) return
   c.name = caseEdit.value.name.trim()
   c.module = caseEdit.value.module.trim()
+  c.feature_point = caseEdit.value.feature_point.trim()
   c.strategy = caseEdit.value.strategy
   c.priority = caseEdit.value.priority
   c.preconditions = caseEdit.value.preconditions.trim()
+  c.steps = caseEdit.value.stepsText.split('\n').map(step => step.trim()).filter(Boolean)
   c.expected_result = caseEdit.value.expected_result.trim()
   hasUnsavedChanges.value = true
   caseEdit.value.show = false
@@ -1889,10 +1959,11 @@ interface AiCaseCandidate {
   code: string
   name: string
   module: string
+  feature_point: string
   strategy: CaseStrategy
   priority: CasePriority
   preconditions: string
-  steps: string[]
+  stepsText: string
   expected_result: string
   source?: TestCase
 }
@@ -1900,24 +1971,63 @@ interface AiCaseCandidate {
 const aiGen = ref({
   show: false,
   step: 1 as 1 | 2,
-  preset: PRD_PRESETS[0].desc,
-  prdText: PRD_PRESETS[0].desc,
+  preset: null as string | null,
+  prdText: '',
+  sourceMode: 'text' as 'text' | 'file',
+  sourceDocId: '',
+  sourceFileName: '',
+  sourceUploading: false,
+  sourceUploadPercent: 0,
   strategies: [...STRATEGIES],
   count: 10,
   generating: false,
+  applying: false,
+  target: 'new' as 'current' | 'new',
+  newSetName: '',
+  appliedToSetId: '',
   candidates: [] as AiCaseCandidate[],
 })
 
 const presetOptions = computed(() => PRD_PRESETS.map(p => ({ label: `${p.name} · ${p.desc.slice(0, 30)}...`, value: p.desc })))
 const aiSelectedCount = computed(() => aiGen.value.candidates.filter(c => c.selected).length)
 const aiAllSelected = computed(() => aiGen.value.candidates.length > 0 && aiSelectedCount.value === aiGen.value.candidates.length)
+const sourceFileInput = ref<HTMLInputElement | null>(null)
 
 function openAiGenDrawer() {
+  const hasCandidates = aiGen.value.candidates.length > 0
   aiGen.value.show = true
-  aiGen.value.step = 1
+  aiGen.value.step = hasCandidates ? 2 : 1
+  if (aiGen.value.appliedToSetId) aiGen.value.target = 'current'
+  else if (!hasCandidates) aiGen.value.target = 'new'
+  if (!aiGen.value.newSetName) aiGen.value.newSetName = `需求用例-${new Date().toISOString().slice(0, 10)}`
 }
 function onPresetChange(val: string) {
   aiGen.value.prdText = val
+}
+
+/** 上传完成后才替换现有来源，慢上行时展示进度并延长单次请求期限。 */
+async function uploadSourceFile(e: Event) {
+  const input = e.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  if (!/\.(txt|md|csv|json|yaml|yml|xlsx)$/i.test(file.name)) {
+    message.warning('仅支持 UTF-8 文本、Markdown、CSV、JSON、YAML 或 Excel 文件')
+    input.value = ''
+    return
+  }
+  aiGen.value.sourceUploading = true
+  aiGen.value.sourceUploadPercent = 0
+  try {
+    const uploaded = await api.files.upload(file, percent => { aiGen.value.sourceUploadPercent = percent }, 180_000)
+    aiGen.value.sourceDocId = uploaded.id
+    aiGen.value.sourceFileName = uploaded.filename
+  } catch (err: any) {
+    aiGen.value.sourceUploadPercent = 0
+    message.error(err.message || '需求文件上传失败')
+  } finally {
+    aiGen.value.sourceUploading = false
+    input.value = ''
+  }
 }
 function toggleStrategy(s: CaseStrategy) {
   const idx = aiGen.value.strategies.indexOf(s)
@@ -1925,14 +2035,50 @@ function toggleStrategy(s: CaseStrategy) {
   else aiGen.value.strategies.push(s)
 }
 
-async function runAiGenerateCases() {
+function candidateNeedsClarification(c: AiCaseCandidate): boolean {
+  return !c.name.trim() || !c.expected_result.trim() || !c.stepsText.trim()
+}
+
+/** 将人工审核后的候选字段转为入库输入，保留后端未在页面展示的扩展字段。 */
+function candidatePayload(c: AiCaseCandidate): TestCaseInput {
+  return {
+    ...c.source,
+    id: undefined,
+    code: c.code,
+    name: c.name.trim(),
+    module: c.module.trim(),
+    feature_point: c.feature_point.trim(),
+    strategy: c.strategy,
+    priority: c.priority,
+    precondition: c.preconditions.trim(),
+    steps: c.stepsText.trim(),
+    expected: c.expected_result.trim(),
+  }
+}
+
+/** 仅在新候选成功生成后替换旧候选，失败时保留人工编辑。 */
+async function runAiGenerateCases(replaceExisting = false) {
   if (aiGen.value.generating) return
-  if (!aiGen.value.prdText.trim()) {
-    message.warning('请填写 PRD 需求描述')
+  if (aiGen.value.sourceMode === 'text' && !aiGen.value.prdText.trim()) {
+    message.warning('请填写需求描述')
+    return
+  }
+  if (aiGen.value.sourceMode === 'file' && !aiGen.value.sourceDocId) {
+    message.warning('请先上传需求文件')
     return
   }
   if (!aiGen.value.strategies.length) {
     message.warning('请至少选择一个测试策略')
+    return
+  }
+  if (aiGen.value.candidates.length && !replaceExisting) {
+    dialog.warning({
+      title: '重新生成候选？',
+      content: '重新生成会覆盖已编辑的候选用例。',
+      positiveText: '覆盖并重新生成',
+      negativeText: '保留候选',
+      onPositiveClick: () => runAiGenerateCases(true),
+    })
     return
   }
   aiGen.value.generating = true
@@ -1946,10 +2092,11 @@ async function runAiGenerateCases() {
         code: `TC-${String(i + 1).padStart(3, '0')}`,
         name: `验证跨境交易场景下的测试用例 #${i + 1}`,
         module: '收银支付',
+        feature_point: '跨境支付',
         strategy: strats[i % strats.length],
         priority: (i === 0 ? 'HX' : i % 2 === 0 ? 'FHX' : 'BJ') as CasePriority,
         preconditions: '账户处于正常状态，绑卡成功',
-        steps: ['1. 唤起收银台', '2. 选择外卡支付', '3. 完成 3DS 校验'],
+        stepsText: '1. 唤起收银台\n2. 选择外卡支付\n3. 完成 3DS 校验',
         expected_result: '返回扣款成功回调并在 100ms 内推送账单流水。',
       }))
     } else {
@@ -1967,7 +2114,8 @@ async function runAiGenerateCases() {
         remaining -= weights[key]
       })
       const generated = await api.cases.generateCases({
-        source_text: aiGen.value.prdText.trim(),
+        source_text: aiGen.value.sourceMode === 'text' ? aiGen.value.prdText.trim() : '',
+        ...(aiGen.value.sourceMode === 'file' ? { source_doc_id: aiGen.value.sourceDocId } : {}),
         strategy_weights: weights,
         max_count: aiGen.value.count,
       })
@@ -1976,15 +2124,22 @@ async function runAiGenerateCases() {
         code: c.code || `TC-${String(i + 1).padStart(3, '0')}`,
         name: c.name || c.question || '',
         module: c.module || '通用',
+        feature_point: c.feature_point || '',
         strategy: normalizeCaseStrategy(c.strategy),
         priority: (c.priority as CasePriority) || 'HX',
         preconditions: c.preconditions || c.precondition || '',
-        steps: Array.isArray(c.steps) ? c.steps : typeof c.steps === 'string' ? [c.steps] : [],
+        stepsText: Array.isArray(c.steps) ? c.steps.join('\n') : typeof c.steps === 'string' ? c.steps : '',
         expected_result: c.expected_result || c.expected || c.reference || '',
         source: c,
       }))
     }
+    if (!candidates.length) {
+      message.warning('未生成候选用例，请补充需求后重试')
+      return
+    }
     aiGen.value.candidates = candidates
+    aiGen.value.appliedToSetId = ''
+    aiGen.value.target = 'new'
     aiGen.value.step = 2
   } catch (err: any) {
     message.error(err.message || '推导用例失败')
@@ -1994,48 +2149,75 @@ async function runAiGenerateCases() {
 }
 
 function toggleAllCandidates() {
+  if (aiGen.value.appliedToSetId || aiGen.value.applying) return
   const target = aiSelectedCount.value < aiGen.value.candidates.length
   aiGen.value.candidates.forEach(c => { c.selected = target })
 }
 
+/** 新草稿原子创建，当前草稿采纳后保存；失败时保留候选以便核对与重试。 */
 async function commitAiCandidates() {
+  if (aiGen.value.applying) return
   const selected = aiGen.value.candidates.filter(c => c.selected)
   if (!selected.length) return
-  if (currentSet.value && !canEditCases.value) {
-    message.warning('请选择可编辑的草稿用例集后采纳候选')
-    return
-  }
-  if (!currentSet.value) {
-    try {
-      const created = await api.cases.createSet({ name: `PRD推导-${new Date().toLocaleDateString()}` })
-      await loadCaseSets()
-      await selectCaseSet(created.id)
-    } catch {
-      message.error('创建用例集失败')
+  aiGen.value.applying = true
+  try {
+    if (!aiGen.value.appliedToSetId && aiGen.value.target === 'new') {
+      const name = aiGen.value.newSetName.trim()
+      if (!name) {
+        message.warning('请输入新草稿名称')
+        return
+      }
+      const created = await api.cases.createSetFromCandidates({ name, cases: selected.map(candidatePayload) })
+      caseSets.value.unshift(created)
+      const root = folders.value.find(folder => folder.id === 'cases')
+      if (root) root.items = caseSets.value
+      aiGen.value.candidates = []
+      aiGen.value.show = false
+      message.success(`已保存 ${selected.length} 条候选到新草稿「${name}」，审核后再确认入库`)
+      requestSelectCaseSet(created.id)
       return
     }
+    if (!canEditCases.value || !currentSet.value) {
+      message.warning('当前用例集已不可编辑，请改为新建草稿')
+      return
+    }
+    if (aiGen.value.appliedToSetId && aiGen.value.appliedToSetId !== currentSet.value.id) return
+    if (!aiGen.value.appliedToSetId) {
+      let baseNum = cases.value.length
+      selected.forEach(cand => {
+        cases.value.push({
+          id: `temp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          set_id: activeSetId.value,
+          code: `TC-${String(++baseNum).padStart(3, '0')}`,
+          name: cand.name,
+          module: cand.module,
+          feature_point: cand.feature_point,
+          strategy: cand.strategy,
+          priority: cand.priority,
+          preconditions: cand.preconditions,
+          steps: cand.stepsText.split('\n').map(step => step.trim()).filter(Boolean),
+          expected_result: cand.expected_result,
+          checked: false,
+          extras: {},
+          source: cand.source,
+        })
+      })
+      hasUnsavedChanges.value = true
+      aiGen.value.appliedToSetId = currentSet.value.id
+    }
+    if (!await persistCases()) {
+      if (!saveConflict.value) message.warning('候选已保留在当前草稿，保存失败；可重试保存')
+      return
+    }
+    aiGen.value.appliedToSetId = ''
+    aiGen.value.candidates = []
+    aiGen.value.show = false
+    message.success(`已保存 ${selected.length} 条候选到当前草稿，审核后再确认入库`)
+  } catch (err: any) {
+    message.error(err.message || '采纳候选失败，候选仍保留在审核列表')
+  } finally {
+    aiGen.value.applying = false
   }
-  let baseNum = cases.value.length
-  selected.forEach(cand => {
-    cases.value.push({
-      id: `temp-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-      set_id: activeSetId.value,
-      code: `TC-${String(++baseNum).padStart(3, '0')}`,
-      name: cand.name,
-      module: cand.module,
-      strategy: cand.strategy,
-      priority: cand.priority,
-      preconditions: cand.preconditions,
-      steps: cand.steps,
-      expected_result: cand.expected_result,
-      checked: false,
-      extras: {},
-      source: cand.source,
-    })
-  })
-  hasUnsavedChanges.value = true
-  aiGen.value.show = false
-  message.success(`已导入 ${selected.length} 条用例，点击“保存修改”落库`)
 }
 
 function onGlobalKeydown(e: KeyboardEvent) {
@@ -2101,13 +2283,16 @@ onUnmounted(() => {
 .sidebar-title-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
   margin-bottom: 10px;
 }
 .sidebar-title {
   display: flex;
   align-items: center;
+  flex: 1 1 100%;
   gap: 6px;
+  white-space: nowrap;
   font-weight: 600;
   font-size: 13.5px;
   color: var(--text-primary);
@@ -2117,6 +2302,7 @@ onUnmounted(() => {
 }
 .sidebar-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
 }
 
@@ -2605,6 +2791,23 @@ onUnmounted(() => {
   font-weight: 500;
 }
 
+.review-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 8px 18px;
+  border-bottom: 1px solid var(--border-subtle);
+  font-size: 12px;
+}
+.review-count, .review-check, .review-clear {
+  border-radius: 4px;
+  padding: 3px 7px;
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+}
+.review-check.check-error { color: var(--accent-error); }
+.review-check.check-warning { color: var(--accent-warning); }
+
 .keyboard-flow-hint {
   display: flex;
   align-items: center;
@@ -2636,6 +2839,7 @@ onUnmounted(() => {
   border-collapse: separate;
   border-spacing: 0;
 }
+.table-container > .nordic-table { min-width: 1700px; }
 .nordic-table th {
   position: sticky;
   top: 0;
@@ -2985,27 +3189,57 @@ onUnmounted(() => {
   margin: 8px 0 3px;
 }
 
-.preview-box {
-  max-height: 420px;
-  overflow-y: auto;
-  border: 1px solid #E7E7E2;
-  border-radius: 6px;
+.candidate-targets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
 }
-.preview-table td {
-  padding: 8px 10px;
-}
-.inline-input-clean {
-  width: 100%;
-  padding: 3px 6px;
-  border: 1px solid transparent;
-  background: transparent;
+.candidate-target {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   font-size: 13px;
 }
-.inline-input-clean:focus {
-  border-color: #1E293B;
-  background: #FFFFFF;
-  border-radius: 3px;
-  outline: none;
+.source-file-input { display: none; }
+.candidate-list {
+  max-height: 420px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.candidate-card {
+  padding: 12px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--bg-main);
+}
+.candidate-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+.candidate-card-head label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-weight: 600;
+}
+.candidate-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
+}
+.candidate-wide { grid-column: 1 / -1; }
+@media (max-width: 540px) {
+  .candidate-fields { grid-template-columns: 1fr; }
+  .candidate-wide { grid-column: auto; }
 }
 
 .drawer-footer-row {
@@ -3159,8 +3393,31 @@ onUnmounted(() => {
   .nordic-main {
     min-height: 600px;
   }
+  .toolbar-default, .toolbar-action-group, .action-btn-group {
+    flex-wrap: wrap;
+  }
+  .toolbar-title-group, .toolbar-action-group {
+    flex: 1 1 100%;
+  }
+  .table-search-box {
+    flex: 1 1 200px;
+    margin-left: 0;
+  }
+  .table-search-input, .table-search-input:focus {
+    width: 100%;
+  }
+  .toolbar-default > .grow { display: none; }
   .keyboard-flow-hint {
     display: none;
+  }
+}
+@media (max-width: 540px) {
+  .drawer-footer-row {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  .drawer-footer-row > .row {
+    flex-wrap: wrap;
   }
 }
 </style>
