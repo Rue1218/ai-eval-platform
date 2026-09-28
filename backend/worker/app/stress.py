@@ -242,8 +242,9 @@ def metrics_from_status(status: dict[str, Any], *, sla_p99_ms: int | None) -> di
 
 
 def _progress(db: Session, task_id: str, percent: int, message: str) -> None:
-    task = db.query(Task).filter(Task.id == task_id).first()
-    if not task:
+    db.expire_all()
+    task = db.query(Task).filter(Task.id == task_id).with_for_update().first()
+    if not task or task.status not in {"running", "succeeded"}:
         return
     percent = max(0, min(100, int(percent)))
     task.progress = {"percent": percent, "done": percent, "total": 100, "message": message}
@@ -374,11 +375,13 @@ def run_stress(task_id: str) -> None:
                 return
 
             metrics = metrics_from_status(last_status, sla_p99_ms=sla_i)
-            task_row = db.query(Task).filter(Task.id == task_id).first()
-            if task_row:
-                report = _upsert_report(db, task_row, metrics)
-                task_row.report_id = report.id
-                db.commit()
+            task_row = claim_running_task_for_terminal_write(db, task_id)
+            if not task_row:
+                _stop_engine(task_id)
+                return
+            report = _upsert_report(db, task_row, metrics)
+            task_row.report_id = report.id
+            db.commit()
 
             elapsed = time.monotonic() - started
             percent = min(99, int(elapsed * 100 / max(duration_s, 1)))

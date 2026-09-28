@@ -1,20 +1,6 @@
 <template>
   <div class="datasets-workbench" @keydown="onWorkbenchKeydown">
-    <!-- RAG 模式提示面板 -->
-    <div v-if="modeStore.mode === 'rag'" class="mode-context-panel">
-      <div class="mode-icon-wrapper">
-        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1-2.5-2.5Z" />
-          <path d="M6 6h10" />
-          <path d="M6 10h10" />
-        </svg>
-      </div>
-      <h2>RAG 评测请使用知识库与黄金 QA</h2>
-      <p>基准数据集主要服务于大模型通用能力评测与对比。当前模式下，请前往知识库工作台管理文档分块、检索配置与黄金 QA 资产。</p>
-      <router-link to="/kb" class="btn btn-primary btn-md">进入知识库工作台 →</router-link>
-    </div>
-
-    <div v-else class="nordic-layout" :style="{ '--tree-w': treeWidth + 'px' }">
+    <div class="nordic-layout" :style="{ '--tree-w': treeWidth + 'px' }">
       <!-- ─── 左侧：资源目录树侧边栏 ─── -->
       <aside class="nordic-sidebar">
         <div class="sidebar-header">
@@ -160,16 +146,7 @@
             <div class="grow"></div>
 
             <!-- 右侧操作组（操作金字塔：高频主操作 -> 中频操作 -> 保存 -> 更多收纳） -->
-            <div v-if="isGoldQaActive" class="toolbar-action-group">
-              <button class="btn btn-primary btn-md" @click="openRagDrawer">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <polygon points="5 3 19 12 5 21 5 3" />
-                </svg>
-                发起 RAG 评测
-              </button>
-            </div>
-
-            <div v-else class="toolbar-action-group">
+            <div v-if="!isGoldQaActive" class="toolbar-action-group">
               <!-- 中频操作组 -->
               <div class="action-btn-group">
                 <button class="btn btn-secondary btn-md" aria-label="新增表格行" @click="addRow">
@@ -197,14 +174,6 @@
                 <span v-if="justSaved" class="saved-icon">✓</span>
                 {{ savingRows ? '保存中…' : justSaved ? '已保存' : '保存修改' }}
                 <kbd class="shortcut-key">⌘S</kbd>
-              </button>
-
-              <!-- 高频主操作 CTA -->
-              <button class="btn btn-primary btn-md primary-cta" aria-label="发起基准评测任务" @click="openLaunchDrawer">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-                  <polygon points="5 3 19 12 5 21 5 3" />
-                </svg>
-                发起基准评测
               </button>
 
               <!-- 更多低频操作收纳至下拉 -->
@@ -757,12 +726,6 @@
       @success="loadDatasets"
     />
 
-    <BenchmarkLaunchDrawer
-      v-model:show="showLaunchDrawer"
-      :default-dataset-id="currentDataset?.id"
-      @success="handleLaunchSuccess"
-    />
-
     <n-dropdown
       trigger="manual"
       placement="bottom-start"
@@ -861,73 +824,15 @@
       </template>
     </n-modal>
 
-    <n-drawer v-model:show="ragDrawer.show" :width="drawerWidth">
-      <n-drawer-content title="发起 RAG 检索评测" closable>
-        <div class="field">
-          <label class="field-label">评测类型</label>
-          <span class="status-tag-clean">RAG 知识库检索评测</span>
-        </div>
-        <div class="form-row">
-          <div class="field">
-            <label class="field-label">知识库 ID</label>
-            <n-input :value="ragDrawer.kbId" readonly />
-          </div>
-          <div class="field">
-            <label class="field-label">黄金 QA 资产</label>
-            <n-input :value="ragDrawer.goldQaLabel" readonly />
-          </div>
-        </div>
-        <div class="field">
-          <label class="field-label">检索模式 (rag_mode)</label>
-          <div class="tab-pill-group">
-            <button
-              v-for="m in RAG_MODES"
-              :key="m"
-              class="tab-pill"
-              :class="{ active: ragDrawer.modes.includes(m) }"
-              @click="toggleRagMode(m)"
-            >{{ m }}</button>
-          </div>
-        </div>
-        <div class="divider-title">运行参数</div>
-        <div class="form-row-3">
-          <div class="field">
-            <label class="field-label">召回数 k</label>
-            <n-input-number v-model:value="ragDrawer.k" :min="1" :max="50" />
-          </div>
-          <div class="field">
-            <label class="field-label">并发数</label>
-            <n-input-number v-model:value="ragDrawer.concurrency" :min="1" :max="16" />
-          </div>
-          <div class="field">
-            <label class="field-label">超时 (秒)</label>
-            <n-input-number v-model:value="ragDrawer.timeoutS" :min="5" :max="300" />
-          </div>
-        </div>
-        <div class="field" style="margin-top: 10px">
-          <label class="field-label">先评后压（成功后派生共享压测）</label>
-          <n-switch v-model:value="ragDrawer.withStress" />
-        </div>
-        <template #footer>
-          <div style="display: flex; justify-content: flex-end; gap: 8px">
-            <n-button @click="ragDrawer.show = false">取消</n-button>
-            <n-button type="primary" :loading="ragDrawer.submitting" @click="submitRagTask">创建评测任务</n-button>
-          </div>
-        </template>
-      </n-drawer-content>
-    </n-drawer>
   </div>
 </template>
 
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
-import { useRouter } from 'vue-router'
 import { useMessage, useDialog, type DropdownOption } from 'naive-ui'
 import { api } from '../api/http'
-import type { Dataset, DatasetRow, GoldQA, TaskSpec } from '../api/types'
-import { useModeStore } from '../stores/mode'
+import type { Dataset, DatasetRow, GoldQA } from '../api/types'
 import UploadDatasetModal from '../components/modals/UploadDatasetModal.vue'
-import BenchmarkLaunchDrawer from '../components/drawers/BenchmarkLaunchDrawer.vue'
 import { escapeHtml, escapeRegex, renderIcon } from '../utils/render'
 
 interface EditableDatasetRow {
@@ -962,8 +867,6 @@ interface AiCandidate {
 // ─── 右键菜单 SVG 图标辅助渲染 ───
 const message = useMessage()
 const dialog = useDialog()
-const router = useRouter()
-const modeStore = useModeStore()
 const treeSearch = ref('')
 const gridSearch = ref('')
 const datasets = ref<Dataset[]>([])
@@ -976,7 +879,6 @@ const editingCell = ref<{ row: EditableDatasetRow; field: string; original: stri
 const focusedCell = ref<{ rowIdx: number; field: string } | null>(null)
 const showUploadModal = ref(false)
 const datasetForUpload = ref<Dataset | null>(null)
-const showLaunchDrawer = ref(false)
 const filterPendingMode = ref<'all' | 'clean' | 'pending'>('all')
 const tableContainerRef = ref<HTMLElement | null>(null)
 
@@ -1560,14 +1462,6 @@ function createEmptyDataset(after?: () => void) {
   })
 }
 
-function openLaunchDrawer() {
-  showLaunchDrawer.value = true
-}
-
-function handleLaunchSuccess() {
-  router.push('/tasks')
-}
-
 function buildEmptyRow(): EditableDatasetRow {
   return {
     row_no: Math.max(0, ...sampleRows.value.map(row => row.row_no)) + 1,
@@ -1715,13 +1609,11 @@ const ctxMenuOptions = computed<DropdownOption[]>(() => {
     const isGoldQaNode = goldQas.value.some(g => g.id === ctxMenu.value.targetId)
     if (isGoldQaNode) {
       return [
-        { label: '发起 RAG 评测', key: 'eval', icon: renderIcon('M5 3l14 9-14 9V3z', '#0F766E') },
         { label: '复制 gold_qa_id', key: 'copy-id', icon: renderIcon(['M8 4v12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V7.242a2 2 0 0 0-.602-1.43L16.083 2.57A2 2 0 0 0 14.685 2H10a2 2 0 0 0-2 2z', 'M16 18v2a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h2']) },
       ]
     }
     const ds = datasets.value.find(item => item.id === ctxMenu.value.targetId)
     return [
-      { label: '发起评测', key: 'eval', icon: renderIcon('M5 3l14 9-14 9V3z', '#0F766E') },
       { label: `上传新版本 (v${(ds?.version || 1) + 1})`, key: 'upload', icon: renderIcon(['M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4', 'M17 8l-5-5-5 5', 'M12 3v12']) },
       { label: '补全缺失行', key: 'ai-fill', icon: renderIcon(['M12 2v4', 'M12 18v4', 'M4.93 4.93l2.83 2.83', 'M16.24 16.24l2.83 2.83', 'M2 12h4', 'M18 12h4']) },
       { type: 'divider', key: 'd1' },
@@ -1768,10 +1660,7 @@ function handleCtxSelect(key: string | number) {
 async function handleFileCtxAction(key: string, targetId: string) {
   const goldQa = goldQas.value.find(g => g.id === targetId)
   if (goldQa) {
-    if (key === 'eval') {
-      await selectDataset(targetId)
-      openRagDrawer()
-    } else if (key === 'copy-id') {
+    if (key === 'copy-id') {
       await navigator.clipboard.writeText(targetId)
       message.success('已复制 gold_qa_id')
     }
@@ -1780,9 +1669,6 @@ async function handleFileCtxAction(key: string, targetId: string) {
   const dataset = datasets.value.find(item => item.id === targetId)
   if (!dataset) return
   switch (key) {
-    case 'eval':
-      requestSelectDataset(targetId, () => openLaunchDrawer())
-      break
     case 'upload':
       openUploadModal(dataset)
       break
@@ -2294,78 +2180,6 @@ async function aiFillRow(idx: number) {
   }
 }
 
-// 黄金 QA RAG 抽屉
-const RAG_MODES = ['naive', 'local', 'global', 'hybrid'] as const
-type RagMode = (typeof RAG_MODES)[number]
-
-const ragDrawer = ref({
-  show: false,
-  kbId: '',
-  goldQaId: '',
-  goldQaLabel: '',
-  modes: ['hybrid'] as RagMode[],
-  k: 8,
-  concurrency: 4,
-  timeoutS: 60,
-  withStress: false,
-  stressEnv: 'staging' as 'dev' | 'test' | 'staging' | 'prod',
-  qps: 50,
-  durationS: 60,
-  slaP99Ms: undefined as number | undefined,
-  submitting: false,
-})
-
-function openRagDrawer() {
-  const qa = activeGoldQa.value
-  if (!qa) return
-  ragDrawer.value.show = true
-  ragDrawer.value.kbId = qa.kb_id || 'kb-default'
-  ragDrawer.value.goldQaId = qa.id
-  ragDrawer.value.goldQaLabel = `${qa.name} v${qa.version}`
-}
-
-function toggleRagMode(m: RagMode) {
-  const modes = ragDrawer.value.modes
-  const idx = modes.indexOf(m)
-  if (idx >= 0) modes.splice(idx, 1)
-  else modes.push(m)
-}
-
-async function submitRagTask() {
-  if (ragDrawer.value.submitting) return
-  if (!ragDrawer.value.modes.length) {
-    message.warning('至少选择一个 rag_mode')
-    return
-  }
-  ragDrawer.value.submitting = true
-  try {
-    const spec: TaskSpec = {
-      kind: 'rag',
-      kb_id: ragDrawer.value.kbId,
-      gold_qa_id: ragDrawer.value.goldQaId,
-      rag_mode: [...ragDrawer.value.modes],
-      run: { k: ragDrawer.value.k, concurrency: ragDrawer.value.concurrency, timeout_s: ragDrawer.value.timeoutS },
-      with_stress: ragDrawer.value.withStress,
-    }
-    if (ragDrawer.value.withStress) {
-      spec.stress = {
-        env: ragDrawer.value.stressEnv,
-        qps: ragDrawer.value.qps,
-        duration_s: ragDrawer.value.durationS,
-        sla_p99_ms: ragDrawer.value.slaP99Ms,
-      }
-    }
-    await api.tasks.create(spec)
-    ragDrawer.value.show = false
-    message.success('RAG 评测任务已入队')
-    setTimeout(() => router.push('/tasks'), 650)
-  } catch (err: any) {
-    message.error(err.message || '创建任务失败')
-  } finally {
-    ragDrawer.value.submitting = false
-  }
-}
-
 function onGlobalKeydown(e: KeyboardEvent) {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
     if (hasUnsavedChanges.value && !isGoldQaActive.value) {
@@ -2376,11 +2190,9 @@ function onGlobalKeydown(e: KeyboardEvent) {
 }
 
 onMounted(() => {
-  if (modeStore.mode === 'llm') {
-    void loadDatasets()
-    void loadFolders()
-    void loadGoldQas()
-  }
+  void loadDatasets()
+  void loadFolders()
+  void loadGoldQas()
   window.addEventListener('keydown', onGlobalKeydown)
 })
 
@@ -2388,13 +2200,6 @@ onUnmounted(() => {
   window.removeEventListener('keydown', onGlobalKeydown)
 })
 
-watch(() => modeStore.mode, (mode) => {
-  if (mode === 'llm' && !datasets.value.length) {
-    void loadDatasets()
-    void loadFolders()
-    void loadGoldQas()
-  }
-})
 </script>
 
 <style scoped>

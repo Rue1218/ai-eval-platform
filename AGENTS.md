@@ -1,6 +1,7 @@
 # AI 测试与评估平台 — AI Agent 行为规范与工程指南 (AGENTS.md)
 
 > **最高指示**：本文件是面向所有参与本项目的 **AI Agent 与开发者** 的最高行动指南。在编写或修改代码前，**必须严格遵守本文档所规定的架构边界、开发契约与行为红线**。
+> 版本：V2.8 ｜ 审查日期：2026-09-28（产品定位改为测试用例生成 Agent；新增任务仅限 testcase，候选用例先存草稿再审核确认；benchmark、RAG 评测和压测停止新建、领取及派生，历史任务与报告只读。下文旧评测实现描述仅供历史维护，当前范围以 PRD V1.51 / API V2.34 为准。）
 > 版本：V2.7 ｜ 审查日期：2026-09-16（专家协作 P1 审查修复：关闭开关同步过滤工具白名单；整组取消与 spawn 共用协作行锁且保留旧请求回执；分批调度原子恢复 running；主回合资源收尾持久化最终调用预算。API V2.7、PRD V1.29、专家协作方案 V0.7；API 1607 passed/78 skipped、Worker 50 passed，Ruff 与前端 typecheck/build 通过。未新增后台恢复能力。）
 > 版本：V2.6 ｜ 审查日期：2026-09-16（专家协作 P1 前台闭环：主 `general` Agent 接入 `agent.list/spawn/status/wait/result/cancel`；新增协作/实例/运行/独立事件/命令回执五类持久表与迁移 `f70e5a53bd54`；子运行复用原生 AgentLoop，独立 `.subagents/<run_id>` 工作目录，共享 80 次调用/3 并发/单运行 20 次硬调用次数账本；Agent 页新增持久协作、成果和单个/整组停止面板。P1 仍为同进程前台执行；主流 outbox、信箱/工作项/续跑及跨进程租约恢复未交付，不得宣称后台协作。）
 > 版本：V2.5 ｜ 审查日期：2026-09-14（纯说明文档提交不构建、不触发 CI/CD；部署计划统一由 `deploy/plan_services.py` 按 Dockerfile 输入计算，MCP 工具自动发现，取消 runner 常驻构建；部署脚本变更复用已有镜像，Compose 构建参数变更保守全量处理）。
@@ -11,15 +12,15 @@
 
 ## 1. 项目简介与架构 (Overview & Architecture)
 
-- **定位**：面向**单一研发/评测团队**的内部平台，利用 **AI Agent（WebSocket + 内部 MCP Host）** 自动化完成大模型 **基准评测（Benchmark）** 与 **知识库评测（RAG）**。
-- **核心逻辑**：对话驱动任务入队 -> 质量评测成功 (`succeeded`) 且勾选压测后 -> 自动派生执行共享压测（**先评后压**）。
+- **定位**：面向单一研发团队的测试用例生成平台，利用 AI Agent 将需求转为可审核的功能测试用例。
+- **核心逻辑**：Agent 或 `/cases` AI 对话框生成用例候选 → 保存为草稿 → 人工审核确认入库。旧评测与压测只保留历史查询。
 
 ### 1.1 服务拓扑与网络端点
 | 服务名称 | 容器标识 | 端口 | 访问方式 / 说明 |
 | :--- | :--- | :--- | :--- |
 | **Web 前端** | `web` | `80` | `http://47.119.132.83/`（Nginx 反代 `/api` 与 `/ws`） |
 | **API 服务** | `api` | `8000` | `http://47.119.132.83:8000/docs`（FastAPI + Swagger + 短 MCP） |
-| **Worker 引擎** | `worker` | - | 容器内部网络通信，轮询 PG 任务队列执行耗时评测 |
+| **Worker 引擎** | `worker` | - | 容器内部网络通信，只领取测试用例生成任务 |
 | **数据库** | `postgres` | `5432` | PostgreSQL 16 关系数据库（pgvector 镜像，含向量扩展；持久卷 `pgdata`） |
 | **缓存/记忆** | `redis` | - | 容器内部网络通信；Harness 记忆层短期回合状态与幂等键（持久卷 `redisdata`） |
 | **RAG 引擎** | `lightrag` | `9621` | LightRAG 混合检索与图谱评测服务 |
@@ -96,10 +97,10 @@
 
 | 模块 | 状态 | 位置 |
 | :--- | :--- | :--- |
-| benchmark 基准评测 | 真实执行器（三协议调用、规则评分、预算熔断、断点续跑） | `backend/worker/app/benchmark.py` |
+| benchmark 基准评测 | 已停用；旧执行器仅保留历史代码，活动任务取消、报告只读 | `backend/worker/app/benchmark.py` |
 | testcase 用例生成 | 真实执行器（六策略 LLM 生成、72h 确认超时扫描） | `backend/worker/app/testcase.py` |
-| rag 知识库评测 | 真实执行器（LightRAG 优先；未配置/不可达/空返回回退本地关键词检索，报告 `degraded`/`engine_counts` 诚实标注引擎来源，禁止无标注出报告） | `backend/worker/app/rag.py`、`backend/shared/kb.py` |
-| stress 压测 | 真实执行器（对接 `stress:19090` 引擎：Host 白名单、SLA 判定、取消停发、报告 upsert） | `backend/worker/app/stress.py` |
+| rag 知识库评测 | 已停用；保留历史报告只读 | `backend/worker/app/rag.py`、`backend/shared/kb.py` |
+| stress 压测 | 已停用；不再派生，运行中的旧任务取消并请求引擎停止 | `backend/worker/app/stress.py` |
 | Agent 图 | **混合引擎灰度中**：默认关闭时为骨架化纯对话（`START → chat_stream → END`）；开启后 `START → router → direct/chat/workflow/agent`。H0–H5 批次 1（见版本行）均已交付；V1.8（dsh 借鉴五项）追加：#4 事件词汇表版本化（`shared/event_vocab.py` 单一事实源、`vocab_version` 公共头、落库 `event_version` 保留字段、`event_vocab_strict` 转发护栏，当前 `event.v4`）；#1 clarify 恢复（API.md V1.72：`ask_user_question` 澄清卡 B 路线——三类卡共用 `pending_confirm` 单行互斥、`meta.schema_version=2` 且对旧卡零影响、回执 `clarify_ack`；前端 ClarifyCard 与 Confirm/Approval 同构）；#3 审批终态（API.md V1.73：`approval_terminal` expired/cancelled、TTL 幂等判龄 + api 后台扫描、`/stop` 清悬挂审批卡，ApprovalCard 失效态）；#2 压缩事件化首期（API.md V1.74：超长工具结果 store 先裁剪带标注、窗口裁剪留痕 `context_trim` 仅元信息）；#5 执行选择显式化（`harness/security/exec_policy.py` 决策收敛，默认行为不变）。H5 批次 2 **未完成**：`AGENT_CHECKPOINTER=postgres` 生产切换、网关粘性路由落地、重启恢复演练、`worker.sandbox` 安全评审（#1/#3 跨重启寻址依赖此前置，未切换前按单副本语义交付）；`thought`/`tool_progress`/`tool_output_delta`/`plan` 无生产者，主开关默认关闭 | `backend/shared/event_vocab.py`（新）、`backend/api/app/agent/{graph,routing,router_node,workflow_nodes,taor_nodes}.py`、`backend/api/app/routers/{ws.py,main.py}`、`backend/api/app/harness/{security/exec_policy.py(新),execution/{toolnode,ask_user,native_results}.py,orchestration/agents.py,context/window.py,contracts/events.py}`、`backend/worker/app/events.py` |
 
 ---

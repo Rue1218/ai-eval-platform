@@ -66,7 +66,11 @@ def scoring_policy():
 
 @pytest.fixture
 def prepared(collaboration_db, monkeypatch):
-    """保留真实 spawn、事件、终态和引用读取，模型只负责提供可控的最终正文。"""
+    """模拟升级前已存在的专家运行，回归历史成果与访问边界。"""
+    monkeypatch.setattr(collaboration, "ACTIVE_EXPERT_IDS", frozenset(
+        {"general", "testcase-agent", "benchmark-designer", "benchmark-data-curator",
+         "benchmark-scoring-designer"}
+    ))
     responses = {
         "benchmark_blueprint": blueprint(), "data_manifest_candidate": data_manifest(),
         "scoring_policy_draft": scoring_policy(),
@@ -360,11 +364,8 @@ async def test_combined_material_limit_is_not_silent_truncation(prepared):
 
 
 @pytest.mark.asyncio
-async def test_directory_exposes_actual_submission_schema(prepared):
-    """主 Agent 可发现三个准备角色及真实 schema，不能把报告角色误认为已实现。"""
+async def test_directory_hides_retired_submission_schema(prepared):
+    """历史准备成果可读，但新会话的专家目录不再公开基准准备角色。"""
     catalog = await prepared.coordinator._list({}, {})
     drafts = [item for item in catalog["experts"] if item.get("deliverable_kind")]
-    assert {item["deliverable_kind"] for item in drafts} == set(preparation.SUBMISSIONS)
-    for item in drafts:
-        assert item["submission_schema"] == preparation.submission_schema(item["deliverable_kind"])
-        assert item["submission_schema"]["additionalProperties"] is False
+    assert drafts == []

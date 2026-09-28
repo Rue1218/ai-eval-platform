@@ -79,6 +79,33 @@ def test_subagent_registry_has_exact_p1_tools():
     }
 
 
+@pytest.mark.asyncio
+async def test_retired_experts_are_hidden_and_cannot_spawn(collaboration_db):
+    """模型只看到活动专家；旧基准专家 ID 可读但不能再创建运行。"""
+    coordinator = CollaborationCoordinator(
+        SimpleNamespace(session_factory=collaboration_db),
+        SimpleNamespace(log=SimpleNamespace(session_id="s1")),
+        "u1", {"content": "生成用例", "profile_id": "p1"},
+        TurnChildren(max_children=8),
+        ModelCallBudget(max_calls=80, max_concurrent=3, max_calls_per_run=20),
+    )
+    listed = await coordinator._list({}, {})
+    assert {item["id"] for item in listed["experts"]} == {"general", "testcase-agent"}
+    assert listed["count"] == 2
+    for expert_id in (
+        "benchmark-designer", "benchmark-data-curator", "benchmark-scoring-designer",
+    ):
+        with pytest.raises(AppError) as error:
+            await coordinator._spawn(
+                {"expert_id": expert_id, "goal": "旧任务", "output_contract": "草稿"},
+                {"turn": 1, "call_id": expert_id},
+            )
+        assert error.value.code == "VALIDATION"
+    with collaboration_db() as db:
+        assert db.query(AgentCollaboration).count() == 0
+        assert db.query(AgentInstance).count() == 0
+
+
 def test_run_event_projection_removes_reasoning_and_protocol_state():
     """运行记录可展示成果摘要，但不能把原始思考或供应商 opaque 状态发给浏览器。"""
     projected = _safe_event({

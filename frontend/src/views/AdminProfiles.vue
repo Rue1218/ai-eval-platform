@@ -882,44 +882,6 @@
         <div class="panel">
           <div class="skills-toolbar">
             <div class="skills-filter-group">
-              <div class="pill-segmented">
-                <button
-                  class="pill-btn"
-                  :class="{ active: skillCategoryFilter === 'all' }"
-                  @click="skillCategoryFilter = 'all'"
-                >
-                  全部 ({{ builtinSkills.length }})
-                </button>
-                <button
-                  class="pill-btn"
-                  :class="{ active: skillCategoryFilter === 'benchmark' }"
-                  @click="skillCategoryFilter = 'benchmark'"
-                >
-                  基准对比
-                </button>
-                <button
-                  class="pill-btn"
-                  :class="{ active: skillCategoryFilter === 'rag' }"
-                  @click="skillCategoryFilter = 'rag'"
-                >
-                  RAG 评估
-                </button>
-                <button
-                  class="pill-btn"
-                  :class="{ active: skillCategoryFilter === 'testcase' }"
-                  @click="skillCategoryFilter = 'testcase'"
-                >
-                  用例生成
-                </button>
-                <button
-                  class="pill-btn"
-                  :class="{ active: skillCategoryFilter === 'stress' }"
-                  @click="skillCategoryFilter = 'stress'"
-                >
-                  容量压测
-                </button>
-              </div>
-
               <div class="filter-search-wrap">
                 <n-input
                   v-model:value="skillSearchKeyword"
@@ -1589,30 +1551,6 @@ function handleOpenAddExternalServer() {
 // ═══════════════════════════════════════════════════════════════
 const builtinSkills: SkillDetail[] = [
   {
-    id: 'skill-benchmark',
-    icon: '',
-    name: '基准对比',
-    desc: '自动识别被测模型数量、推荐标准评测集并构建先评后压 TaskSpec。',
-    scenario: '大模型质量基准评测',
-    tools: ['model.list', 'dataset.list', 'task.create', 'task.get'],
-    slashCommands: ['/compare', '/benchmark', '/eval'],
-    temperature: 0.2,
-    maxTokens: 2048,
-    topP: 0.9,
-  },
-  {
-    id: 'skill-rag',
-    icon: '',
-    name: 'RAG 质量评估',
-    desc: '自动装载知识库切块与黄金 QA，评测 LightRAG 4 模式检索表现。',
-    scenario: '知识库与切块检索评估',
-    tools: ['kb.list', 'task.create', 'report.get'],
-    slashCommands: ['/rag', '/kb', '/retrieval'],
-    temperature: 0.1,
-    maxTokens: 2048,
-    topP: 0.85,
-  },
-  {
     id: 'skill-testcase',
     icon: '',
     name: 'PRD 用例生成',
@@ -1624,22 +1562,9 @@ const builtinSkills: SkillDetail[] = [
     maxTokens: 3072,
     topP: 0.95,
   },
-  {
-    id: 'skill-stress',
-    icon: '',
-    name: '共享容量压测',
-    desc: '继承父任务 endpoint 与抽样问答，定位 SLA 拐点与成本开销。',
-    scenario: '高并发容量与吞吐压测',
-    tools: ['dispatch.overview', 'task.create', 'task.cancel'],
-    slashCommands: ['/stress', '/capacity', '/load'],
-    temperature: 0.0,
-    maxTokens: 1024,
-    topP: 1.0,
-  },
 ]
 
 const skillViewMode = ref<'cards' | 'table'>('cards')
-const skillCategoryFilter = ref<'all' | 'benchmark' | 'rag' | 'testcase' | 'stress'>('all')
 const skillSearchKeyword = ref('')
 const selectedSkill = ref<SkillDetail | null>(null)
 const showSkillModal = ref(false)
@@ -1654,12 +1579,6 @@ let expertPromptRequest = 0
 
 const filteredSkills = computed(() => {
   return builtinSkills.filter((s) => {
-    if (skillCategoryFilter.value !== 'all') {
-      if (skillCategoryFilter.value === 'benchmark' && s.id !== 'skill-benchmark') return false
-      if (skillCategoryFilter.value === 'rag' && s.id !== 'skill-rag') return false
-      if (skillCategoryFilter.value === 'testcase' && s.id !== 'skill-testcase') return false
-      if (skillCategoryFilter.value === 'stress' && s.id !== 'skill-stress') return false
-    }
     if (skillSearchKeyword.value.trim()) {
       const kw = skillSearchKeyword.value.toLowerCase().trim()
       const matchName = s.name.toLowerCase().includes(kw)

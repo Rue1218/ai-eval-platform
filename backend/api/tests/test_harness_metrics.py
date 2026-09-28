@@ -302,7 +302,7 @@ def test_create_task_quota_rejected_with_audit(monkeypatch) -> None:
     monkeypatch.setattr("app.db.SessionLocal", lambda: db)
     with pytest.raises(AppError) as error:
         create_task_safe(
-            {"kind": "benchmark", "dataset_id": "d1", "profile_ids": ["p1"], "run": {}},
+            {"kind": "testcase", "case_source": {"text": "登录需求"}},
             _ctx(),
         )
     assert error.value.code == ErrorCode.CONCURRENCY
@@ -314,15 +314,11 @@ def test_create_task_quota_rejected_with_audit(monkeypatch) -> None:
 
 
 def test_create_task_passes_quota_below_limit(monkeypatch) -> None:
-    """资源合法且归属当前成员时，低于配额的任务可以入队。"""
-    profile = ProtocolProfile(
-        id="p1", name="测试评测档", protocol="openai_chat",
-        base_url="https://model.example.test/v1", model="test-model", created_by="u1",
-    )
-    db = _FakeDb(session_row=_SessionRow(), task_query=[], task_count=2, profiles={"p1": profile})
+    """来源合法且归属当前成员时，低于配额的用例任务可以入队。"""
+    db = _FakeDb(session_row=_SessionRow(), task_query=[], task_count=2)
     monkeypatch.setattr("app.db.SessionLocal", lambda: db)
     result = create_task_safe(
-        {"kind": "benchmark", "dataset_id": "d1", "profile_ids": ["p1"], "run": {}},
+        {"kind": "testcase", "case_source": {"text": "登录需求"}},
         _ctx(),
     )
     assert result["status"] == "queued"
@@ -339,15 +335,13 @@ def test_rest_create_task_quota_shared_rule() -> None:
 
     from app.models import User
     from app.routers.tasks import create_task
-    from app.schemas import RunConfig, TaskCreate
+    from app.schemas import TaskCreate
 
     db = _FakeDb(session_row=_SessionRow(), task_query=[], task_count=5)
     body = TaskCreate(
-        kind="benchmark",
-        dataset_id="d1",
+        kind="testcase",
         session_id="s1",
-        profile_ids=["p1"],
-        run=RunConfig(),
+        case_source={"text": "登录需求"},
     )
     request = Request(
         {

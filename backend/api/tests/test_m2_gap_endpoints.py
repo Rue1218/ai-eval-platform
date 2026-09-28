@@ -10,6 +10,8 @@ from fastapi.testclient import TestClient
 from app.errors import AppError, ErrorCode
 from app.main import app
 from app.routers.datasets import _parse_upload_rows
+from app.routers.reports import freeze_baseline, share_report
+from app.routers.tasks import approve_stress
 
 
 @pytest.mark.parametrize(
@@ -43,6 +45,18 @@ def test_report_detail_rejects_anonymous_without_share():
     resp = client.get("/api/reports/r-x")
     assert resp.status_code == 401
     assert resp.json()["code"] == "UNAUTHORIZED"
+
+
+def test_retired_report_and_stress_write_endpoints_reject_without_mutation():
+    """历史报告与压测只读，旧写接口在触及数据库前拒绝。"""
+    for write in (
+        lambda: share_report("report", body={}, db=None, user=None),
+        lambda: freeze_baseline("report", body={}, db=None, user=None),
+        lambda: approve_stress("task", request=None, db=None, user=None),
+    ):
+        with pytest.raises(AppError) as error:
+            write()
+        assert error.value.code == ErrorCode.VALIDATION
 
 
 def test_parse_upload_rows_jsonl():

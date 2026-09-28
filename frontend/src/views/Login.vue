@@ -35,7 +35,7 @@
 
         <!-- 平台工作流简述 -->
         <p class="left-hero-desc stagger-item stagger-3">
-          对话完成：用例（可选）→ Benchmark 和 / 或 RAG →（可选）压测 → 报告
+          对话生成测试用例草稿，经人工审核后确认入库
         </p>
 
         <!-- 三大核心特性条目 -->
@@ -51,7 +51,7 @@
             </div>
             <div class="feature-content">
               <h3 class="feature-title">智能对话驱动</h3>
-              <p class="feature-desc">通过自然语言与 AI Agent 协作，自动完成测试流程与评估任务</p>
+              <p class="feature-desc">通过自然语言与 AI Agent 协作，从需求生成可审核的测试用例</p>
             </div>
           </div>
 
@@ -64,8 +64,8 @@
               </svg>
             </div>
             <div class="feature-content">
-              <h3 class="feature-title">多维度评估能力</h3>
-              <p class="feature-desc">Benchmark、RAG、压测等多维度评估，全面覆盖测试场景</p>
+              <h3 class="feature-title">需求覆盖与人工审核</h3>
+              <p class="feature-desc">覆盖功能、边界与异常场景，确认后纳入用例集</p>
             </div>
           </div>
 
@@ -176,7 +176,7 @@
             <span class="ai-text">AI</span> 测试与评估平台
           </h1>
           <p class="mobile-brand-desc">
-            基准评测 · 知识库 RAG · 自动化压测
+            需求解析 · 用例生成 · 草稿审核
           </p>
         </div>
 
@@ -463,7 +463,7 @@
       style="width: 480px; max-width: calc(100vw - 32px);"
     >
       <div class="dialog-content-body">
-        <p class="dialog-p">本平台为内部评测系统，初始环境已内置以下演示账号（全员同权）：</p>
+        <p class="dialog-p">本平台为内部用例生成系统，初始环境已内置以下演示账号（全员同权）：</p>
         <div class="account-pill-list">
           <div class="account-pill">
             <span class="pill-name">admin</span>

@@ -14,7 +14,7 @@ export const SKILL_LABELS: Record<string, string> = {
 export const SKILL_SUMMARIES: Record<string, string> = {
   'skill-benchmark': '执行大模型基准评测',
   'skill-rag': '执行知识库评测',
-  'skill-testcase': '生成评测测试用例',
+  'skill-testcase': '生成测试用例草稿',
   'skill-stress': '执行共享压测',
 }
 

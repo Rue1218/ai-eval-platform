@@ -12,6 +12,7 @@
     import '../src/styles/base.css'
     // 挂载生产页面及 HTTP 层，业务请求由 Playwright 隔离拦截。
     const router = createRouter({ history: createMemoryHistory(), routes: [] })
+    window.__casesRouter = router
     createApp({ render: () => h(NMessageProvider, {}, {
       default: () => h(NDialogProvider, {}, { default: () => h(Cases) }),
     }) }).use(router).use(naive).mount('#app')

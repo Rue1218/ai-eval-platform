@@ -15,7 +15,7 @@ async function setup(page: Page) {
   const held: Record<string, Route> = {}
   const holds = new Set<string>()
   let failSave = false
-  const sets = ['a', 'b', 'c'].map(id => ({ id, name: `用例集${id.toUpperCase()}`, status: 'generated',
+  const sets = ['a', 'b', 'c'].map(id => ({ id, task_id: id === 'b' ? 'task-b' : null, name: `用例集${id.toUpperCase()}`, status: 'generated',
     generated_count: 1, confirmed_count: 0, checks: [], column_schema: [{ key: 'custom_field', name: '扩展属性', type: 'text' }] }))
   const rows: Record<string, Record<string, unknown>[]> = { a: [row()], b: [row('row-b', 'B用例')], c: [row('row-c', 'C用例')] }
   await page.route(/^http:\/\/127\.0\.0\.1:5273\/api\//, async route => {
@@ -72,6 +72,27 @@ test('PRD 生成请求遵循真实后端字段契约', async ({ page }) => {
   await expect.poll(() => ctx.saves.length).toBe(1)
   expect(ctx.saves[0].cases[1]).toMatchObject({ name: '生成候选', submodule: '登录', feature_point: '身份验证', custom_field: '保留扩展数据' })
   expect(ctx.saves[0].cases[1]).not.toHaveProperty('id')
+})
+
+test('任务深链优先于当前用例集，保留未保存草稿并等待 Worker 生成', async ({ page }) => {
+  const ctx = await setup(page)
+  await rename(page, '待保存的 A 草稿')
+  await page.evaluate(() => (window as any).__casesRouter.push('/?task_id=task-b'))
+  await expect(page.getByText('存在未保存的用例修改')).toBeVisible()
+  await expect(page.locator('.main-dataset-title')).toHaveText('用例集A')
+  await page.getByRole('button', { name: '保存并切换', exact: true }).click()
+  await expect(page.locator('.main-dataset-title')).toHaveText('用例集B')
+  expect(ctx.saves[0]).toMatchObject({ id: 'a', cases: [{ name: '待保存的 A 草稿' }] })
+
+  await page.evaluate(() => (window as any).__casesRouter.push('/?task_id=task-pending'))
+  await expect(page.getByText('测试用例生成中')).toBeVisible()
+  await expect(page.getByText('任务 task-pending 尚未生成对应用例集')).toBeVisible()
+  ctx.sets[2].task_id = 'task-pending'
+  await page.getByRole('button', { name: '刷新用例集' }).click()
+  await expect(page.locator('.main-dataset-title')).toHaveText('用例集C')
+
+  await page.evaluate(() => (window as any).__casesRouter.push('/?set_id=a'))
+  await expect(page.locator('.main-dataset-title')).toHaveText('用例集A')
 })
 
 test('编辑往返保留真实 ID、固定字段和扩展数据', async ({ page }) => {

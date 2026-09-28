@@ -13,8 +13,6 @@ import time
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-from sqlalchemy import not_
-
 from .benchmark import run_benchmark
 from .dataset_import import (
     claim_next_dataset_import,
@@ -28,6 +26,7 @@ from .rag import run_rag
 from .stress import run_stress
 from .task_state import (
     TASK_LEASE_SECONDS,
+    cancel_non_testcase_tasks,
     claim_running_task_for_terminal_write,
     lease_expired,
     recover_expired_task_leases,
@@ -241,6 +240,7 @@ def loop() -> None:
         task_id: str | None = None
         import_claim: tuple[str, str] | None = None
         try:
+            cancel_non_testcase_tasks(db)
             recover_expired_task_leases(db)
             # 导入租约独立于 Task；先回收异常退出的领取，再按设置尝试领取一个作业。
             recover_expired_dataset_import_leases(db)
@@ -252,8 +252,7 @@ def loop() -> None:
             if not import_claim and running < _max_running_tasks(db):
                 task = (
                     db.query(Task)
-                    .filter(Task.status == "queued")
-                    .filter(not_(Task.config.contains({"need_approval": True})))
+                    .filter(Task.status == "queued", Task.kind == "testcase")
                     .order_by(Task.created_at.asc())
                     .with_for_update(skip_locked=True)
                     .first()

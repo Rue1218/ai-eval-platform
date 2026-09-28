@@ -25,6 +25,18 @@ def test_build_prompts_contains_ratio_and_source():
         assert f"{casegen.STRATEGY_NAMES[key]} {weight}%" in user
 
 
+def test_build_prompts_guides_risk_traceability_and_observable_cases():
+    """两条生成路径共用风险驱动原则，参考 designing-functional-tests（MIT）。"""
+    # https://github.com/jaktestowac/awesome-copilot-for-testers/blob/main/skills/designing-functional-tests/SKILL.md
+    system, _ = casegen.build_prompts("支付需求", 10)
+    assert "高风险流程覆盖正向、反向、边界、权限及中断恢复" in system
+    assert "每条用例只验证一个明确行为" in system
+    assert "feature_point 要能追溯到需求" in system
+    assert "steps 写出可执行的具体操作" in system
+    assert "expected 写出与操作对应、可观察的结果" in system
+    assert "需求未给出确定预期时不要编造" in system
+
+
 def test_parse_cases_tolerates_fences_and_prose():
     # 允许代码围栏与首尾解释文字
     raw = '好的，以下是用例：\n```json\n[{"name": "登录成功", "strategy": "正向"}]\n```\n以上共 1 条。'

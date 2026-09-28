@@ -1,96 +1,12 @@
 <template>
   <div class="model-compare-page">
-    <!-- ═══════════ 发起评测表单 ═══════════ -->
+    <!-- 历史对比仅支持查询已有任务。 -->
     <div v-if="!taskId" class="panel glow" style="--glow-c: var(--c-reports)">
-      <div class="panel-title">
-        <div class="row">
-          <span>双模型对比测评</span>
-          <span class="small tertiary">基准模型 vs 对照模型 · 同一数据集 / 同一运行配置（控制变量）</span>
-        </div>
-      </div>
-
-      <div class="compare-form">
-        <div class="form-grid">
-          <div class="field">
-            <label class="field-label">基准模型</label>
-            <n-select
-              v-model:value="form.baseProfileId"
-              :options="targetOptions"
-              placeholder="选择基准模型"
-              filterable
-              clearable
-            />
-          </div>
-          <div class="field">
-            <label class="field-label">对照模型</label>
-            <n-select
-              v-model:value="form.compareProfileId"
-              :options="targetOptions"
-              placeholder="选择对照模型"
-              filterable
-              clearable
-            />
-          </div>
-          <div class="field">
-            <label class="field-label">数据集</label>
-            <n-select
-              v-model:value="form.datasetId"
-              :options="datasetOptions"
-              placeholder="选择数据集"
-              filterable
-              clearable
-            />
-          </div>
-        </div>
-
-        <div class="form-grid">
-          <div class="field">
-            <label class="field-label">抽样条数</label>
-            <n-input-number v-model:value="form.sampleSize" :min="1" :max="1000" style="width: 100%" />
-          </div>
-          <div class="field">
-            <label class="field-label">并发数</label>
-            <n-input-number v-model:value="form.concurrency" :min="1" :max="100" style="width: 100%" />
-          </div>
-          <div class="field">
-            <label class="field-label">温度</label>
-            <n-input-number v-model:value="form.temperature" :min="0" :max="2" :step="0.1" style="width: 100%" />
-          </div>
-          <div class="field">
-            <label class="field-label">最大输出 Tokens</label>
-            <n-input-number v-model:value="form.maxTokens" :min="1" :max="32768" style="width: 100%" />
-          </div>
-        </div>
-
-        <div class="field" style="margin-top: 12px">
-          <label class="field-label">系统提示词（可选）</label>
-          <n-input v-model:value="form.systemPrompt" type="textarea" :rows="2" placeholder="所有模型使用同一系统提示词" />
-        </div>
-
-        <div class="row-between" style="margin-top: 14px; align-items: center">
-          <div class="field" style="margin: 0; flex: 1">
-            <div class="row" style="gap: 10px; align-items: center">
-              <n-switch v-model:value="form.useJudge" />
-              <span class="field-label" style="margin: 0">启用 LLM 裁判打分（0-100 质量分）</span>
-            </div>
-            <n-select
-              v-if="form.useJudge"
-              v-model:value="form.judgeProfileId"
-              :options="judgeOptions"
-              placeholder="选择裁判协议档（usages 含 judge）"
-              filterable
-              clearable
-              style="margin-top: 8px; max-width: 480px"
-            />
-          </div>
-          <div class="row" style="gap: 8px">
-            <button class="btn btn-secondary" @click="resetForm">重置</button>
-            <button class="btn btn-primary" :disabled="launching" @click="launch">
-              {{ launching ? '创建任务中…' : '开始对比评测' }}
-            </button>
-          </div>
-        </div>
-        <div v-if="errorText" class="field-error" style="margin-top: 8px">{{ errorText }}</div>
+      <div class="panel-title">历史模型对比</div>
+      <div class="row" style="gap: 8px">
+        <n-input v-model:value="historyTaskId" placeholder="输入历史基准评测任务 ID" />
+        <button class="btn btn-primary" @click="openHistoricalTask">查询</button>
+        <router-link class="btn btn-secondary" to="/reports">查看历史报告</router-link>
       </div>
     </div>
 
@@ -99,7 +15,7 @@
       <div class="panel-title">
         <div class="row">
           <span>评测进行中</span>
-          <button class="btn btn-secondary btn-sm" @click="goBack">返回修改配置</button>
+          <button class="btn btn-secondary btn-sm" @click="goBack">返回历史查询</button>
         </div>
       </div>
       <div v-if="task" class="compare-progress">
@@ -140,7 +56,7 @@
     <template v-else>
       <div class="row-between" style="margin-bottom: 12px">
         <div class="row" style="gap: 8px">
-          <button class="btn btn-secondary btn-sm" @click="goBack">重新发起</button>
+          <button class="btn btn-secondary btn-sm" @click="goBack">返回历史查询</button>
           <button class="btn btn-secondary btn-sm" @click="refreshResult">刷新</button>
         </div>
         <button class="btn btn-secondary btn-sm" @click="openReport">查看完整报告</button>
@@ -299,31 +215,22 @@
 
 <script setup lang="ts">
 import { ref, computed, nextTick, onMounted, onUnmounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { useMessage } from 'naive-ui'
 import { api } from '../api/http'
-import type { Profile, Dataset, Task, Report, BenchmarkScore, CompareSampleRow, TaskStatus, TaskEvent } from '../api/types'
+import type { Task, Report, BenchmarkScore, CompareSampleRow, TaskStatus, TaskEvent } from '../api/types'
 
 const message = useMessage()
 const router = useRouter()
+const route = useRoute()
 
-const profiles = ref<Profile[]>([])
-const datasets = ref<Dataset[]>([])
-const loading = ref(false)
-const launching = ref(false)
-const errorText = ref('')
-
+const historyTaskId = ref('')
 const form = ref({
   baseProfileId: null as string | null,
   compareProfileId: null as string | null,
-  datasetId: null as string | null,
-  sampleSize: 50,
-  concurrency: 4,
+  sampleSize: 0,
+  concurrency: 0,
   temperature: 0,
-  maxTokens: 1024,
-  systemPrompt: '',
-  useJudge: false,
-  judgeProfileId: null as string | null,
 })
 
 // 任务 / 结果
@@ -363,21 +270,6 @@ function formatLogTime(ts?: string): string {
   if (!ts) return ''
   return new Date(ts).toLocaleTimeString('zh-CN', { hour12: false })
 }
-
-const targetOptions = computed(() =>
-  profiles.value
-    .filter(p => p.usages?.includes('target') || p.usages?.includes('benchmark'))
-    .map(p => ({ label: `${p.name} · ${p.model}`, value: p.id })),
-)
-const judgeOptions = computed(() =>
-  profiles.value.filter(p => p.usages?.includes('judge')).map(p => ({
-    label: `${p.name} · ${p.model}`,
-    value: p.id,
-  })),
-)
-const datasetOptions = computed(() =>
-  datasets.value.map(d => ({ label: `${d.name} (v${d.version}) · ${d.row_count} 行`, value: d.id })),
-)
 
 const baseProfileId = computed(() => form.value.baseProfileId)
 const compareProfileId = computed(() => form.value.compareProfileId)
@@ -475,41 +367,34 @@ function truncate(text: string, len: number): string {
   return text.length > len ? `${text.slice(0, len)}…` : text
 }
 
-function validate(): string {
-  if (!form.value.baseProfileId || !form.value.compareProfileId) return '请选择基准模型与对照模型'
-  if (form.value.baseProfileId === form.value.compareProfileId) return '基准模型与对照模型不能相同'
-  if (!form.value.datasetId) return '请选择数据集'
-  if (form.value.useJudge && !form.value.judgeProfileId) return '启用 LLM 裁判时需要选择裁判协议档'
-  return ''
-}
-
-async function launch() {
-  const err = validate()
-  if (err) { errorText.value = err; return }
-  errorText.value = ''
-  launching.value = true
+/** 只读取已有 benchmark 任务及报告，不再从该页创建评测。 */
+async function openHistoricalTask() {
+  const id = historyTaskId.value.trim()
+  if (!id) {
+    message.warning('请输入历史任务 ID')
+    return
+  }
   try {
-    const task = await api.tasks.create({
-      kind: 'benchmark',
-      profile_ids: [form.value.baseProfileId!, form.value.compareProfileId!],
-      dataset_id: form.value.datasetId!,
-      run: {
-        sample_size: form.value.sampleSize,
-        concurrency: form.value.concurrency,
-        temperature: form.value.temperature,
-        max_tokens: form.value.maxTokens,
-        system_prompt: form.value.systemPrompt || undefined,
-        use_judge: form.value.useJudge,
-        judge_profile_id: form.value.useJudge ? form.value.judgeProfileId || undefined : undefined,
-      },
-    })
-    taskId.value = task.id
+    const existing = await api.tasks.get(id)
+    if (existing.kind !== 'benchmark') {
+      message.warning('该任务不是模型对比评测，请在任务中心查看')
+      return
+    }
+    task.value = existing
+    taskId.value = existing.id
+    form.value = {
+      baseProfileId: existing.config.profile_ids?.[0] || null,
+      compareProfileId: existing.config.profile_ids?.[1] || null,
+      sampleSize: existing.config.run?.sample_size || 0,
+      concurrency: existing.config.run?.concurrency || 0,
+      temperature: existing.config.run?.temperature || 0,
+    }
     logEntries.value = []
-    startPolling()
+    mergeEvents(existing.events)
+    if (existing.report_id) await loadResult()
+    else if (existing.status === 'queued' || existing.status === 'running') startPolling()
   } catch (e: any) {
-    message.error(e.message || '创建任务失败')
-  } finally {
-    launching.value = false
+    message.error(e.message || '加载历史任务失败')
   }
 }
 
@@ -575,29 +460,17 @@ function goBack() {
   logEntries.value = []
 }
 
-function resetForm() {
-  form.value = {
-    baseProfileId: null, compareProfileId: null, datasetId: null,
-    sampleSize: 50, concurrency: 4, temperature: 0, maxTokens: 1024,
-    systemPrompt: '', useJudge: false, judgeProfileId: null,
-  }
-  errorText.value = ''
-}
-
 function openReport() {
   if (task.value?.report_id) {
     router.push(`/reports/${task.value.report_id}`)
   }
 }
 
-onMounted(async () => {
-  loading.value = true
-  try {
-    ;[profiles.value, datasets.value] = await Promise.all([api.profiles.list(), api.datasets.list()])
-  } catch (e: any) {
-    message.error(e.message || '加载模型与数据集失败')
-  } finally {
-    loading.value = false
+onMounted(() => {
+  const queryId = route.query.task_id
+  if (typeof queryId === 'string' && queryId) {
+    historyTaskId.value = queryId
+    void openHistoricalTask()
   }
 })
 

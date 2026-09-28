@@ -13,7 +13,12 @@ from collections.abc import Mapping
 from datetime import UTC, datetime
 
 from app.errors import AppError, ErrorCode
-from app.task_policy import enforce_task_quota, prepare_new_task_config, require_owned_source_file
+from app.task_policy import (
+    assert_task_creation_allowed,
+    enforce_task_quota,
+    prepare_new_task_config,
+    require_owned_source_file,
+)
 
 from .worker_bridge import TASK_KINDS, enqueue_long_task
 
@@ -70,6 +75,7 @@ def prepare_task_request(db, arguments: Mapping[str, object], context: object) -
     kind = task_spec.kind
     if kind not in TASK_KINDS:
         raise AppError(ErrorCode.VALIDATION, f"未知任务类型：{kind}")
+    assert_task_creation_allowed(kind)
     require_visible_session(db, session_id, user_id, lock=True)
     if get_active_tasks(db, session_id):
         raise AppError(ErrorCode.CONCURRENCY, "会话已有未完成任务")
@@ -174,6 +180,9 @@ def status_task_safe(arguments: Mapping[str, object], context: object) -> dict:
             "status": task.status,
             "progress": dict(task.progress or {}),
             "report_id": task.report_id,
+            "case_set_id": (
+                (task.result or {}).get("case_set_id") if task.kind == "testcase" else None
+            ),
         }
     finally:
         db.close()

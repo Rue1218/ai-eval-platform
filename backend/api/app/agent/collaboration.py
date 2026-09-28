@@ -29,7 +29,7 @@ from app.models import (
 from app.workspace_service import resolve_session_sandbox
 
 from . import preparation
-from .experts import get_expert, list_experts
+from .experts import ACTIVE_EXPERT_IDS, get_expert, list_experts
 from .runtime import AgentRuntime
 from .subagent_log import SubagentLog
 
@@ -183,8 +183,10 @@ class CollaborationCoordinator:
 
     async def _spawn(self, arguments: dict[str, Any], identity: dict[str, Any]) -> dict[str, Any]:
         """原子创建实例与首次运行，再交给主回合子任务域并行执行。"""
-        collaboration = self._ensure_collaboration(identity)
         expert = get_expert(arguments["expert_id"])
+        if expert.expert_id not in ACTIVE_EXPERT_IDS:
+            raise AppError(ErrorCode.VALIDATION, "该专家已停用，不能发起新协作")
+        collaboration = self._ensure_collaboration(identity)
         input_refs = preparation.parse_refs(arguments.get("input_refs", []))
         if input_refs and not expert.deliverable_kind:
             raise AppError(ErrorCode.VALIDATION, "该专家不接受准备成果引用")

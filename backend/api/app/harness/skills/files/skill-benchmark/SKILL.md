@@ -3,7 +3,7 @@ id: skill-benchmark
 name: 基准评测
 kind: benchmark
 version: 1.0
-enabled: true
+enabled: false
 summary: 执行大模型基准评测
 ---
 ## 工作流

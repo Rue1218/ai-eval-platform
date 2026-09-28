@@ -1148,62 +1148,15 @@ def _register_platform_task_tools(registry: ToolRegistry) -> None:
     registry.register(
         ToolDef(
             name="task.create",
-            description="创建评测任务并入队（benchmark/testcase/rag/stress），由 Worker 异步执行；返回 queued + task_id，不等待终态。",
+            description="创建测试用例生成任务并入队；Worker 将结果保存为 /cases 待确认草稿，返回 queued + task_id，不等待终态。",
             parameters_schema={
                 "type": "object",
                 "additionalProperties": False,
                 "properties": {
                     "kind": {
                         "type": "string",
-                        "enum": ["benchmark", "testcase", "rag", "stress"],
+                        "enum": ["testcase"],
                         "description": "任务类型",
-                    },
-                    "dataset_id": {"type": "string", "description": "数据集 ID（非 stress 必填）"},
-                    "profile_ids": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "maxItems": 10,
-                        "description": "模型协议档 ID 列表",
-                    },
-                    "kb_id": {"type": "string", "description": "知识库 ID（rag）"},
-                    "gold_qa_id": {"type": "string", "description": "黄金 QA ID（rag）"},
-                    "rag_mode": {
-                        "type": "array",
-                        "maxItems": 4,
-                        "items": {
-                            "type": "string",
-                            "enum": ["naive", "local", "global", "hybrid"],
-                        },
-                    },
-                    "run": {
-                        "type": "object",
-                        "additionalProperties": False,
-                        "properties": {
-                            "sample_size": {"type": "integer", "minimum": 1, "maximum": 1000},
-                            "concurrency": {"type": "integer", "minimum": 1, "maximum": 100},
-                            "timeout_s": {"type": "integer", "minimum": 1, "maximum": 600},
-                            "retry": {"type": "integer", "minimum": 0, "maximum": 5},
-                            "temperature": {"type": "number", "minimum": 0, "maximum": 2},
-                            "max_tokens": {"type": "integer", "minimum": 1, "maximum": 32768},
-                            "system_prompt": {"type": "string", "maxLength": 20000},
-                            "k": {"type": "integer", "minimum": 1, "maximum": 20},
-                            "use_judge": {"type": "boolean"},
-                            "judge_profile_id": {"type": "string"},
-                        },
-                        "description": "benchmark/RAG 的可复现运行配置",
-                    },
-                    "with_stress": {"type": "boolean"},
-                    "stress": {
-                        "type": "object",
-                        "additionalProperties": False,
-                        "properties": {
-                            "env": {"type": "string", "enum": ["dev", "test", "staging", "prod"]},
-                            "qps": {"type": "integer", "minimum": 1, "maximum": 500},
-                            "duration_s": {"type": "integer", "minimum": 1, "maximum": 1800},
-                            "sla_p99_ms": {"type": "integer", "minimum": 1},
-                        },
-                        "required": ["env", "qps", "duration_s"],
-                        "description": "质量任务成功后派生压测的配置",
                     },
                     "case_source": {
                         "type": "object",
@@ -1214,9 +1167,8 @@ def _register_platform_task_tools(registry: ToolRegistry) -> None:
                         },
                         "description": "用例生成来源；file_id/text 二选一",
                     },
-                    "parent_task_id": {"type": "string", "description": "压测父任务 ID（kind=stress 必填）"},
                 },
-                "required": ["kind"],
+                "required": ["kind", "case_source"],
             },
             permission="task.create",
             timeout_s=10.0,
@@ -1232,7 +1184,7 @@ def _register_platform_task_tools(registry: ToolRegistry) -> None:
             },
             transport="mcp",
             server_id="platform.tasks",
-            display_name="创建评测任务",
+            display_name="生成测试用例",
             risk_level="modify",
             contextual=True,
             concurrency_class="session_exclusive",
@@ -1241,7 +1193,7 @@ def _register_platform_task_tools(registry: ToolRegistry) -> None:
     registry.register(
         ToolDef(
             name="task.status",
-            description="查询评测任务当前状态（kind/status/progress/report_id），不等待完成",
+            description="查询用例生成任务当前状态；草稿生成后返回 case_set_id，不等待完成",
             parameters_schema={
                 "type": "object",
                 "additionalProperties": False,
@@ -1259,6 +1211,7 @@ def _register_platform_task_tools(registry: ToolRegistry) -> None:
                     "status": {"type": "string"},
                     "progress": {"type": "object"},
                     "report_id": {"type": ["string", "null"]},
+                    "case_set_id": {"type": ["string", "null"]},
                 },
                 "required": ["task_id", "kind", "status"],
             },

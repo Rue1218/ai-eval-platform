@@ -4,8 +4,8 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V1.50 |
-| 本轮审查日期 | 2026-09-26（重复编号导入与工作区草稿保护） |
+| 文档版本 | V1.51 |
+| 本轮审查日期 | 2026-09-28（测试用例 Agent 定位与评测停用） |
 | 文档状态 | V1.31 已实现三类准备专家与受控草稿；V1.30 的完整计划/报告连接仍待实现，后台恢复与专家通讯仍待 P2/P3 |
 | 撰写日期 | 2026-08-17 |
 | 本轮修订 | 2026-09-26：V1.47 新增“我的记忆”，支持个人／个人工作区范围的主动保存、更正、撤回及私有主会话按预算召回；语义向量检索和自动抽取仍未交付。 |
@@ -1169,3 +1169,17 @@ Excel 同一批次内的重复用例编号按最后一条更新，不重复创�
 
 - `backend/api/app/routers/cases.py`、`backend/api/tests/test_cases_audit.py`：导入批内编号复用与跨集合保全。
 - `frontend/src/views/UserWorkspaces.vue`、`frontend/tests/e2e/workspaceAudit.spec.ts`：刷新/创建操作保留未保存内容及保存归属。
+
+## V1.51 测试用例生成 Agent 与评测停用（2026-09-28）
+
+平台的新增任务只支持根据需求生成**功能测试用例**。Agent 通过 `task.create(kind=testcase)` 入队，由 Worker 异步生成测试用例集草稿；`/cases` 的 AI 生成对话框继续使用同一生成提示词，候选用例经人工采纳后保存。生成内容应覆盖需求来源、风险与边界，包含可执行步骤和可观察的预期结果；需求未说明的业务规则标注待确认，不编造结论。已保存的草稿须在用例页审核、确认后入库，支持从任务定位到对应集合。
+
+基准、RAG 评测和压测停止新建、重跑、领取及派生；现存排队和运行中的上述任务取消，运行中的压测停止发压。历史任务、事件与报告保留只读查询。导航与创建表单围绕用例生成收敛，历史数据仍可查看。本次不生成可执行测试脚本，也不启动新的评测或压测。
+
+### 修改代码文件与作用清单
+
+- `backend/api/app/task_policy.py`、`routers/tasks.py`、`routers/reports.py`：阻断旧任务和报告写入口，保留历史查询。
+- `backend/worker/app/main.py`、`task_state.py`、`stress_spawn.py`：只领取用例任务，取消旧活动任务并停止压测派生。
+- `backend/api/app/agent/`、`harness/` 与 `backend/shared/casegen.py`：仅向 Agent 展示用例生成能力，统一对话与用例页的生成规则。
+- `frontend/src/layouts/MainLayout.vue`、`frontend/src/views/Tasks.vue`、`Cases.vue` 等页面：展示用例生成及草稿审核入口，收起旧评测创建操作。
+- 对应 API、Worker 与前端回归测试：验证任务停用、草稿定位和生成契约。

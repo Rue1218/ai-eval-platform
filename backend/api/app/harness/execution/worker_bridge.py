@@ -11,8 +11,11 @@ from __future__ import annotations
 
 from uuid import uuid4
 
+from pydantic import ValidationError
+
 from app.errors import AppError, ErrorCode
 from app.models import AuditLog, Task
+from app.schemas import TaskCreate
 from app.task_policy import prepare_new_task_config, require_owned_source_file
 
 # Task.kind 短名（与 M10 skill_to_kind、PRD/API Task.kind 一致）
@@ -67,6 +70,11 @@ def enqueue_long_task(
     """
     if kind not in TASK_KINDS:
         raise AppError(ErrorCode.VALIDATION, f"未知任务类型：{kind}")
+    if kind == "testcase":
+        try:
+            TaskCreate.model_validate({**spec, "kind": kind})
+        except ValidationError as exc:
+            raise AppError(ErrorCode.VALIDATION, "用例任务需要有效的文件或需求文本来源") from exc
     source_id = (spec.get("case_source") or {}).get("file_id")
     if kind == "testcase" and source_id:
         require_owned_source_file(db, source_id, user_id)

@@ -1,6 +1,6 @@
 """platform.tasks 长任务 MCP 工具（P4-1）单测。
 
-覆盖：task.create 门禁（kind/数据集/待确认卡/占槽/stress 父任务/IntegrityError）、
+覆盖：task.create 门禁（用例来源/停用类型/待确认卡/占槽/IntegrityError）、
 task.status 归属、task.cancel 终态短路、contextual 上下文透传、toolnode 占槽
 门禁接线。DB 用 ``_FakeDb`` 桩 + monkeypatch ``app.db.SessionLocal``，不依赖
 真实数据库连接。
@@ -165,15 +165,20 @@ def _rag_args(**overrides: object) -> dict[str, object]:
     return payload
 
 
-def test_task_create_schema_accepts_complete_rest_task_spec() -> None:
-    """MCP 目录必须允许 REST TaskSpec 的 run/stress/case_source 字段通过前置校验。"""
-    schema = build_default_registry().get("task.create").parameters_schema
-    arguments = _benchmark_args(
-        with_stress=True,
-        stress={"env": "test", "qps": 10, "duration_s": 120},
-    )
+def _testcase_args(**overrides: object) -> dict[str, object]:
+    """构造可直接进入用例工作台的生成任务。"""
+    payload: dict[str, object] = {"kind": "testcase", "case_source": {"text": "登录需求"}}
+    payload.update(overrides)
+    return payload
 
-    assert validate_tool_arguments(schema, arguments) is None
+
+def test_task_create_schema_only_accepts_testcase_with_source() -> None:
+    """模型可见 schema 仅提供用例生成，来源段必须显式传入。"""
+    schema = build_default_registry().get("task.create").parameters_schema
+    assert validate_tool_arguments(schema, _testcase_args()) is None
+    assert validate_tool_arguments(schema, {"kind": "testcase"}) is not None
+    for kind in ("benchmark", "rag", "stress"):
+        assert validate_tool_arguments(schema, {"kind": kind, "case_source": {"text": "需求"}}) is not None
 
 
 # —— task.create 门禁 ——
@@ -181,7 +186,7 @@ def test_task_create_schema_accepts_complete_rest_task_spec() -> None:
 
 def test_create_requires_context() -> None:
     with pytest.raises(AppError) as error:
-        create_task_safe({"kind": "benchmark"}, None)
+        create_task_safe(_testcase_args(), None)
     assert error.value.code == ErrorCode.VALIDATION
 
 
@@ -192,111 +197,55 @@ def test_create_rejects_unknown_kind() -> None:
     assert "未知任务类型" in error.value.message
 
 
-def test_create_missing_dataset(monkeypatch) -> None:
+def test_create_requires_case_source() -> None:
+    with pytest.raises(AppError) as error:
+        create_task_safe({"kind": "testcase"}, _ctx())
+    assert error.value.code == ErrorCode.VALIDATION
+    assert "case_source" in error.value.message
+
+
+@pytest.mark.parametrize("payload", [_benchmark_args(), _rag_args(), {"kind": "stress", "parent_task_id": "parent"}])
+def test_create_rejects_retired_task_kind(payload, monkeypatch) -> None:
+    """工具直接调用也不能绕过模型 schema 恢复旧评测或压测。"""
     monkeypatch.setattr("app.db.SessionLocal", lambda: _FakeDb(session_row=_SessionRow(), task_query=[]))
     with pytest.raises(AppError) as error:
-        create_task_safe(_benchmark_args(dataset_id=None), _ctx())
+        create_task_safe(payload, _ctx())
     assert error.value.code == ErrorCode.VALIDATION
-    assert "dataset_id" in error.value.message
-
-
-def test_create_rejects_incomplete_benchmark_spec() -> None:
-    """MCP 任务桥不得绕过 REST 对协议档和运行配置的 TaskSpec 校验。"""
-    with pytest.raises(AppError) as error:
-        create_task_safe({"kind": "benchmark", "dataset_id": "d1"}, _ctx())
-
-    assert error.value.code == ErrorCode.VALIDATION
-    assert "profile_ids" in error.value.message
-
-
-def test_create_rejects_missing_dataset_row(monkeypatch) -> None:
-    """MCP 任务桥与 REST 一样拒绝已删除或不存在的数据集。"""
-    db = _FakeDb(session_row=_SessionRow(), task_query=[], datasets={})
-    monkeypatch.setattr("app.db.SessionLocal", lambda: db)
-
-    with pytest.raises(AppError) as error:
-        create_task_safe(_benchmark_args(), _ctx())
-
-    assert error.value.code == ErrorCode.NOT_FOUND
-
-
-def test_create_rejects_stress_flag_without_config() -> None:
-    """with_stress=true 必须携带完整压测配置，避免 Worker 静默跳过派生。"""
-    with pytest.raises(AppError) as error:
-        create_task_safe(_benchmark_args(with_stress=True), _ctx())
-
-    assert error.value.code == ErrorCode.VALIDATION
-    assert "stress" in error.value.message
-
-
-def test_create_rag_requires_kb_and_gold(monkeypatch) -> None:
-    monkeypatch.setattr("app.db.SessionLocal", lambda: _FakeDb(session_row=_SessionRow(), task_query=[]))
-    with pytest.raises(AppError) as error:
-        create_task_safe(_rag_args(kb_id=None, gold_qa_id=None), _ctx())
-    assert error.value.code == ErrorCode.VALIDATION
-    assert "kb_id" in error.value.message
-
-
-def test_create_rag_ok_without_dataset(monkeypatch) -> None:
-    db = _FakeDb(session_row=_SessionRow(), task_query=[])
-    monkeypatch.setattr("app.db.SessionLocal", lambda: db)
-    result = create_task_safe(_rag_args(), _ctx())
-    assert result["status"] == "queued"
-    assert result["kind"] == "rag"
+    assert "仅支持" in error.value.message
 
 
 def test_create_pending_confirm_rejected(monkeypatch) -> None:
-    db = _FakeDb(session_row=_SessionRow(pending_confirm={"kind": "benchmark"}), task_query=[])
+    db = _FakeDb(session_row=_SessionRow(pending_confirm={"kind": "testcase"}), task_query=[])
     monkeypatch.setattr("app.db.SessionLocal", lambda: db)
     with pytest.raises(AppError) as error:
-        create_task_safe(_benchmark_args(), _ctx())
+        create_task_safe(_testcase_args(), _ctx())
     assert error.value.code == ErrorCode.CONCURRENCY
 
 
 def test_create_active_task_rejected(monkeypatch) -> None:
-    active = Task(id="t-active", kind="benchmark", status="running", config={}, created_by="u1", session_id="s1")
+    active = Task(id="t-active", kind="testcase", status="running", config={}, created_by="u1", session_id="s1")
     db = _FakeDb(session_row=_SessionRow(), task_query=[active])
     monkeypatch.setattr("app.db.SessionLocal", lambda: db)
     with pytest.raises(AppError) as error:
-        create_task_safe(_benchmark_args(), _ctx())
+        create_task_safe(_testcase_args(), _ctx())
     assert error.value.code == ErrorCode.CONCURRENCY
-
-
-def test_create_stress_requires_succeeded_parent(monkeypatch) -> None:
-    parent = Task(id="parent", kind="benchmark", status="running", config={}, created_by="u1")
-    db = _FakeDb(session_row=_SessionRow(), task_query=[], tasks={"parent": parent})
-    monkeypatch.setattr("app.db.SessionLocal", lambda: db)
-    with pytest.raises(AppError) as error:
-        create_task_safe({"kind": "stress", "parent_task_id": "parent"}, _ctx())
-    assert error.value.code == ErrorCode.VALIDATION
-
-
-def test_create_stress_with_succeeded_benchmark_parent(monkeypatch) -> None:
-    parent = Task(id="parent", kind="benchmark", status="succeeded", config={}, created_by="u1")
-    db = _FakeDb(session_row=_SessionRow(), task_query=[], tasks={"parent": parent})
-    monkeypatch.setattr("app.db.SessionLocal", lambda: db)
-    result = create_task_safe({"kind": "stress", "parent_task_id": "parent"}, _ctx())
-    assert result["status"] == "queued"
-    assert result["kind"] == "stress"
-    assert result["task_id"]
 
 
 def test_create_ok_enqueues_with_spec_and_owner(monkeypatch) -> None:
     db = _FakeDb(session_row=_SessionRow(), task_query=[])
     monkeypatch.setattr("app.db.SessionLocal", lambda: db)
     result = create_task_safe(
-        _benchmark_args(),
+        _testcase_args(),
         _ctx(),
     )
     assert result["status"] == "queued"
-    assert result["kind"] == "benchmark"
+    assert result["kind"] == "testcase"
     assert db.commit_calls >= 1
     task = db._tasks[result["task_id"]]
     assert task.config == {
-        "kind": "benchmark",
-        "dataset_id": "d1",
-        "profile_ids": ["p1"],
-        "run": {"sample_size": 1, "use_judge": False},
+        "kind": "testcase",
+        "case_source": {"text": "登录需求"},
+        "profile_ids": [],
         "rag_mode": [],
         "with_stress": False,
     }
@@ -309,7 +258,7 @@ def test_create_integrity_conflict_returns_concurrency(monkeypatch) -> None:
     db = _FakeDb(session_row=_SessionRow(), task_query=[], fail_integrity=True)
     monkeypatch.setattr("app.db.SessionLocal", lambda: db)
     with pytest.raises(AppError) as error:
-        create_task_safe(_benchmark_args(), _ctx())
+        create_task_safe(_testcase_args(), _ctx())
     assert error.value.code == ErrorCode.CONCURRENCY
     assert db.rollback_calls >= 1
 
@@ -335,19 +284,29 @@ def test_status_unauthorized(monkeypatch) -> None:
 def test_status_ok(monkeypatch) -> None:
     task = Task(
         id="t1",
-        kind="rag",
-        status="queued",
+        kind="testcase",
+        status="awaiting_case_confirm",
         config={},
-        progress={"done": 1, "total": 2, "message": "检索中"},
+        progress={"done": 1, "total": 2, "message": "等待确认"},
+        result={"case_set_id": "cases-1"},
         created_by="u1",
         report_id=None,
     )
     monkeypatch.setattr("app.db.SessionLocal", lambda: _FakeDb(tasks={"t1": task}))
     result = status_task_safe({"task_id": "t1"}, _ctx())
     assert result["task_id"] == "t1"
-    assert result["kind"] == "rag"
-    assert result["status"] == "queued"
-    assert result["progress"] == {"done": 1, "total": 2, "message": "检索中"}
+    assert result["kind"] == "testcase"
+    assert result["status"] == "awaiting_case_confirm"
+    assert result["progress"] == {"done": 1, "total": 2, "message": "等待确认"}
+    assert result["case_set_id"] == "cases-1"
+
+
+def test_status_old_eval_does_not_expose_case_set_id(monkeypatch) -> None:
+    """历史任务状态仍可读，但不能伪装成用例集交付。"""
+    task = Task(id="old", kind="benchmark", status="succeeded", config={},
+                result={"case_set_id": "wrong"}, created_by="u1")
+    monkeypatch.setattr("app.db.SessionLocal", lambda: _FakeDb(tasks={"old": task}))
+    assert status_task_safe({"task_id": "old"}, _ctx())["case_set_id"] is None
 
 
 # —— task.cancel ——
@@ -454,7 +413,7 @@ def test_toolnode_task_create_rejected_when_active_task() -> None:
     )
     state = {
         "request": {"config": {}, "messages": ()},
-        "pending_tool": {"name": "task.create", "arguments": {"kind": "benchmark", "dataset_id": "d1"}},
+        "pending_tool": {"name": "task.create", "arguments": _testcase_args()},
     }
     configurable = {"session": {"id": "s1"}, "credentials": {"user_id": "u1"}, "thread_id": "t1"}
     out = _run_toolnode(node, state, configurable)

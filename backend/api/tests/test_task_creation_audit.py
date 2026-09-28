@@ -128,36 +128,41 @@ def test_rerun_cannot_bypass_session_confirmation(task_db):
     assert task_db.query(Task).count() == 1
 
 
-def test_agent_preparation_requires_prod_stress_countersign(task_db):
-    """创建者的业务确认不能替代生产压测的另一名成员会签。"""
-    _history(task_db, kind="benchmark")
-    kind, spec, parent = prepare_task_request(task_db, {
-        "kind": "stress", "parent_task_id": "history",
-        "stress": {"env": "prod", "qps": 1, "duration_s": 1},
-    }, SimpleNamespace(session_id="session", user_id="owner"))
-    assert kind == "stress" and parent == "history"
-    assert spec.get("need_approval") is True
-    assert "approved_by" not in spec
+@pytest.mark.parametrize("kind,body", [
+    ("benchmark", {"profile_ids": ["p1"], "dataset_id": "d1", "run": {"sample_size": 1}}),
+    ("rag", {"kb_id": "kb1", "gold_qa_id": "g1", "run": {"sample_size": 1}}),
+    ("stress", {"parent_task_id": "history"}),
+])
+def test_rest_rejects_retired_task_creation(task_db, kind, body):
+    """旧任务类型的合法请求也必须在入队前由业务门禁拒绝。"""
+    with pytest.raises(AppError) as error:
+        create_task(TaskCreate(kind=kind, **body), _request(), task_db, task_db.get(User, "owner"))
+    assert error.value.code == ErrorCode.VALIDATION
+    assert task_db.query(Task).count() == 0
 
 
-def test_enqueue_drops_supplied_prod_approval(task_db):
-    """所有桥接入口创建的是新任务，不能继承输入快照里的会签状态。"""
-    config = {"stress": {"env": "prod"}, "need_approval": False, "approved_by": "other"}
-    task_id = enqueue_long_task(task_db, "session", "owner", "stress", config)
-    created = task_db.get(Task, task_id)
-    assert created.config["need_approval"] is True
-    assert "approved_by" not in created.config
-    assert config["approved_by"] == "other"
+@pytest.mark.parametrize("kind", ["benchmark", "rag", "stress"])
+def test_retired_task_cannot_rerun_or_enqueue(task_db, kind):
+    """历史行保留可读，但重跑与 Agent 桥接不能创建新行。"""
+    task = _history(task_db, kind=kind)
+    with pytest.raises(AppError) as rerun_error:
+        rerun_task(task.id, _request(), task_db, task_db.get(User, "owner"))
+    with pytest.raises(AppError) as enqueue_error:
+        enqueue_long_task(task_db, "session", "owner", kind, {})
+    assert rerun_error.value.code == ErrorCode.VALIDATION
+    assert enqueue_error.value.code == ErrorCode.VALIDATION
+    assert task_db.query(Task).count() == 1
 
 
-@pytest.mark.parametrize("env,needs_approval", [("prod", True), ("test", False)])
-def test_stress_rerun_does_not_reuse_historical_countersign(task_db, env, needs_approval):
-    """生产重跑重新等待会签，测试环境重跑仍可直接排队。"""
-    task = _history(task_db, kind="stress", config={
-        "stress": {"env": env}, "need_approval": False, "approved_by": "other",
-    })
-    result = rerun_task(task.id, _request(), task_db, task_db.get(User, "owner"))
-    created = task_db.get(Task, result["id"])
-    assert created.config["need_approval"] is needs_approval
-    assert "approved_by" not in created.config
-    assert task.config["approved_by"] == "other"
+@pytest.mark.parametrize("kind,args", [
+    ("benchmark", {"profile_ids": ["p1"], "dataset_id": "d1", "run": {"sample_size": 1}}),
+    ("rag", {"kb_id": "kb1", "gold_qa_id": "g1", "run": {"sample_size": 1}}),
+    ("stress", {"parent_task_id": "history"}),
+])
+def test_agent_preparation_rejects_retired_kind_before_asset_checks(task_db, kind, args):
+    """Agent 建单在资源查询和配额检查前拒绝已停用能力。"""
+    with pytest.raises(AppError) as error:
+        prepare_task_request(task_db, {"kind": kind, **args},
+                             SimpleNamespace(session_id="session", user_id="owner"))
+    assert error.value.code == ErrorCode.VALIDATION
+    assert task_db.query(Task).count() == 0

@@ -17,7 +17,7 @@ from app.harness.skills.storage import RUNTIME_DISABLED_SKILLS, list_skill_metad
 # 技能目录（单一事实源；skill_id → (名称, 一句话描述, kind)）
 SKILL_CATALOG: dict[str, tuple[str, str, str]] = {
     "skill-benchmark": ("基准评测", "执行大模型基准评测", "benchmark"),
-    "skill-testcase": ("用例生成", "生成评测测试用例", "testcase"),
+    "skill-testcase": ("用例生成", "根据需求生成待确认测试用例", "testcase"),
     "skill-rag": ("知识库评测", "执行知识库评测", "rag"),
     "skill-stress": ("压测", "执行共享压测", "stress"),
 }
@@ -58,6 +58,8 @@ def list_hints() -> list[SkillHint]:
     hints: list[SkillHint] = []
     for skill_id, entry in SKILL_CATALOG.items():
         metadata = metadata_by_id.get(skill_id)
+        if metadata is not None and not metadata.enabled:
+            continue
         hints.append(
             SkillHint(
                 skill_id=skill_id,

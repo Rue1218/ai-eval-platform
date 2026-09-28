@@ -22,6 +22,7 @@ from app.harness.security.auth import (
     lock_pending_confirm,
 )
 from app.schemas import TaskCreate
+from app.task_policy import assert_task_creation_allowed
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,6 +181,7 @@ def _validate_confirmed(task_spec: dict) -> str:
         )
     if kind not in TASK_KINDS:
         raise AppError(ErrorCode.VALIDATION, f"未知任务类型：{kind}")
+    assert_task_creation_allowed(str(kind))
     try:
         cleaned = {key: value for key, value in task_spec.items() if key in _TASK_SPEC_KEYS}
         # 质量任务卡不得带空 case_source，否则 CaseSource 二选一门禁误报「缺少用例来源」。

@@ -26,7 +26,7 @@ export function isTaskTool(name: string): boolean {
 
 /** 工具操作文案来自短名，避免把模型 wire 名或 MCP 全名泄露进主要界面。 */
 export const taskActionLabels: Record<string, string> = {
-  'task.create': '创建评测任务',
+  'task.create': '创建用例生成任务',
   'task.status': '查询任务状态',
   'task.cancel': '取消评测任务',
 }

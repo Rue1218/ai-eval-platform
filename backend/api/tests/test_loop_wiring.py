@@ -498,9 +498,12 @@ def test_loop_system_prompt_locks_task_planning_and_completion_rules() -> None:
     for expected in (
         "简单单步问答、一次读取或一次确定性修改直接执行，不调用 task。",
         "至少包含三个可验证步骤",
-        "task 只跟踪当前会话的执行清单，不创建评测任务、不启动 Worker",
+        "task 只跟踪当前会话的执行清单，不创建用例生成任务、不启动 Worker",
         "只有收到足以验证的工具结果后才更新为 completed。",
-        "task.create 确认入队，由 Worker 异步执行。",
+        "平台只接受用例生成任务。",
+        "通过 task.create(kind=testcase) 确认入队",
+        "由 Worker 异步生成 /cases 待确认草稿",
+        "历史评测与压测任务、报告可供只读追溯，不得新建、重跑或派生。",
         "相关计划步骤已验证完成后报告完成。",
     ):
         assert expected in prompt

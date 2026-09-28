@@ -87,37 +87,6 @@
           <span>{{ currentTitle }}</span>
         </div>
 
-        <!-- 居中测试对象模式切换 -->
-        <div class="mode-switch" role="tablist">
-          <button
-            class="mode-opt"
-            :class="{ on: modeStore.mode === 'llm' }"
-            data-mode="llm"
-            @click="modeStore.setMode('llm')"
-            title="基础模型 / 对比评测 / 模型压测"
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13">
-              <rect x="6" y="6" width="12" height="12" rx="2"/><rect x="10" y="10" width="4" height="4"/>
-              <path d="M9 3v3M15 3v3M9 18v3M15 18v3M3 9h3M3 15h3M18 9h3M18 15h3"/>
-            </svg>
-            <span class="mode-label">大模型</span>
-            <i class="mode-dot"></i>
-          </button>
-          <button
-            class="mode-opt"
-            :class="{ on: modeStore.mode === 'rag' }"
-            data-mode="rag"
-            @click="modeStore.setMode('rag')"
-            title="LightRAG / 外部 RAG / 知识库 / 黄金 QA"
-          >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="13" height="13">
-              <path d="M5 5.5A2.5 2.5 0 0 1 7.5 3H19v15H7.5A2.5 2.5 0 0 0 5 20.5Z"/><path d="M5 18.5V5.5"/><path d="M9 7.5h6"/>
-            </svg>
-            <span class="mode-label">RAG</span>
-            <i class="mode-dot"></i>
-          </button>
-        </div>
-
         <!-- 右侧操作栏 -->
         <div class="topbar-actions">
           <!-- 数据源标记 -->
@@ -192,7 +161,6 @@ import { useRoute, useRouter } from 'vue-router'
 import { useMessage, useDialog } from 'naive-ui'
 import { useAuthStore } from '../stores/auth'
 import { useThemeStore } from '../stores/theme'
-import { useModeStore } from '../stores/mode'
 import { api } from '../api/http'
 
 const route = useRoute()
@@ -201,7 +169,6 @@ const message = useMessage()
 const dialog = useDialog()
 const auth = useAuthStore()
 const theme = useThemeStore()
-const modeStore = useModeStore()
 
 const showChangePwd = ref(false)
 const pwdLoading = ref(false)
@@ -240,42 +207,16 @@ const IconReports = () =>
     h('path', { d: 'M5 20V10M12 20V4M19 20v-7' }),
   ])
 
-const IconModelCompare = () =>
-  h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round' }, [
-    h('path', { d: 'M5 20V8M12 20V4M19 20v-7' }),
-    h('path', { d: 'M3 20h18' }),
-  ])
-
-const IconDatasets = () =>
-  h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round' }, [
-    h('ellipse', { cx: '12', cy: '6', rx: '7', ry: '3' }),
-    h('path', { d: 'M5 6v6c0 1.7 3.1 3 7 3s7-1.3 7-3V6' }),
-    h('path', { d: 'M5 12v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6' }),
-  ])
-
 const IconCases = () =>
   h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round' }, [
     h('path', { d: 'M9 11.5 11 14l4.5-5' }),
     h('rect', { x: '4', y: '4', width: '16', height: '16', rx: '3' }),
   ])
 
-const IconKb = () =>
-  h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round' }, [
-    h('path', { d: 'M5 5.5A2.5 2.5 0 0 1 7.5 3H19v15H7.5A2.5 2.5 0 0 0 5 20.5Z' }),
-    h('path', { d: 'M5 18.5V5.5' }),
-    h('path', { d: 'M9 7.5h6' }),
-  ])
-
 const IconProfiles = () =>
   h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round' }, [
     h('rect', { x: '3', y: '5', width: '18', height: '14', rx: '3' }),
     h('path', { d: 'M7 10h4M7 14h7' }),
-  ])
-
-const IconStress = () =>
-  h('svg', { viewBox: '0 0 24 24', fill: 'none', stroke: 'currentColor', strokeWidth: 1.8, strokeLinecap: 'round', strokeLinejoin: 'round' }, [
-    h('path', { d: 'M3 17l5-6 4 3 6-8' }),
-    h('path', { d: 'M18 6h3v3' }),
   ])
 
 const IconUsers = () =>
@@ -298,29 +239,19 @@ const IconMemories = () =>
     h('path', { d: 'M9 3v18M12 8h5M12 12h5M3 7h4M3 17h4' }),
   ])
 
-const evalRoutes = computed(() => {
-  // 两类评测共享智能体、调度、任务、报告和用例；资产入口则严格随顶栏模式切换。
-  const modeAsset = modeStore.mode === 'rag'
-    ? { path: '/kb', label: '知识库', icon: IconKb, t: 'var(--t-kb)', c: 'var(--c-kb)' }
-    : { path: '/datasets', label: '数据集', icon: IconDatasets, t: 'var(--t-datasets)', c: 'var(--c-datasets)' }
-
-  return [
-    { path: '/agent', label: '智能体', icon: IconAgent, t: 'var(--t-agent)', c: 'var(--c-agent)' },
-    { path: '/dispatch', label: '调度中心', icon: IconDispatch, t: 'var(--t-dispatch)', c: 'var(--c-dispatch)' },
-    { path: '/model-compare', label: '模型对比', icon: IconModelCompare, t: 'var(--t-reports)', c: 'var(--c-reports)' },
-    { path: '/tasks', label: '任务中心', icon: IconTasks, t: 'var(--t-tasks)', c: 'var(--c-tasks)' },
-    { path: '/reports', label: '评测报告', icon: IconReports, t: 'var(--t-reports)', c: 'var(--c-reports)' },
-    modeAsset,
-    { path: '/cases', label: '用例', icon: IconCases, t: 'var(--t-cases)', c: 'var(--c-cases)' },
-    // F1（G1）：我的工作区（用户自管数据域；管理端清理视图已于 V1.79 下线）
-    { path: '/workspaces', label: '我的工作区', icon: IconWorkspaces, t: 'var(--t-workspaces)', c: 'var(--c-workspaces)' },
-    { path: '/memories', label: '我的记忆', icon: IconMemories, t: 'var(--t-workspaces)', c: 'var(--c-workspaces)' },
-  ]
-})
+const evalRoutes = [
+  { path: '/agent', label: '智能体', icon: IconAgent, t: 'var(--t-agent)', c: 'var(--c-agent)' },
+  { path: '/dispatch', label: '调度中心', icon: IconDispatch, t: 'var(--t-dispatch)', c: 'var(--c-dispatch)' },
+  { path: '/tasks', label: '任务中心', icon: IconTasks, t: 'var(--t-tasks)', c: 'var(--c-tasks)' },
+  { path: '/reports', label: '历史报告', icon: IconReports, t: 'var(--t-reports)', c: 'var(--c-reports)' },
+  { path: '/cases', label: '用例', icon: IconCases, t: 'var(--t-cases)', c: 'var(--c-cases)' },
+  // F1（G1）：我的工作区（用户自管数据域；管理端清理视图已于 V1.79 下线）
+  { path: '/workspaces', label: '我的工作区', icon: IconWorkspaces, t: 'var(--t-workspaces)', c: 'var(--c-workspaces)' },
+  { path: '/memories', label: '我的记忆', icon: IconMemories, t: 'var(--t-workspaces)', c: 'var(--c-workspaces)' },
+]
 
 const adminRoutes = [
   { path: '/admin/profiles', label: '协议档', icon: IconProfiles, t: 'var(--t-profiles)', c: 'var(--c-profiles)' },
-  { path: '/admin/stress', label: '压测治理', icon: IconStress, t: 'var(--t-stress)', c: 'var(--c-stress)' },
   { path: '/admin/users', label: '账号', icon: IconUsers, t: 'var(--t-users)', c: 'var(--c-users)' },
 ]
 
@@ -333,10 +264,10 @@ function isRouteActive(itemPath: string): boolean {
 }
 
 const currentTitle = computed(() => {
-  if (route.path === '/datasets') return modeStore.mode === 'llm' ? '基准数据集' : 'RAG 资产切换'
-  if (route.path === '/kb') return modeStore.mode === 'rag' ? '知识库' : '大模型资产切换'
+  if (route.path === '/datasets') return '历史数据集'
+  if (route.path === '/kb') return '历史知识库'
   if (route.path === '/dispatch') return '调度中心'
-  if (route.path.startsWith('/reports')) return '评测报告'
+  if (route.path.startsWith('/reports')) return '历史报告'
   return (route.meta.title as string) || 'AI 测试与评估平台'
 })
 const isFlushView = computed(() => route.path.startsWith('/agent'))
@@ -717,54 +648,6 @@ async function submitChangePassword() {
   color: var(--text-primary);
 }
 
-/* 顶栏大模型/RAG切换胶囊 */
-.mode-switch {
-  position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  gap: 2px;
-  padding: 3px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-subtle);
-  border-radius: 999px;
-}
-.mode-opt {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 28px;
-  padding: 3px 14px;
-  border-radius: 999px;
-  border: 1px solid transparent;
-  background: transparent;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text-secondary);
-  transition: all 0.16s ease;
-}
-.mode-opt .mode-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: currentColor;
-  opacity: 0;
-}
-.mode-opt.on {
-  background: var(--bg-main);
-}
-.mode-opt.on .mode-dot {
-  opacity: 1;
-}
-.mode-opt.on[data-mode="llm"] {
-  color: var(--c-datasets);
-  border-color: rgba(29, 78, 216, 0.3);
-}
-.mode-opt.on[data-mode="rag"] {
-  color: var(--c-kb);
-  border-color: rgba(14, 116, 144, 0.3);
-}
-
 .content {
   flex: 1;
   overflow-y: auto;
@@ -902,13 +785,6 @@ async function submitChangePassword() {
   .topbar-title,
   .data-source-badge {
     display: none;
-  }
-  .mode-switch {
-    padding: 2px;
-  }
-  .mode-opt {
-    min-height: 26px;
-    padding: 2px 9px;
   }
   .topbar-actions {
     gap: 6px;
