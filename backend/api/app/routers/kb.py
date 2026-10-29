@@ -570,7 +570,10 @@ def _parse_gold_qa(content: bytes, filename: str = "") -> list[dict]:
                 }
             )
     elif suffix == ".json" or stripped.lstrip().startswith("["):
-        parsed = json.loads(stripped)
+        try:
+            parsed = json.loads(stripped)
+        except json.JSONDecodeError as exc:
+            raise AppError(ErrorCode.VALIDATION, "JSON 文件格式不正确") from exc
         if isinstance(parsed, list):
             for item in parsed:
                 if not isinstance(item, dict):

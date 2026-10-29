@@ -112,7 +112,7 @@ function initMermaid(api: MermaidApi, force = false): void {
         clusterBorder: '#1a5c48',
         edgeLabelBackground: '#0b1915',
       },
-      securityLevel: 'loose',
+      securityLevel: 'strict',
       fontFamily: '"Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif',
     })
   } else {
@@ -144,7 +144,7 @@ function initMermaid(api: MermaidApi, force = false): void {
         clusterBorder: '#a3c2b5',
         edgeLabelBackground: '#ffffff',
       },
-      securityLevel: 'loose',
+      securityLevel: 'strict',
       fontFamily: '"Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif',
     })
   }

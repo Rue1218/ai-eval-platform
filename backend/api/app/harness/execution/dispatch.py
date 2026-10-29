@@ -828,8 +828,12 @@ def edit_file_safe(
     target = _resolve_safe_path(path, sandbox_dir)
     if not os.path.isfile(target):
         raise AppError(ErrorCode.NOT_FOUND, "文件不存在")
-    with open(target, encoding="utf-8") as handle:
+    # 保留原换行风格：CRLF 文件按 LF 匹配与替换，写回时还原，避免整文件被改成 LF。
+    with open(target, encoding="utf-8", newline="") as handle:
         content = handle.read()
+    uses_crlf = "\r\n" in content
+    if uses_crlf:
+        content = content.replace("\r\n", "\n")
     matches = _count_occurrences(content, old)
     if matches == 0:
         raise AppError(
@@ -850,6 +854,8 @@ def edit_file_safe(
             },
         )
     replacement = content.replace(old, new) if replace_all else content.replace(old, new, 1)
+    if uses_crlf:
+        replacement = replacement.replace("\n", "\r\n")
     _ensure_write_size(replacement)
     # F5/G6：edit 净增容量检查（新文件字节 - 旧文件字节，负净增不额外占额）
     try:
@@ -860,7 +866,7 @@ def edit_file_safe(
     check_workspace_write_capacity(sandbox_dir, extra_bytes=extra)
     descriptor, temporary_path = tempfile.mkstemp(prefix=".agent-edit-", dir=os.path.dirname(target), text=True)
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as handle:
             handle.write(replacement)
             handle.flush()
             os.fsync(handle.fileno())

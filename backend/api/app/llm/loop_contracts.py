@@ -125,12 +125,15 @@ def classify_provider_error(error: Exception) -> LlmRequestError:
             "模型服务请求过于频繁，请稍后重试或降低并发",
             code="provider_rate_limit", retryable=True,
         )
-    elif status is not None and status >= 500:
+    elif (status is not None and status >= 500) or "overloaded" in terms:
         result = LlmRequestError(
             "模型服务暂时不可用，请稍后重试",
             code="provider_unavailable", retryable=True,
         )
-    elif isinstance(error, TimeoutError | ConnectionError | OSError) or type(error).__name__ in {"APIConnectionError", "APITimeoutError"}:
+    elif isinstance(error, TimeoutError | ConnectionError | OSError) or type(error).__name__ in {
+        "APIConnectionError", "APITimeoutError", "ConnectError", "ConnectTimeout", "ReadTimeout",
+        "WriteTimeout", "PoolTimeout", "ReadError", "WriteError", "RemoteProtocolError",
+    }:
         result = LlmRequestError(
             "模型服务连接失败，请稍后重试",
             code="provider_transport", retryable=True,

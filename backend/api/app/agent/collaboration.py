@@ -107,7 +107,8 @@ class CollaborationCoordinator:
         for item in experts:
             if item.get("deliverable_kind"):
                 item["submission_schema"] = preparation.submission_schema(item["deliverable_kind"])
-        return {"experts": experts, "count": len(experts), "max_instances": 8}
+        return {"experts": experts, "count": len(experts),
+                "max_instances": settings.agent_subagent_max_instances}
 
     def _ensure_collaboration(self, identity: dict[str, Any]) -> AgentCollaboration:
         """按会话+根回合幂等取得协作；目标仅保存主输入的安全展示文本。"""
@@ -208,7 +209,7 @@ class CollaborationCoordinator:
             count = db.query(AgentInstance).filter(
                 AgentInstance.collaboration_id == collaboration.id
             ).count()
-            if count >= 8:
+            if count >= settings.agent_subagent_max_instances:
                 raise AppError(ErrorCode.BUDGET_EXCEEDED, "协作专家实例额度已用尽")
             if not profile_id:
                 default_profile = db.get(Setting, "agent_profile_id")
@@ -283,11 +284,13 @@ class CollaborationCoordinator:
             # 同一主回合可分批调度，创建新运行时原子刷新当前成果汇总状态。
             collaboration.status = "running"
             collaboration.finished_at = None
+            # commit 使属性过期且 with 退出后实例 detach，先取标量再提交。
+            run_id = run.id
             db.commit()
         try:
             task = self.children.start(
                 lambda: self._run_child(
-                    run.id,
+                    run_id,
                     expert.expert_id,
                     str(profile_id),
                     arguments["goal"],
@@ -295,10 +298,10 @@ class CollaborationCoordinator:
                 )
             )
         except RuntimeError as exc:
-            self._mark_failed(run.id, "child_limit")
+            self._mark_failed(run_id, "child_limit")
             raise AppError(ErrorCode.BUDGET_EXCEEDED, "协作专家实例额度已用尽") from exc
-        self.tasks[run.id] = task
-        task.add_done_callback(lambda completed: self._settle_child(run.id, completed))
+        self.tasks[run_id] = task
+        task.add_done_callback(lambda completed: self._settle_child(run_id, completed))
         return result
 
     def _settle_child(self, run_id: str, task: asyncio.Task[Any]) -> None:
@@ -658,10 +661,11 @@ class CollaborationCoordinator:
             )).scalars())
             for run in runs:
                 run.cancel_requested = True
+            run_ids = [run.id for run in runs]
             db.commit()
-        for run in runs:
-            task = self.tasks.get(run.id)
+        for run_id in run_ids:
+            task = self.tasks.get(run_id)
             if task is not None and not task.done() and not task.cancelling():
                 task.cancel()
-        return {"collaboration_id": self.collaboration_id, "accepted": bool(runs),
-                "run_ids": [run.id for run in runs], "reason": reason[:500]}
+        return {"collaboration_id": self.collaboration_id, "accepted": bool(run_ids),
+                "run_ids": run_ids, "reason": reason[:500]}

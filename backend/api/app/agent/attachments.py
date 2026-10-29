@@ -23,6 +23,8 @@ MAX_TEXT_BYTES = 4 * 1024 * 1024
 MAX_TEXT_CHARS_PER_FILE = 12_000
 MAX_CONTEXT_CHARS = 32_000
 MAX_IMAGE_BYTES = 4 * 1024 * 1024
+# DOCX 正文 XML 解压后上限，防压缩炸弹拖垮 API 进程内存。
+MAX_DOCX_XML_BYTES = 32 * 1024 * 1024
 TEXT_SUFFIXES = {".md", ".txt", ".html", ".json", ".yaml", ".yml", ".csv", ".jsonl"}
 # 懒加载附件：所有可读文本 staging 进会话工作区，由模型用 read 工具按需读取。
 # 统一路径后，CSV/JSON/YAML 不再和 TXT/Markdown 走两套截断策略。
@@ -190,7 +192,10 @@ def _truncate(text: str, limit: int = MAX_TEXT_CHARS_PER_FILE) -> str:
 def _extract_docx(path: Path) -> str:
     """从 DOCX 的正文 XML 提取段落文本，不依赖 Office 进程。"""
     with zipfile.ZipFile(path) as archive:
-        xml = archive.read("word/document.xml")
+        with archive.open("word/document.xml") as member:
+            xml = member.read(MAX_DOCX_XML_BYTES + 1)
+    if len(xml) > MAX_DOCX_XML_BYTES:
+        raise ValueError("DOCX 正文解压后超过上限")
     root = ElementTree.fromstring(xml)
     lines: list[str] = []
     for paragraph in root.iter("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}p"):

@@ -504,7 +504,10 @@ def _read_stored_file_text(db: Session, file_id: str, user_id: str) -> str:
 
         lines: list[str] = []
         # 上传存储使用 .bin；通过字节流避免 openpyxl 按内部路径后缀拒绝合法工作簿。
-        wb = load_workbook(io.BytesIO(path.read_bytes()), read_only=True, data_only=True)
+        try:
+            wb = load_workbook(io.BytesIO(path.read_bytes()), read_only=True, data_only=True)
+        except (zipfile.BadZipFile, OSError, ValueError, KeyError) as exc:
+            raise AppError(ErrorCode.VALIDATION, "来源文档不是有效的 Excel 工作簿") from exc
         try:
             for sheet in wb.worksheets:
                 for row in sheet.iter_rows(values_only=True):

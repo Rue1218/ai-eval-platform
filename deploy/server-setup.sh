@@ -109,6 +109,7 @@ LIGHTRAG_PORT=9621
 STRESS_PORT=19090
 EOF
     chown "$DEPLOY_USER:$DEPLOY_USER" "$APP_DIR/.env"
+    chmod 600 "$APP_DIR/.env"
     echo "已生成 $APP_DIR/.env（请修改 BOOTSTRAP_ADMIN_PASSWORD）"
 else
     echo ".env 已存在，跳过"

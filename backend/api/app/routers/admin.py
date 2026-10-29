@@ -488,6 +488,14 @@ def get_rag_models(
     }
 
 
+def _url_origin(url: str | None) -> tuple[str, str]:
+    """取 URL 的 (scheme, netloc) 小写形式，用于判断是否换了出站目标。"""
+    from urllib.parse import urlsplit
+
+    parts = urlsplit((url or "").strip())
+    return parts.scheme.lower(), parts.netloc.lower()
+
+
 @router.put("/rag-models")
 def put_rag_models(
     body: RagModelsIn,
@@ -496,6 +504,19 @@ def put_rag_models(
     user: User = Depends(get_current_user),
 ):
     """更新系统全局唯一的 Embedding 与 Reranker 模型配置。"""
+    saved = read_global_rag_env()
+    for new_base, new_key, saved_base, saved_key in (
+        (body.embedding_base_url, body.embedding_api_key, saved.embedding_base_url, saved.embedding_api_key),
+        (body.reranker_base_url, body.reranker_api_key, saved.reranker_base_url, saved.reranker_api_key),
+    ):
+        # 更换端点域名却沿用旧密钥，会让平台密钥随探活/调用发往新地址，必须重新提交密钥。
+        if (
+            new_base is not None
+            and saved_key
+            and not (new_key or "").strip()
+            and _url_origin(new_base) != _url_origin(saved_base)
+        ):
+            raise AppError(ErrorCode.VALIDATION, "更换端点地址时必须同时重新填写 API Key")
     env_snapshot: ProfileEnvSnapshot | None = None
     try:
         env_snapshot = write_global_rag_env(

@@ -138,9 +138,10 @@ class Session(Base):
         Index("ix_sessions_visibility_deleted_at", "visibility", "deleted_at"),
         # 审批卡 TTL 扫描只关心「仍有待确认卡」的会话：部分索引把每轮全表扫描
         # 收敛为索引扫描，会话表增长后不会线性拖慢后台收尸循环。
+        # 索引键用主键而非 JSONB 值本身：确认卡含完整 TaskSpec，可能远超 btree 单行 2704 字节上限。
         Index(
             "ix_sessions_pending_confirm",
-            "pending_confirm",
+            "id",
             postgresql_where=text("pending_confirm IS NOT NULL"),
         ),
     )
@@ -161,7 +162,8 @@ class Session(Base):
     # 软删除仅隐藏会话入口，消息、事件、任务和报告仍保留供审计回溯。
     deleted_at = Column(DateTime(timezone=True), nullable=True, index=True)
     # 当前未 ack 的确认卡（TaskSpec）；刷新回放优先读此列，禁止只靠进程内字典
-    pending_confirm = Column(JSONB, nullable=True)
+    # none_as_null：ORM 置 None 写入 SQL NULL 而非 JSON null，IS NULL 判定与部分索引才正确。
+    pending_confirm = Column(JSONB(none_as_null=True), nullable=True)
     # 确认卡属于提出该卡的成员，团队协作者不能替其确认、拒绝或覆盖。
     pending_confirm_author_id = Column(String, ForeignKey("users.id"), nullable=True)
     # dsh 借鉴 D7/F1：工作区绑定（数据域归属）。首条消息发送落库时固化、运行期

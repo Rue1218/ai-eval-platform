@@ -130,11 +130,25 @@ function readMockExpertPrompt(expertId: string): AgentExpertPromptDocument {
   return { expert_id: expertId, name: '测试用例设计专家', content, builtin_content: content, revision: '0000000000000000', overridden: false }
 }
 
+// 会话过期（Cookie 失效/账号停用/改密）后统一回登录页，避免页面卡死、WS 无限重连。
+const SESSION_EXEMPT_URLS = new Set(['/api/auth/login', '/api/auth/logout', '/api/auth/me', '/api/auth/change-password'])
+let sessionExpiredRedirecting = false
+function handleSessionExpired(url: string) {
+  if (sessionExpiredRedirecting || SESSION_EXEMPT_URLS.has(url)) return
+  const { pathname, search } = window.location
+  if (pathname.startsWith('/login')) return
+  // 免登分享报告页的 401 只代表令牌无效，不应被踢去登录。
+  if (pathname.startsWith('/reports/') && new URLSearchParams(search).has('share')) return
+  sessionExpiredRedirecting = true
+  window.location.assign('/login')
+}
+
 http.interceptors.response.use(
   (res) => res,
   (err: any) => {
     if (err.response) {
       const status = err.response.status
+      if (status === 401) handleSessionExpired(String(err.config?.url || ''))
       const data = err.response.data || {}
       const code: ErrorCode = data.code || (status === 401 ? ErrorCode.UNAUTHORIZED : status === 404 ? ErrorCode.NOT_FOUND : ErrorCode.INTERNAL)
       const message = data.message || ERROR_MESSAGES[code] || `请求失败 (${status})`
@@ -179,6 +193,11 @@ const mockStore = {
  * 获取报告详情。默认返回 JSON 对象；传 fmt='md' 时走服务端导出（GET /api/reports/{id}?fmt=md），
  * 返回 Markdown 纯文本，供前端直接生成 Blob 下载。Mock 模式下由本地夹具拼接等价文本。
  */
+/** 免登分享链接：从当前地址取 share 令牌，随报告请求交给后端校验。 */
+function currentShareToken(): string | undefined {
+  try { return new URLSearchParams(window.location.search).get('share') || undefined } catch { return undefined }
+}
+
 async function reportsGet(id: string): Promise<Report>
 async function reportsGet(id: string, fmt: 'md'): Promise<string>
 async function reportsGet(id: string, fmt?: 'md'): Promise<Report | string> {
@@ -188,11 +207,11 @@ async function reportsGet(id: string, fmt?: 'md'): Promise<Report | string> {
   }
   if (fmt === 'md') {
     // responseType: 'text' 避免 axios 按 JSON 解析 Markdown 文本
-    const { data } = await http.get(`/api/reports/${id}`, { params: { fmt: 'md' }, responseType: 'text' })
+    const { data } = await http.get(`/api/reports/${id}`, { params: { fmt: 'md', share: currentShareToken() }, responseType: 'text' })
     return data
   }
   // 实时模式不作 Mock 顶替（API.md §12.3：无报告时显示空/错误态）；报告不存在由页面展示错误态
-  const { data } = await http.get(`/api/reports/${id}`)
+  const { data } = await http.get(`/api/reports/${id}`, { params: { share: currentShareToken() } })
   return data
 }
 
@@ -1165,7 +1184,7 @@ export const api = {
     // 逐题样本比对（模型对比页用）：按行聚合各 profile 预测
     async samples(id: string, params: { filter?: 'all' | 'diff' | 'fail'; offset?: number; limit?: number } = {}): Promise<{ items: CompareSampleRow[]; total: number }> {
       if (getDataMode() === 'mock') return { items: [], total: 0 }
-      const { data } = await http.get(`/api/reports/${id}/samples`, { params })
+      const { data } = await http.get(`/api/reports/${id}/samples`, { params: { ...params, share: currentShareToken() } })
       return data
     },
   },

@@ -58,6 +58,12 @@ def create_user(
         must_change_password=False,
     )
     db.add(member)
+    try:
+        # 先 flush 取得主键，审计 target_id 才不会为空。
+        db.flush()
+    except IntegrityError:
+        db.rollback()
+        raise AppError(ErrorCode.VALIDATION, "用户名或邮箱已存在") from None
     db.add(
         AuditLog(
             user_id=user.id,

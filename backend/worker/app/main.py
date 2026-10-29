@@ -131,6 +131,11 @@ def _run_task(task_id: str) -> None:
             task_id=task.id,
         )
     except Exception as exc:
+        # rollback 会令 ORM 属性过期；先取标量，避免数据库仍不可用时再次触发刷新异常。
+        try:
+            failed_session_id = task.session_id if task is not None else None
+        except Exception:
+            failed_session_id = None
         db.rollback()
         # 详细堆栈只进服务端日志;给浏览器/事件流的失败原因仅透出异常类名辅助定位
         logger.exception("task %s execution error", task_id)
@@ -156,7 +161,7 @@ def _run_task(task_id: str) -> None:
             db.rollback()
             logger.exception("task %s failed-status persist error", task_id)
         push_ws(
-            task.session_id if task is not None else None,
+            failed_session_id,
             "error",
             {"code": "INTERNAL", "message": f"执行失败({type(exc).__name__})"},
             task_id=task_id,
@@ -188,7 +193,7 @@ def _expire_stale_case_confirmations(db) -> int:
     if not stale:
         return 0
     expired_count = 0
-    notifications: list[tuple[str, str | None]] = []
+    notifications: list[tuple[str, str | None, str]] = []
     for case_set in stale:
         # 与 API 确认/废弃共享 CaseSet → Task 锁序，锁内复核截止时间及状态。
         if case_set.status != "generated" or not lease_expired(case_set.expires_at, now):
@@ -216,15 +221,15 @@ def _expire_stale_case_confirmations(db) -> int:
                     payload={"case_set_id": case_set.id},
                 )
             )
-            notifications.append((task.id, task.session_id))
+            notifications.append((task.id, task.session_id, task.kind))
     db.commit()
     # 只通知本次确实取消的任务，避免把已经成功的任务广播为超时。
-    for task_id, session_id in notifications:
+    for task_id, session_id, kind in notifications:
         if session_id:
             push_ws(
                 session_id,
-                "progress",
-                {"percent": 100, "done": 1, "total": 1, "message": "用例确认超时，任务已自动取消"},
+                "task_cancelled",
+                {"status": "cancelled", "kind": kind, "message": "用例确认超时，任务已自动取消"},
                 task_id=task_id,
             )
     logger.info("expired %d stale case set(s)", expired_count)
@@ -274,11 +279,18 @@ def loop() -> None:
             import_id, lease_token = import_claim
             logger.info("开始执行 dataset import=%s", import_id)
             print(f"[worker] dataset-import start import={import_id}", flush=True)
-            run_dataset_import(import_id, lease_token)
+            try:
+                run_dataset_import(import_id, lease_token)
+            except Exception:
+                # 数据库故障等异常不得带崩主循环；租约到期后由回收逻辑兜底。
+                logger.exception("dataset import %s crashed", import_id)
         elif task_id:
-            with task_lease_heartbeat(task_id, worker_id) as active:
-                if active:
-                    _run_task(task_id)
+            try:
+                with task_lease_heartbeat(task_id, worker_id) as active:
+                    if active:
+                        _run_task(task_id)
+            except Exception:
+                logger.exception("task %s crashed outside executor", task_id)
         # 72h 超时扫描：节流执行，避免每秒全表扫（表量级小，代价可忽略）
         if time.monotonic() - last_expire_scan >= EXPIRE_SCAN_INTERVAL_S:
             last_expire_scan = time.monotonic()

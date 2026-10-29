@@ -274,6 +274,8 @@ def delete_dataset(
     dataset = _get_dataset_or_404(db, dataset_id)
     if dataset.active_version_id:
         raise AppError(ErrorCode.VALIDATION, "含已发布版本的数据集不可直接删除")
+    if db.query(DatasetImport.id).filter(DatasetImport.dataset_id == dataset_id).first():
+        raise AppError(ErrorCode.VALIDATION, "数据集存在导入作业记录，不可直接删除")
     db.query(DatasetRow).filter(DatasetRow.dataset_id == dataset_id).delete(synchronize_session=False)
     db.delete(dataset)
     db.add(
