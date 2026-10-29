@@ -327,8 +327,10 @@ def _auto_fill_session_titles(db: Session, rows: list[AgentSession]) -> None:
     if changed:
         try:
             db.commit()
-        except Exception:
+        except Exception as exc:
             db.rollback()
+            # 标题回填是旁路增强：失败不能让列表接口报错，但必须留下可诊断痕迹。
+            agent_trace(f"会话标题回填失败 type={type(exc).__name__}")
 
 
 @router.get("")

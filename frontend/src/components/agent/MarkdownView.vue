@@ -19,9 +19,34 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
-import mermaid from 'mermaid'
 import StructuredDataView from './StructuredDataView.vue'
 import { copyText } from '../../utils/clipboard'
+
+type MermaidApi = typeof import('mermaid')['default']
+
+let mermaidApi: MermaidApi | null = null
+let mermaidLoadPromise: Promise<MermaidApi> | null = null
+
+/**
+ * 按需加载 Mermaid（约 1MB gzip）。仅当正文里实际出现 ```mermaid 代码块时才下载，
+ * 避免所有打开会话页的用户为「可能永远不会出现」的图表支付首屏体积。
+ */
+function loadMermaid(): Promise<MermaidApi> {
+  if (mermaidApi) return Promise.resolve(mermaidApi)
+  if (!mermaidLoadPromise) {
+    mermaidLoadPromise = import('mermaid')
+      .then((mod) => {
+        mermaidApi = mod.default
+        return mermaidApi
+      })
+      .catch((err: unknown) => {
+        // 加载失败不缓存失败态，下次渲染可重试
+        mermaidLoadPromise = null
+        throw err
+      })
+  }
+  return mermaidLoadPromise
+}
 
 const props = withDefaults(
   defineProps<{
@@ -53,13 +78,13 @@ function isDarkTheme(): boolean {
 /**
  * 初始化 Mermaid 主题配置（适配平台浅色薄荷绿/深色深空蓝主题体系）
  */
-function initMermaid(force = false): void {
+function initMermaid(api: MermaidApi, force = false): void {
   const isDark = isDarkTheme()
   const targetTheme = isDark ? 'dark' : 'light'
   if (!force && currentMermaidTheme === targetTheme) return
 
   if (isDark) {
-    mermaid.initialize({
+    api.initialize({
       startOnLoad: false,
       theme: 'dark',
       themeVariables: {
@@ -91,7 +116,7 @@ function initMermaid(force = false): void {
       fontFamily: '"Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif',
     })
   } else {
-    mermaid.initialize({
+    api.initialize({
       startOnLoad: false,
       theme: 'base',
       themeVariables: {
@@ -130,9 +155,10 @@ function initMermaid(force = false): void {
  * 异步渲染单个 Mermaid 结构图为 SVG
  */
 async function renderMermaidSvg(id: string, code: string): Promise<string> {
-  initMermaid()
+  const api = await loadMermaid()
+  initMermaid(api)
   try {
-    const { svg } = await mermaid.render(id, code)
+    const { svg } = await api.render(id, code)
     return svg
   } catch (err) {
     // 移除 Mermaid 渲染失败时可能挂载到 document.body 上的残留错误 DOM 节点
@@ -152,6 +178,7 @@ async function renderAllMermaidDiagrams(): Promise<void> {
   if (!containerRef.value) return
 
   const cards = containerRef.value.querySelectorAll<HTMLElement>('.md-mermaid-card[data-mermaid-code]')
+  if (!cards.length) return
   for (const card of Array.from(cards)) {
     const encodedCode = card.getAttribute('data-mermaid-code')
     const chartView = card.querySelector<HTMLElement>('.md-mermaid-view-chart')
@@ -619,7 +646,8 @@ onMounted(() => {
     themeObserver = new MutationObserver((mutations) => {
       for (const m of mutations) {
         if (m.type === 'attributes' && m.attributeName === 'data-theme') {
-          initMermaid(true)
+          // 主题变更后下次渲染需重新 initialize；无图表时不做任何 Mermaid 加载
+          currentMermaidTheme = null
           if (containerRef.value) {
             const cards = containerRef.value.querySelectorAll<HTMLElement>('.md-mermaid-card[data-mermaid-code]')
             cards.forEach((card) => card.removeAttribute('data-rendered-code'))

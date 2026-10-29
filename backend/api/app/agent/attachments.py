@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from ..errors import AppError, ErrorCode
 from ..models import Message, StoredFile
+from .log import agent_trace
 
 # 附件解析只在 Agent 短回合内执行，必须设置硬上限，避免大文件阻塞 API 进程。
 MAX_TEXT_BYTES = 4 * 1024 * 1024
@@ -253,7 +254,9 @@ def _extract_document(stored: StoredFile) -> str:
             return _extract_docx(path)
         if suffix == ".xlsx":
             return _extract_xlsx(path)
-    except Exception:
+    except Exception as exc:
+        # 降级文案对用户友好，但服务端必须留痕才能定位具体格式的解析缺陷。
+        agent_trace(f"附件正文解析失败 type={type(exc).__name__} suffix={suffix}")
         return "（该附件正文解析失败，请通过前端预览或下载查看。）"
     if suffix in {".doc", ".xls"}:
         return "（旧版 Office 格式暂不支持服务端正文提取，请通过前端打开或下载查看。）"

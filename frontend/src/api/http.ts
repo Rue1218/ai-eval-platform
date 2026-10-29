@@ -290,9 +290,13 @@ export const api = {
       const { data } = await http.post('/api/users', payload)
       return data
     },
-    async resetPassword(id: string, password: string): Promise<void> {
+    async resetPassword(id: string, password: string, currentPassword?: string): Promise<void> {
       if (getDataMode() === 'mock') return
-      await http.post(`/api/users/${id}/reset-password`, { password })
+      // 重置他人密码时后端要求重新验证请求者本人密码（同权模型下的二次确认）
+      await http.post(`/api/users/${id}/reset-password`, {
+        password,
+        current_password: currentPassword || undefined,
+      })
     },
     async toggleStatus(id: string, disabled: boolean): Promise<void> {
       if (getDataMode() === 'mock') {

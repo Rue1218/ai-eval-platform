@@ -6,6 +6,7 @@
 写操作均落 AuditLog；检索经 ``shared.kb`` 完成（LightRAG 优先，本地关键词兜底）。
 """
 
+import asyncio
 import csv
 import io
 import json
@@ -271,11 +272,12 @@ async def upload_doc(
 
     doc_id = uuid_str()
     storage_dir = Path(settings.data_dir) / "kb" / kb_id
-    storage_dir.mkdir(parents=True, exist_ok=True)
     storage_path = storage_dir / doc_id
-    storage_path.write_bytes(content)
-
-    text = _decode_text(content)
+    # 20MB 上限的落盘与解码都在线程池执行：同步 IO/CPU 留在事件循环里会阻塞
+    # 同进程的所有 WS 与 REST 请求（上传高峰表现为整站卡顿）。
+    await asyncio.to_thread(storage_dir.mkdir, parents=True, exist_ok=True)
+    await asyncio.to_thread(storage_path.write_bytes, content)
+    text = await asyncio.to_thread(_decode_text, content)
     doc = KbDocument(
         id=doc_id,
         kb_id=kb_id,

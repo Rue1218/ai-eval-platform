@@ -16,6 +16,15 @@
           placeholder="至少 8 位，包含字母与数字"
         />
       </div>
+      <div v-if="!isSelf" class="field">
+        <label class="field-label">你的登录密码 <span class="req">*</span></label>
+        <n-input
+          v-model:value="currentPassword"
+          type="password"
+          show-password-on="click"
+          placeholder="重置他人密码需确认你的身份"
+        />
+      </div>
     </div>
 
     <template #footer>
@@ -28,10 +37,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useMessage } from 'naive-ui'
 import { api } from '../../api/http'
 import type { AuthUser } from '../../api/types'
+import { useAuthStore } from '../../stores/auth'
 
 const props = defineProps<{
   show: boolean
@@ -44,13 +54,21 @@ const emit = defineEmits<{
 }>()
 
 const message = useMessage()
+const auth = useAuthStore()
 const saving = ref(false)
 const password = ref('')
+const currentPassword = ref('')
+
+// 重置本人密码无需二次确认；重置他人密码需先验证操作者身份
+const isSelf = computed(() => !!props.user && props.user.id === auth.user?.id)
 
 watch(
   () => props.show,
   (val) => {
-    if (val) password.value = ''
+    if (val) {
+      password.value = ''
+      currentPassword.value = ''
+    }
   },
 )
 
@@ -60,10 +78,18 @@ async function handleReset() {
     message.warning('新密码长度不能少于 8 位')
     return
   }
+  if (!isSelf.value && !currentPassword.value) {
+    message.warning('重置他人密码需输入你本人的登录密码')
+    return
+  }
 
   saving.value = true
   try {
-    await api.users.resetPassword(props.user.id, password.value)
+    await api.users.resetPassword(
+      props.user.id,
+      password.value,
+      isSelf.value ? undefined : currentPassword.value,
+    )
     message.success('密码已重置')
     emit('update:show', false)
     emit('success')

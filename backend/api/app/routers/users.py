@@ -13,7 +13,7 @@ from ..deps import get_current_user
 from ..errors import AppError, ErrorCode
 from ..models import AuditLog, Task, User
 from ..schemas import ResetPasswordRequest, UserCreate, UserOut, UserStatusUpdate, UserUpdate
-from ..security import hash_password
+from ..security import hash_password, verify_password
 from ._common import client_ip
 
 router = APIRouter(prefix="/api/users", tags=["users"])
@@ -276,6 +276,16 @@ def reset_password(
     member = db.query(User).filter(User.id == user_id).first()
     if not member:
         raise AppError(ErrorCode.NOT_FOUND, "成员不存在")
+    is_self = member.id == user.id
+    if not is_self:
+        # 全员同权下没有角色可作授权依据：接管他人账号前要求重新验证请求者
+        # 本人密码，防止仅凭一个未过期会话即可改密并把对方踢下线。
+        if not body.current_password or not verify_password(
+            body.current_password, user.password_hash
+        ):
+            raise AppError(
+                ErrorCode.VALIDATION, "重置他人密码需输入你本人的登录密码确认"
+            )
     member.password_hash = hash_password(body.password)
     member.auth_version += 1
     db.add(
@@ -284,7 +294,7 @@ def reset_password(
             action="password_reset",
             target_type="user",
             target_id=member.id,
-            detail={},
+            detail={"self": is_self},
             ip=client_ip(request),
         )
     )

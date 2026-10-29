@@ -136,6 +136,13 @@ class Session(Base):
             "visibility IN ('private', 'team')", name="ck_sessions_visibility"
         ),
         Index("ix_sessions_visibility_deleted_at", "visibility", "deleted_at"),
+        # 审批卡 TTL 扫描只关心「仍有待确认卡」的会话：部分索引把每轮全表扫描
+        # 收敛为索引扫描，会话表增长后不会线性拖慢后台收尸循环。
+        Index(
+            "ix_sessions_pending_confirm",
+            "pending_confirm",
+            postgresql_where=text("pending_confirm IS NOT NULL"),
+        ),
     )
 
     id = Column(String, primary_key=True, default=uuid_str)

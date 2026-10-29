@@ -377,6 +377,7 @@ class LoopService:
                 if not session_row or (session_row.title and session_row.title != "新会话"):
                     return
         except Exception:
+            logger.warning("会话标题生成前置查询失败 session=%s", session_id, exc_info=True)
             return
 
         _TITLE_GENERATING.add(session_id)
