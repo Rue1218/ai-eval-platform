@@ -100,6 +100,15 @@ def update_media_config(
             _validate_media_compatible_url(next_url)
         except ValueError as exc:
             raise AppError(ErrorCode.VALIDATION, "媒体兼容模式地址非法") from exc
+    new_api_key = str(values.get("api_key") or "").strip()
+    if (
+        next_url
+        and current.has_api_key
+        and not new_api_key
+        and urlsplit(next_url).netloc.lower() != urlsplit(current.compatible_base_url or "").netloc.lower()
+    ):
+        # 更换上游域名却沿用旧密钥，会把平台密钥发往新地址，必须同时重新提交密钥。
+        raise AppError(ErrorCode.VALIDATION, "更换媒体兼容模式地址时必须同时重新填写 API Key")
     if next_enabled and (not next_url or not (current.has_api_key or values.get("api_key"))):
         raise AppError(ErrorCode.VALIDATION, "启用媒体 MCP 前必须配置兼容模式地址和 API Key")
     snapshot = None

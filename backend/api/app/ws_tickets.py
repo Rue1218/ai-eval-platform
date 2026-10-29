@@ -56,13 +56,15 @@ def _redis_consume(jti: str, ttl_seconds: int) -> bool | None:
     except Exception:
         return None
     try:
-        client = redis.Redis.from_url(
+        # 每次校验都是短生命周期的独立连接池，用上下文管理器确保连接被回收，
+        # 避免重连高峰时句柄随连接池累积。
+        with redis.Redis.from_url(
             settings.redis_url,
             socket_connect_timeout=0.4,
             socket_timeout=0.4,
             decode_responses=True,
-        )
-        ok = client.set(f"{_KEY_PREFIX}{jti}", "1", nx=True, ex=max(1, int(ttl_seconds)))
+        ) as client:
+            ok = client.set(f"{_KEY_PREFIX}{jti}", "1", nx=True, ex=max(1, int(ttl_seconds)))
         return bool(ok)
     except Exception as exc:
         agent_trace(f"WS 短票 Redis 不可用 type={type(exc).__name__}，回退进程内存")

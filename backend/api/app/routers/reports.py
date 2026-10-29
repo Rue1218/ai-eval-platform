@@ -228,7 +228,7 @@ def get_report(
         # 免登分享通道：token 匹配且未过期才放行只读详情
         token_valid = (
             report.share_token
-            and secrets.compare_digest(report.share_token, share or "")
+            and secrets.compare_digest(report.share_token.encode(), (share or "").encode())
             and report.share_expire_at
             and report.share_expire_at > datetime.now(UTC)
         )
@@ -280,7 +280,7 @@ def report_samples(
     for row_no, predictions in grouped.items():
         scores = [p.score for p in predictions if p.score is not None]
         # 差异行：各 profile 得分不全一致，或部分成功部分失败
-        diff = len({round(s, 6) for s in scores}) > 1 or (
+        diff = len({round(s, 6) for s in scores}) > 1 or bool(
             any(p.error for p in predictions) and scores
         )
         has_fail = any(p.error for p in predictions) or (scores and all(s == 0 for s in scores))

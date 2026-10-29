@@ -36,20 +36,33 @@ export default defineConfig(({ mode }) => {
     // 拆分后业务代码改动不会使其缓存失效，显著改善构建产物缓存命中率
     rollupOptions: {
       output: {
-        manualChunks(id) {
-          if (id.includes('node_modules')) {
-            if (id.includes('mermaid') || id.includes('cytoscape') || id.includes('dagre') || id.includes('d3-')) {
-              return 'vendor-mermaid'
-            }
-            if (id.includes('echarts') || id.includes('zrender')) {
-              return 'vendor-echarts'
-            }
-            if (id.includes('katex')) {
-              return 'vendor-katex'
-            }
-            if (id.includes('naive-ui')) {
-              return 'vendor-naive'
-            }
+        manualChunks(rawId) {
+          const id = rawId.replace(/\\/g, '/')
+          if (!id.includes('/node_modules/')) {
+            // Vite 动态导入预加载 helper（虚拟模块 \0vite/preload-helper.js）必须
+            // 单独成块：否则 Rollup 会把它并入唯一动态导入目标 vendor-mermaid，
+            // 使所有含动态导入的页面反向静态引用 3.5MB 的 mermaid 块。
+            if (id.includes('vite/preload-helper')) return 'vendor-vite'
+            return
+          }
+          // 精确匹配包目录，避免 `d3-`/`mermaid` 这类宽泛子串误吞无关模块
+          if (
+            id.includes('/node_modules/mermaid/') ||
+            id.includes('/node_modules/@mermaid-js/') ||
+            id.includes('/node_modules/cytoscape/') ||
+            id.includes('/node_modules/dagre/') ||
+            /\/node_modules\/d3-[^/]+\//.test(id)
+          ) {
+            return 'vendor-mermaid'
+          }
+          if (id.includes('/node_modules/echarts/') || id.includes('/node_modules/zrender/')) {
+            return 'vendor-echarts'
+          }
+          if (id.includes('/node_modules/katex/')) {
+            return 'vendor-katex'
+          }
+          if (id.includes('/node_modules/naive-ui/')) {
+            return 'vendor-naive'
           }
         },
       },

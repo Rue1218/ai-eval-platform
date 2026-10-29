@@ -16,12 +16,15 @@ from sqlalchemy.orm import Session
 
 from ..errors import AppError, ErrorCode
 from ..models import Message, StoredFile
+from .log import agent_trace
 
 # 附件解析只在 Agent 短回合内执行，必须设置硬上限，避免大文件阻塞 API 进程。
 MAX_TEXT_BYTES = 4 * 1024 * 1024
 MAX_TEXT_CHARS_PER_FILE = 12_000
 MAX_CONTEXT_CHARS = 32_000
 MAX_IMAGE_BYTES = 4 * 1024 * 1024
+# DOCX 正文 XML 解压后上限，防压缩炸弹拖垮 API 进程内存。
+MAX_DOCX_XML_BYTES = 32 * 1024 * 1024
 TEXT_SUFFIXES = {".md", ".txt", ".html", ".json", ".yaml", ".yml", ".csv", ".jsonl"}
 # 懒加载附件：所有可读文本 staging 进会话工作区，由模型用 read 工具按需读取。
 # 统一路径后，CSV/JSON/YAML 不再和 TXT/Markdown 走两套截断策略。
@@ -189,7 +192,10 @@ def _truncate(text: str, limit: int = MAX_TEXT_CHARS_PER_FILE) -> str:
 def _extract_docx(path: Path) -> str:
     """从 DOCX 的正文 XML 提取段落文本，不依赖 Office 进程。"""
     with zipfile.ZipFile(path) as archive:
-        xml = archive.read("word/document.xml")
+        with archive.open("word/document.xml") as member:
+            xml = member.read(MAX_DOCX_XML_BYTES + 1)
+    if len(xml) > MAX_DOCX_XML_BYTES:
+        raise ValueError("DOCX 正文解压后超过上限")
     root = ElementTree.fromstring(xml)
     lines: list[str] = []
     for paragraph in root.iter("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}p"):
@@ -253,7 +259,9 @@ def _extract_document(stored: StoredFile) -> str:
             return _extract_docx(path)
         if suffix == ".xlsx":
             return _extract_xlsx(path)
-    except Exception:
+    except Exception as exc:
+        # 降级文案对用户友好，但服务端必须留痕才能定位具体格式的解析缺陷。
+        agent_trace(f"附件正文解析失败 type={type(exc).__name__} suffix={suffix}")
         return "（该附件正文解析失败，请通过前端预览或下载查看。）"
     if suffix in {".doc", ".xls"}:
         return "（旧版 Office 格式暂不支持服务端正文提取，请通过前端打开或下载查看。）"

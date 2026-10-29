@@ -149,6 +149,8 @@ cleanup() {
   iptables -D FORWARD -s "$host_ip/30" -d 192.168.0.0/16 -j DROP 2>/dev/null || true
   iptables -D FORWARD -s "$host_ip/30" -d 172.16.0.0/12 -j DROP 2>/dev/null || true
   iptables -D FORWARD -s "$host_ip/30" -d 10.0.0.0/8 -j DROP 2>/dev/null || true
+  iptables -D FORWARD -s "$host_ip/30" -d 169.254.0.0/16 -j DROP 2>/dev/null || true
+  iptables -D FORWARD -s "$host_ip/30" -d 100.64.0.0/10 -j DROP 2>/dev/null || true
   iptables -D INPUT -s "$host_ip/30" -j DROP 2>/dev/null || true
 }
 trap cleanup EXIT
@@ -166,6 +168,8 @@ iptables -I FORWARD 1 -s "$host_ip/30" -j ACCEPT
 iptables -I FORWARD 1 -s "$host_ip/30" -d 192.168.0.0/16 -j DROP
 iptables -I FORWARD 1 -s "$host_ip/30" -d 172.16.0.0/12 -j DROP
 iptables -I FORWARD 1 -s "$host_ip/30" -d 10.0.0.0/8 -j DROP
+iptables -I FORWARD 1 -s "$host_ip/30" -d 169.254.0.0/16 -j DROP
+iptables -I FORWARD 1 -s "$host_ip/30" -d 100.64.0.0/10 -j DROP
 iptables -I INPUT 1 -s "$host_ip/30" -j DROP
 printf 'nameserver 223.5.5.5\nnameserver 119.29.29.29\n' > "$resolv"
 ip netns exec "$ns" unshare --mount --pid --fork --mount-proc bash -c '
@@ -290,7 +294,8 @@ def run_sandboxed(
         if stdout is None:
             return
         try:
-            for chunk in iter(stdout.readline, ""):
+            # 限定单次读取长度：无换行的超大输出不会在读线程内累积成巨型字符串。
+            for chunk in iter(lambda: stdout.readline(65536), ""):
                 remaining = max_output_chars - output_chars
                 if remaining <= 0:
                     continue

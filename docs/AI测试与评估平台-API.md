@@ -6,8 +6,8 @@
 
 | 项目 | 内容 |
 | --- | --- |
-| 文档版本 | V2.37 |
-| 本轮审查日期 | 2026-09-28（用例生成与审核工作台重构） |
+| 文档版本 | V2.38 |
+| 本轮审查日期 | 2026-10-29（安全加固：RAG 探活密钥外发与重置密码二次确认） |
 | WS v2 修订日期 | 2026-09-26（§4A，摘要安全用量元数据与 v2.3 目录） |
 | 对应 PRD | V1.55（功能唯一权威） |
 | 对应设计规范 | V1.12（错误码文案、确认卡字段名、调度中心规范） |
@@ -372,8 +372,11 @@ V1.84 起不再强制首次改密：登录成功直接进入系统，改密走�
 
 重置指定成员的登录密码（写入安全审计日志）。
 
+- 重置**本人**密码：仅需 `password`；
+- 重置**他人**密码：必须额外提供请求者本人的 `current_password`，缺失或校验失败返回 `VALIDATION`。全员同权模型下没有角色可作授权依据，以此作为接管他人账号前的二次确认；审计 `detail.self` 标记是否为本人操作。
+
 ```json
-{ "password": "********" }
+{ "password": "********", "current_password": "仅重置他人时必填" }
 ```
 
 #### `GET /api/users/{id}/audit-logs`
@@ -3890,3 +3893,17 @@ Excel 导入在本批缓存已写入但尚未 flush 的用例，重复编号按�
 - `backend/api/app/harness/execution/registry.py`、`harness/orchestration/{confirm,confirm_spec}.py`、`agent/workflow_nodes.py`、`agent/expert_prompts/testcase_agent.md`、`harness/skills/files/skill-testcase/SKILL.md`、`backend/worker/app/testcase.py`：Agent 可见参数、确认卡与 Workflow 透传及 Worker 按任务快照和输出预算生成。
 - `frontend/src/views/Cases.vue`、`frontend/src/api/http.ts`：候选审核、来源文档、六策略百分比配置、草稿采纳、完整编辑及自检展示。
 - 对应 API、Worker 与前端测试：验证失败无副作用、策略与数量传递、保存冲突和人工审核流程。
+
+## V2.38 安全加固：RAG 探活密钥外发与重置密码二次确认（2026-10-29）
+
+- `POST /api/admin/rag-models/check` 只有在目标与已保存配置**同源**时才复用平台 Embedding/Reranker 密钥；请求方临时指定的其它地址不再携带平台密钥（需显式传 `api_key`）。临时目标与配置不同源时出站前做内网/回环校验（失败返回 `VALIDATION`），已保存配置按可信目标处理以兼容自建内网服务。
+- 探活失败只返回上游状态码，不再回显上游响应正文（原实现回显前 120 字符，可能带出内部错误页或回显的请求头信息）。
+- `POST /api/users/{id}/reset-password` 新增可选 `current_password`：重置他人密码时必须提供请求者本人的登录密码，缺失或校验失败返回 `VALIDATION`；重置本人仍只需 `password`。审计 `detail.self` 标记本人/他人操作。全员同权模型不变，该字段是接管他人账号前的二次确认，不替代角色隔离。
+- 接口路径、其它字段与状态码均不变；前端 `ResetPasswordModal` 在重置他人时展示「你的登录密码」输入框。
+
+### 修改代码文件与作用清单
+
+- `backend/api/app/routers/admin.py`：探活目标的同源密钥复用、SSRF 前置校验、失败响应脱敏。
+- `backend/api/app/routers/users.py`、`backend/api/app/schemas.py`：重置他人密码的本人密码二次确认与审计标记。
+- `frontend/src/api/http.ts`、`frontend/src/components/modals/ResetPasswordModal.vue`：透传 `current_password`，重置他人时要求输入。
+- `backend/api/tests/test_security_hardening.py`：覆盖密钥不外发、同源复用、内网拒绝、失败脱敏、非 http(s) 拒绝及重置密码四种分支。

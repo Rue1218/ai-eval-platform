@@ -403,6 +403,10 @@ def _fetch_direct(
         with opener.open(request, timeout=timeout_s) as response:  # noqa: S310 - 已在入口/重定向校验
             content_type = response.headers.get_content_type()
             charset = response.headers.get_content_charset() or "utf-8"
+            try:
+                codecs.lookup(charset)
+            except LookupError:
+                charset = "utf-8"
             if not (
                 content_type.startswith("text/")
                 or content_type in {"application/json", "application/xml"}

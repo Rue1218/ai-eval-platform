@@ -463,12 +463,13 @@
       style="width: 480px; max-width: calc(100vw - 32px);"
     >
       <div class="dialog-content-body">
-        <p class="dialog-p">本平台为内部用例生成系统，初始环境已内置以下演示账号（全员同权）：</p>
+        <!-- 演示账号与明文密码仅开发环境展示，生产环境不向未登录访客暴露。 -->
+        <template v-if="isDev">
+        <p class="dialog-p">本平台为内部用例生成系统，开发环境已内置以下演示账号（全员同权）：</p>
         <div class="account-pill-list">
           <div class="account-pill">
             <span class="pill-name">admin</span>
             <span class="pill-pwd">admin123</span>
-            <span class="pill-tag">首登改密</span>
           </div>
           <div class="account-pill">
             <span class="pill-name">alice</span>
@@ -483,6 +484,7 @@
             <span class="pill-pwd">Boss1234</span>
           </div>
         </div>
+        </template>
         <p class="dialog-sub-tip">如您已修改过个人密码并遗忘，请联系系统管理员或通过团队内部审批流申请重置。</p>
       </div>
       <template #footer>
@@ -541,8 +543,10 @@ const buildTag = buildTimeLabel ? `${buildCommit.slice(0, 8)} · ${buildTimeLabe
 const buildTooltip = `前端构建\n版本：${buildCommit}\n构建时间：${buildTimeLabel || '未知'}（北京时间）`
 
 /** 表单输入数据 */
-const username = ref('admin')
-const password = ref('admin123')
+// 仅开发环境预填默认账号，避免生产登录页公开默认凭据。
+const isDev = import.meta.env.DEV
+const username = ref(isDev ? 'admin' : '')
+const password = ref(isDev ? 'admin123' : '')
 const rememberMe = ref(true)
 const showPassword = ref(false)
 const activeTab = ref<'account' | 'sso'>('account')

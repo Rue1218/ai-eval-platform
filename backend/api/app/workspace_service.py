@@ -62,24 +62,22 @@ def validate_segment(name: str) -> str:
     return name
 
 
-def resolve_scope_dir(base: str, rel_scope: str) -> str:
-    """在工作区目录 ``base`` 内解析相对 scope，返回绝对目录（防穿越+符号链接）。
-
-    - ``rel_scope`` 为空或 ``"/"`` → ``base``；
-    - 每段须过 ``validate_segment``（拒 ``..`` 与分隔符）；
-    - 已存在路径段逐段 ``realpath`` 前缀重验（符号链接逃逸拒绝）；
-    - 尚不存在的段（将由其后的 mkdir 创建）仅做名字校验——父链已校验，
-      不存在即不可能被符号链接指走。
-    """
+def _checked_base(base: str) -> tuple[str, str]:
+    """返回（绝对路径, 真实路径）并要求基目录存在，所有越界校验共用。"""
     base_abs = os.path.abspath(base)
     base_real = os.path.realpath(base_abs)
     if not os.path.isdir(base_real):
         raise AppError(ErrorCode.NOT_FOUND, "工作区目录不存在")
-    rel = (rel_scope or "").strip("/")
+    return base_abs, base_real
+
+
+def _descend_checked(base_abs: str, base_real: str, parts: list[str]) -> str:
+    """逐段拼接并校验：段名合法、拒绝符号链接、realpath 不逃出基目录。
+
+    防穿越规则只在这里实现一份，避免多个入口各写一套后语义漂移。
+    """
     current = base_abs
-    if not rel:
-        return current
-    for part in rel.split("/"):
+    for part in parts:
         validate_segment(part)
         current = os.path.join(current, part)
         if os.path.islink(current):
@@ -89,6 +87,22 @@ def resolve_scope_dir(base: str, rel_scope: str) -> str:
             if real != base_real and not real.startswith(base_real + os.sep):
                 raise AppError(ErrorCode.VALIDATION, "路径越出工作区，拒绝访问")
     return os.path.abspath(current)
+
+
+def resolve_scope_dir(base: str, rel_scope: str) -> str:
+    """在工作区目录 ``base`` 内解析相对 scope，返回绝对目录（防穿越+符号链接）。
+
+    - ``rel_scope`` 为空或 ``"/"`` → ``base``；
+    - 每段须过 ``validate_segment``（拒 ``..`` 与分隔符）；
+    - 已存在路径段逐段 ``realpath`` 前缀重验（符号链接逃逸拒绝）；
+    - 尚不存在的段（将由其后的 mkdir 创建）仅做名字校验——父链已校验，
+      不存在即不可能被符号链接指走。
+    """
+    base_abs, base_real = _checked_base(base)
+    rel = (rel_scope or "").strip("/")
+    if not rel:
+        return base_abs
+    return _descend_checked(base_abs, base_real, rel.split("/"))
 
 
 def folder_summary(directory: str) -> dict[str, Any] | None:
@@ -262,25 +276,13 @@ def resolve_session_sandbox(
 
 def resolve_scope_item(base: str, rel_path: str, *, must_exist: bool = True) -> str:
     """在工作区 base 内解析相对条目（文件或目录），严格防穿越 + 符号链接逃逸。"""
-    base_abs = os.path.abspath(base)
-    base_real = os.path.realpath(base_abs)
-    if not os.path.isdir(base_real):
-        raise AppError(ErrorCode.NOT_FOUND, "工作区目录不存在")
+    base_abs, base_real = _checked_base(base)
     rel = (rel_path or "").strip("/").replace("\\", "/")
     if not rel:
         raise AppError(ErrorCode.VALIDATION, "相对路径不能为空")
-    current = base_abs
-    parts = [p for p in rel.split("/") if p]
-    for part in parts:
-        validate_segment(part)
-        current = os.path.join(current, part)
-        if os.path.islink(current):
-            raise AppError(ErrorCode.VALIDATION, "路径含符号链接，拒绝访问")
-        if os.path.exists(current):
-            real = os.path.realpath(current)
-            if real != base_real and not real.startswith(base_real + os.sep):
-                raise AppError(ErrorCode.VALIDATION, "路径越出工作区，拒绝访问")
-    current_abs = os.path.abspath(current)
+    current_abs = _descend_checked(
+        base_abs, base_real, [p for p in rel.split("/") if p]
+    )
     if must_exist and not os.path.exists(current_abs):
         raise AppError(ErrorCode.NOT_FOUND, "目标不存在")
     return current_abs

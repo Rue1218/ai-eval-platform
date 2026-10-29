@@ -56,9 +56,15 @@ class UserStatusUpdate(ApiModel):
 
 
 class ResetPasswordRequest(ApiModel):
-    """成员重置密码请求。"""
+    """成员重置密码请求。
+
+    ``current_password`` 在「重置他人密码」时必填：本项目为全员同权模型，
+    没有角色可作授权依据，改以「重新验证请求者本人密码」作为接管他人账号前
+    的二次确认，避免仅凭一个未过期会话即可改密并把对方踢下线。
+    """
 
     password: str = Field(min_length=8, max_length=512)
+    current_password: str | None = Field(default=None, max_length=512)
 
 
 class UserOut(OrmOut):

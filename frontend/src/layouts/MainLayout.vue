@@ -294,8 +294,12 @@ function handleLogout() {
     positiveText: '确认退出',
     negativeText: '取消',
     onPositiveClick: async () => {
-      await auth.logout()
-      message.success('已退出登录')
+      try {
+        await auth.logout()
+        message.success('已退出登录')
+      } catch {
+        message.warning('退出请求失败，已清除本地登录状态')
+      }
       router.push('/login')
     },
   })

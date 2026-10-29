@@ -488,6 +488,14 @@ def get_rag_models(
     }
 
 
+def _url_origin(url: str | None) -> tuple[str, str]:
+    """取 URL 的 (scheme, netloc) 小写形式，用于判断是否换了出站目标。"""
+    from urllib.parse import urlsplit
+
+    parts = urlsplit((url or "").strip())
+    return parts.scheme.lower(), parts.netloc.lower()
+
+
 @router.put("/rag-models")
 def put_rag_models(
     body: RagModelsIn,
@@ -496,6 +504,19 @@ def put_rag_models(
     user: User = Depends(get_current_user),
 ):
     """更新系统全局唯一的 Embedding 与 Reranker 模型配置。"""
+    saved = read_global_rag_env()
+    for new_base, new_key, saved_base, saved_key in (
+        (body.embedding_base_url, body.embedding_api_key, saved.embedding_base_url, saved.embedding_api_key),
+        (body.reranker_base_url, body.reranker_api_key, saved.reranker_base_url, saved.reranker_api_key),
+    ):
+        # 更换端点域名却沿用旧密钥，会让平台密钥随探活/调用发往新地址，必须重新提交密钥。
+        if (
+            new_base is not None
+            and saved_key
+            and not (new_key or "").strip()
+            and _url_origin(new_base) != _url_origin(saved_base)
+        ):
+            raise AppError(ErrorCode.VALIDATION, "更换端点地址时必须同时重新填写 API Key")
     env_snapshot: ProfileEnvSnapshot | None = None
     try:
         env_snapshot = write_global_rag_env(
@@ -534,34 +555,64 @@ def check_rag_model(
     body: RagCheckIn,
     user: User = Depends(get_current_user),
 ):
-    """向指定的 Embedding 或 Reranker 模型端点发送轻量探活请求并返回延迟和状态。"""
+    """向指定的 Embedding 或 Reranker 模型端点发送轻量探活请求并返回延迟和状态。
+
+    安全边界：
+    - 只有与「已保存配置」同源的目标才复用平台密钥；请求方临时指定的其它地址
+      一律不携带密钥，避免全局凭据被发往任意主机；
+    - 临时目标（与配置不同）出站前做内网/回环校验（SSRF）；已保存配置由管理
+      面写入，按可信目标处理（兼容内网 Embedding 服务）；
+    - 失败只回状态码，不回显上游响应正文。
+    """
     import time
+    from urllib.parse import urlsplit
 
     import httpx
 
+    from ..harness.execution.dispatch_common import _reject_internal_target
+
     values = read_global_rag_env()
     if body.target == "embedding":
-        base_url = (body.base_url or values.embedding_base_url or "").rstrip("/")
-        model = body.model or values.embedding_model or ""
-        api_key = body.api_key or values.embedding_api_key or ""
-        if not base_url or not model:
-            raise AppError(ErrorCode.VALIDATION, "Embedding 端点或模型名称未指定")
-        url = f"{base_url}/embeddings" if not base_url.endswith("/embeddings") else base_url
-        headers = {"Content-Type": "application/json"}
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
-        payload = {"input": "ping", "model": model}
+        configured_base = (values.embedding_base_url or "").rstrip("/")
+        configured_key = values.embedding_api_key or ""
+        configured_model = values.embedding_model or ""
+        endpoint_suffix = "/embeddings"
+        payload: dict[str, Any] = {"input": "ping"}
     else:
-        base_url = (body.base_url or values.reranker_base_url or "").rstrip("/")
-        model = body.model or values.reranker_model or ""
-        api_key = body.api_key or values.reranker_api_key or ""
-        if not base_url or not model:
-            raise AppError(ErrorCode.VALIDATION, "Reranker 端点或模型名称未指定")
-        url = f"{base_url}/rerank" if not base_url.endswith("/rerank") else base_url
-        headers = {"Content-Type": "application/json"}
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
-        payload = {"query": "ping", "documents": ["ping"], "model": model}
+        configured_base = (values.reranker_base_url or "").rstrip("/")
+        configured_key = values.reranker_api_key or ""
+        configured_model = values.reranker_model or ""
+        endpoint_suffix = "/rerank"
+        payload = {"query": "ping", "documents": ["ping"]}
+
+    explicit_base = (body.base_url or "").strip().rstrip("/")
+    base_url = explicit_base or configured_base
+    model = (body.model or "").strip() or configured_model
+    if not base_url or not model:
+        raise AppError(
+            ErrorCode.VALIDATION,
+            "Embedding 端点或模型名称未指定"
+            if body.target == "embedding"
+            else "Reranker 端点或模型名称未指定",
+        )
+
+    parsed = urlsplit(base_url)
+    if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        raise AppError(ErrorCode.VALIDATION, "端点地址必须是 http(s) URL")
+    if explicit_base and explicit_base != configured_base:
+        # 请求方临时指定的目标：禁止探测容器内网与回环地址
+        _reject_internal_target(parsed.hostname)
+
+    api_key = (body.api_key or "").strip()
+    if not api_key and base_url == configured_base:
+        # 仅同源的已保存目标才复用平台密钥
+        api_key = configured_key
+
+    payload["model"] = model
+    headers = {"Content-Type": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    url = base_url if base_url.endswith(endpoint_suffix) else f"{base_url}{endpoint_suffix}"
 
     t0 = time.perf_counter()
     try:
@@ -570,13 +621,13 @@ def check_rag_model(
             latency_ms = round((time.perf_counter() - t0) * 1000, 1)
             if resp.status_code < 400:
                 return {"ok": True, "latency_ms": latency_ms, "model": model, "target": body.target}
-            else:
-                return {
-                    "ok": False,
-                    "latency_ms": latency_ms,
-                    "code": resp.status_code,
-                    "message": f"HTTP {resp.status_code}: {resp.text[:120]}",
-                }
+            # 只回状态码：上游正文可能回显请求头或内部错误页，不得透传前端
+            return {
+                "ok": False,
+                "latency_ms": latency_ms,
+                "code": resp.status_code,
+                "message": f"HTTP {resp.status_code}",
+            }
     except httpx.TimeoutException:
         return {"ok": False, "message": "连接超时（超过 8 秒未响应）"}
     except Exception as exc:
